@@ -603,38 +603,63 @@ elif page == "📅 Monthly Invoice":
 
         if CAN_EDIT:
             st.markdown("---")
-            st.subheader("Generate Invoice Excel")
+            st.subheader("Generate Invoice")
 
             from config.settings import get_data_paths
+            from services.pdf_service import generate_invoice_pdf
             paths = get_data_paths()
-            template_ok = paths["invoice_template"].exists()
-            if not template_ok:
-                st.error(f"Invoice template not found: `{paths['invoice_template']}`  \n"
-                         "Make sure the template file is in the `data/` folder.")
-            else:
-                if st.button("Generate Invoice Excel", type="primary"):
-                    import tempfile
-                    with tempfile.TemporaryDirectory() as tmp_dir:
-                        try:
-                            out_path = generate_monthly_invoice(
-                                projects=month_projects,
-                                month_name=sel_month,
-                                year=int(sel_year),
-                                invoice_number=invoice_number if invoice_number > 0 else None,
-                                output_dir=Path(tmp_dir),
-                                template_path=paths["invoice_template"],
-                            )
-                            with open(out_path, "rb") as f:
-                                file_bytes = f.read()
-                            st.download_button(
-                                label=f"Download {out_path.name}",
-                                data=file_bytes,
-                                file_name=out_path.name,
-                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            )
-                            st.success(f"Invoice generated: {out_path.name}")
-                        except Exception as e:
-                            st.error(f"Generation failed: {e}")
+            inv_no = invoice_number if invoice_number > 0 else None
+            month_abbr = sel_month[:3]
+            pdf_filename = f"CC_M_inv_{inv_no or 'auto'}_{month_abbr}_{int(sel_year)}.pdf"
+            xlsx_filename = f"CC_M_inv_{inv_no or 'auto'}_{month_abbr}_{int(sel_year)}.xlsx"
+
+            col_pdf, col_xlsx = st.columns(2)
+
+            with col_pdf:
+                try:
+                    pdf_bytes = generate_invoice_pdf(
+                        projects=month_projects,
+                        month_name=sel_month,
+                        year=int(sel_year),
+                        invoice_number=inv_no,
+                    )
+                    st.download_button(
+                        label="Download PDF Invoice",
+                        data=pdf_bytes,
+                        file_name=pdf_filename,
+                        mime="application/pdf",
+                        type="primary",
+                    )
+                except Exception as e:
+                    st.error(f"PDF generation failed: {e}")
+
+            with col_xlsx:
+                template_ok = paths["invoice_template"].exists()
+                if not template_ok:
+                    st.warning("Excel template not found.")
+                else:
+                    if st.button("Generate Excel Invoice"):
+                        import tempfile
+                        with tempfile.TemporaryDirectory() as tmp_dir:
+                            try:
+                                out_path = generate_monthly_invoice(
+                                    projects=month_projects,
+                                    month_name=sel_month,
+                                    year=int(sel_year),
+                                    invoice_number=inv_no,
+                                    output_dir=Path(tmp_dir),
+                                    template_path=paths["invoice_template"],
+                                )
+                                with open(out_path, "rb") as f:
+                                    file_bytes = f.read()
+                                st.download_button(
+                                    label=f"Download {out_path.name}",
+                                    data=file_bytes,
+                                    file_name=out_path.name,
+                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                )
+                            except Exception as e:
+                                st.error(f"Excel generation failed: {e}")
 
             # ── Email section ──────────────────────────────────────────────
             st.markdown("---")
