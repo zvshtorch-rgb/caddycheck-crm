@@ -1,8 +1,8 @@
 # Secrets - NEVER commit these
 .streamlit/secrets.toml
 
-# Data files (keep local only)
-data/*.xlsx
+# Data files (keep local only) - comment out to include Excel in repo
+# data/*.xlsx
 output/
 
 # Python

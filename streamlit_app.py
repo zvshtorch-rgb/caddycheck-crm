@@ -373,7 +373,7 @@ elif page == "🏗️ Projects":
     if CAN_EDIT:
         st.info("✏️ Admin mode: you can edit cells directly. Click **Save Changes** when done.")
         edited_df = st.data_editor(
-            df,
+            df.reset_index(drop=True),
             use_container_width=True,
             height=600,
             num_rows="fixed",
@@ -406,7 +406,7 @@ elif page == "🏗️ Projects":
                 st.error(f"Save failed: {e}")
     else:
         st.dataframe(
-            df.style.applymap(color_status, subset=["Status"]),
+            df.style.applymap(color_status, subset=["Status"]) if "Status" in df.columns and len(df) > 0 else df,
             use_container_width=True,
             height=600,
         )
