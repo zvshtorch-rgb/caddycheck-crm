@@ -106,11 +106,13 @@ st.markdown("""
 # ── Data loading (cached) ─────────────────────────────────────────────────────
 @st.cache_data(ttl=300)
 def load_data():
-    projects = load_projects()
-    invoices = load_invoices()
+    from config.settings import get_data_paths
+    paths = get_data_paths()
+    projects = load_projects(paths["projects_file"])
+    invoices = load_invoices(paths["projects_file"])
     debt_summaries = compute_debt_summaries(projects, invoices)
     yearly_summary = get_yearly_summary(invoices)
-    return projects, invoices, debt_summaries, yearly_summary
+    return projects, invoices, debt_summaries, yearly_summary, str(paths["projects_file"])
 
 
 def card(title: str, value: str, css_class: str):
@@ -140,7 +142,8 @@ if st.sidebar.button("Logout"):
 
 # Load data
 try:
-    projects, invoices, debt_summaries, yearly_summary = load_data()
+    projects, invoices, debt_summaries, yearly_summary, _data_path = load_data()
+    st.sidebar.caption(f"Data: `{_data_path}`")
 except Exception as e:
     st.error(f"Failed to load data: {e}")
     st.stop()
