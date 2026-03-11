@@ -626,10 +626,10 @@ elif page == "📅 Monthly Invoice":
     else:
         preview_rows = get_invoice_preview_data(month_projects, sel_month, int(sel_year))
         preview_df = pd.DataFrame([{
-            "Project": r["project_name"],
-            "# Cams": r["num_cams"],
-            "Maint. Year": r["maintenance_year"],
-            "Rate (€)": f"€{r['rate']:,.0f}" if isinstance(r["rate"], (int, float)) else r["rate"],
+            "Project": _safe_str(r["project_name"]),
+            "# Cams": _safe_str(r["num_cams"]),
+            "Maint. Year": _safe_str(r["maintenance_year"]),
+            "Rate (€)": f"€{r['rate']:,.0f}" if isinstance(r["rate"], (int, float)) else _safe_str(r["rate"]),
             "Line Total (€)": f"€{r['line_total']:,.0f}" if isinstance(r["line_total"], (int, float)) else "",
         } for r in preview_rows])
         st.subheader("Invoice Preview")
