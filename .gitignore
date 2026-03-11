@@ -1,0 +1,17 @@
+# Secrets - NEVER commit these
+.streamlit/secrets.toml
+
+# Data files (keep local only)
+data/*.xlsx
+output/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+venv/
+.venv/
+
+# Config with sensitive info
+config/email_config.json
