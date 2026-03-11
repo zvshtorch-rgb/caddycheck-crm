@@ -15,3 +15,4 @@ venv/
 
 # Config with sensitive info
 config/email_config.json
+config/data_paths.json
