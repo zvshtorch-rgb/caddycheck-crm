@@ -11,7 +11,7 @@ import streamlit as st
 # Make sure project root is on the path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from config.settings import MONTH_ORDER
+from config.settings import MONTH_ORDER, get_email_config, save_email_config
 from services.excel_service import (
     load_projects,
     load_invoices,
@@ -19,7 +19,9 @@ from services.excel_service import (
     get_yearly_summary,
     save_projects_to_excel,
     save_invoices_to_excel,
+    get_projects_for_month,
 )
+from services.invoice_service import generate_monthly_invoice, get_invoice_preview_data
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -130,7 +132,7 @@ st.sidebar.title("📊 CaddyCheck CRM")
 st.sidebar.markdown("---")
 page = st.sidebar.radio(
     "Navigation",
-    ["📊 Dashboard", "🏗️ Projects", "🧾 Invoice Details"],
+    ["📊 Dashboard", "🏗️ Projects", "🧾 Invoice Details", "📅 Monthly Invoice", "⚙️ Settings"],
     label_visibility="collapsed",
 )
 st.sidebar.markdown("---")
@@ -564,3 +566,204 @@ elif page == "🧾 Invoice Details":
         use_container_width=True,
         height=400,
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: MONTHLY INVOICE
+# ══════════════════════════════════════════════════════════════════════════════
+elif page == "📅 Monthly Invoice":
+    st.title("📅 Monthly Invoice")
+
+    col1, col2, col3 = st.columns([2, 1, 2])
+    with col1:
+        sel_month = st.selectbox("Month", MONTH_ORDER, index=datetime.date.today().month - 1)
+    with col2:
+        sel_year = st.number_input("Year", min_value=2015, max_value=2035,
+                                   value=datetime.date.today().year, step=1)
+    with col3:
+        invoice_number = st.number_input("Invoice Number (optional, 0 = auto)",
+                                         min_value=0, value=0, step=1)
+
+    month_projects = get_projects_for_month(projects, sel_month)
+    st.markdown(f"**{len(month_projects)} project(s)** billed in **{sel_month}**")
+
+    if not month_projects:
+        st.warning("No projects found for the selected month.")
+    else:
+        preview_rows = get_invoice_preview_data(month_projects, sel_month, int(sel_year))
+        preview_df = pd.DataFrame([{
+            "Project": r["project_name"],
+            "# Cams": r["num_cams"],
+            "Maint. Year": r["maintenance_year"],
+            "Rate (€)": f"€{r['rate']:,.0f}" if isinstance(r["rate"], (int, float)) else r["rate"],
+            "Line Total (€)": f"€{r['line_total']:,.0f}" if isinstance(r["line_total"], (int, float)) else "",
+        } for r in preview_rows])
+        st.subheader("Invoice Preview")
+        st.dataframe(preview_df, use_container_width=True, hide_index=True)
+
+        if CAN_EDIT:
+            st.markdown("---")
+            st.subheader("Generate Invoice Excel")
+
+            from config.settings import get_data_paths
+            paths = get_data_paths()
+            template_ok = paths["invoice_template"].exists()
+            if not template_ok:
+                st.error(f"Invoice template not found: `{paths['invoice_template']}`  \n"
+                         "Make sure the template file is in the `data/` folder.")
+            else:
+                if st.button("Generate Invoice Excel", type="primary"):
+                    import tempfile
+                    with tempfile.TemporaryDirectory() as tmp_dir:
+                        try:
+                            out_path = generate_monthly_invoice(
+                                projects=month_projects,
+                                month_name=sel_month,
+                                year=int(sel_year),
+                                invoice_number=invoice_number if invoice_number > 0 else None,
+                                output_dir=Path(tmp_dir),
+                                template_path=paths["invoice_template"],
+                            )
+                            with open(out_path, "rb") as f:
+                                file_bytes = f.read()
+                            st.download_button(
+                                label=f"Download {out_path.name}",
+                                data=file_bytes,
+                                file_name=out_path.name,
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            )
+                            st.success(f"Invoice generated: {out_path.name}")
+                        except Exception as e:
+                            st.error(f"Generation failed: {e}")
+
+            # ── Email section ──────────────────────────────────────────────
+            st.markdown("---")
+            st.subheader("Send Invoice by Email")
+            email_cfg = get_email_config()
+
+            with st.form("email_form"):
+                to_addrs = st.text_input("To (comma-separated)",
+                                         ", ".join(email_cfg.get("default_recipients", [])))
+                cc_addrs = st.text_input("CC (comma-separated)",
+                                         ", ".join(email_cfg.get("default_cc", [])))
+                subject_tpl = email_cfg.get("default_subject_template", "Monthly Invoice - {month} {year}")
+                subject = st.text_input("Subject", subject_tpl.format(month=sel_month, year=sel_year))
+                body_tpl = email_cfg.get("default_body_template", "")
+                body = st.text_area("Body", body_tpl.format(month=sel_month, year=sel_year), height=150)
+                send_btn = st.form_submit_button("Send Email")
+
+            if send_btn:
+                if not email_cfg.get("smtp_username"):
+                    st.error("SMTP not configured. Go to ⚙️ Settings to set up email.")
+                else:
+                    from services.email_service import send_invoice_email
+                    import tempfile
+                    with tempfile.TemporaryDirectory() as tmp_dir:
+                        try:
+                            out_path = generate_monthly_invoice(
+                                projects=month_projects,
+                                month_name=sel_month,
+                                year=int(sel_year),
+                                invoice_number=invoice_number if invoice_number > 0 else None,
+                                output_dir=Path(tmp_dir),
+                                template_path=paths["invoice_template"],
+                            )
+                            recipients = [r.strip() for r in to_addrs.split(",") if r.strip()]
+                            cc_list = [c.strip() for c in cc_addrs.split(",") if c.strip()]
+                            success, msg = send_invoice_email(
+                                attachment_path=out_path,
+                                recipients=recipients,
+                                cc=cc_list,
+                                subject=subject,
+                                body=body,
+                                config=email_cfg,
+                            )
+                            if success:
+                                st.success(f"Email sent! {msg}")
+                            else:
+                                st.error(f"Email failed: {msg}")
+                        except Exception as e:
+                            st.error(f"Error: {e}")
+        else:
+            st.info("Invoice generation requires Admin access.")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: SETTINGS
+# ══════════════════════════════════════════════════════════════════════════════
+elif page == "⚙️ Settings":
+    st.title("⚙️ Settings")
+
+    if not CAN_EDIT:
+        st.info("Settings can only be changed by Admin users.")
+    else:
+        email_cfg = get_email_config()
+
+        st.subheader("Email / SMTP Configuration")
+        with st.form("smtp_form"):
+            col1, col2 = st.columns(2)
+            with col1:
+                smtp_host = st.text_input("SMTP Host", email_cfg.get("smtp_host", "smtp.gmail.com"))
+                smtp_user = st.text_input("Username / Email", email_cfg.get("smtp_username", ""))
+                sender_name = st.text_input("Sender Name", email_cfg.get("sender_name", "CaddyCheck CRM"))
+            with col2:
+                smtp_port = st.number_input("SMTP Port", min_value=1, max_value=65535,
+                                            value=int(email_cfg.get("smtp_port", 587)))
+                smtp_pass = st.text_input("Password", email_cfg.get("smtp_password", ""),
+                                          type="password")
+                sender_email = st.text_input("Sender Email", email_cfg.get("sender_email", ""))
+            use_tls = st.checkbox("Use STARTTLS", value=bool(email_cfg.get("smtp_use_tls", True)))
+
+            st.markdown("---")
+            st.subheader("Default Recipients")
+            recipients = st.text_input("To (comma-separated)",
+                                       ", ".join(email_cfg.get("default_recipients", [])))
+            cc = st.text_input("CC (comma-separated)",
+                                ", ".join(email_cfg.get("default_cc", [])))
+            subject_tpl = st.text_input("Subject Template",
+                                         email_cfg.get("default_subject_template",
+                                                        "Monthly Invoice - {month} {year}"))
+            body_tpl = st.text_area("Body Template",
+                                     email_cfg.get("default_body_template", ""), height=120)
+
+            save_btn = st.form_submit_button("Save Settings", type="primary")
+
+        if save_btn:
+            new_cfg = {
+                "smtp_host": smtp_host.strip(),
+                "smtp_port": int(smtp_port),
+                "smtp_use_tls": use_tls,
+                "smtp_username": smtp_user.strip(),
+                "smtp_password": smtp_pass,
+                "sender_name": sender_name.strip(),
+                "sender_email": sender_email.strip(),
+                "default_recipients": [r.strip() for r in recipients.split(",") if r.strip()],
+                "default_cc": [c.strip() for c in cc.split(",") if c.strip()],
+                "default_subject_template": subject_tpl.strip(),
+                "default_body_template": body_tpl,
+            }
+            try:
+                save_email_config(new_cfg)
+                st.success("Settings saved!")
+            except Exception as e:
+                st.error(f"Save failed: {e}")
+
+        st.markdown("---")
+        st.subheader("Test SMTP Connection")
+        if st.button("Test Connection"):
+            from services.email_service import test_smtp_connection
+            cfg_to_test = {
+                "smtp_host": email_cfg.get("smtp_host", ""),
+                "smtp_port": email_cfg.get("smtp_port", 587),
+                "smtp_use_tls": email_cfg.get("smtp_use_tls", True),
+                "smtp_username": email_cfg.get("smtp_username", ""),
+                "smtp_password": email_cfg.get("smtp_password", ""),
+            }
+            try:
+                success, msg = test_smtp_connection(cfg_to_test)
+                if success:
+                    st.success(msg)
+                else:
+                    st.error(msg)
+            except Exception as e:
+                st.error(str(e))
