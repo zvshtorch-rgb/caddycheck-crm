@@ -459,9 +459,9 @@ elif page == "🏗️ Projects":
         if p.installation_year:
             for yr in range(p.installation_year, cur_year + 1):
                 rev_rows.append({
-                    "Project":   p.project_name,
-                    "Year":      yr,
-                    "Maint. Year": p.get_maintenance_year_label(yr),
+                    "Project":   _safe_str(p.project_name),
+                    "Year":      int(yr),
+                    "Maint. Year": _safe_str(p.get_maintenance_year_label(yr)),
                     "Rate/Cam":  f"€{p.get_rate(yr):,.0f}",
                     "Expected":  f"€{p.get_expected_amount(yr):,.0f}",
                 })
@@ -573,10 +573,10 @@ elif page == "🧾 Invoice Details":
     st.markdown("---")
     st.subheader("Debt Summary by Project")
     debt_df = pd.DataFrame([{
-        "Project":        ds.project_name,
-        "Country":        ds.country,
-        "# Cams":         ds.num_cams,
-        "Status":         ds.status,
+        "Project":        _safe_str(ds.project_name),
+        "Country":        _safe_str(ds.country),
+        "# Cams":         _safe_int(ds.num_cams),
+        "Status":         _safe_str(ds.status),
         "Expected (€)":   f"€{ds.total_expected:,.0f}",
         "Paid (€)":       f"€{ds.total_paid:,.0f}",
         "Cancelled (€)":  f"€{ds.total_cancelled:,.0f}",
