@@ -240,12 +240,12 @@ if page == "📊 Dashboard":
     st.subheader("Cameras by Project")
     sorted_proj = sorted(f_proj, key=lambda p: (0 if p.is_active() else 1, p.project_name))
     proj_df = pd.DataFrame([{
-        "Project Name":    p.project_name,
-        "Country":         p.country,
-        "# Cams":          p.num_cams,
-        "Payment Month":   p.payment_month,
-        "Install Year":    p.installation_year,
-        "Status":          p.status,
+        "Project Name":    str(p.project_name or ""),
+        "Country":         str(p.country or ""),
+        "# Cams":          int(p.num_cams or 0),
+        "Payment Month":   str(p.payment_month or ""),
+        "Install Year":    str(p.installation_year) if p.installation_year else "",
+        "Status":          str(p.status or ""),
     } for p in sorted_proj])
 
     def color_status(val):
@@ -254,7 +254,7 @@ if page == "📊 Dashboard":
         return "color: #E74C3C"
 
     st.dataframe(
-        proj_df.style.applymap(color_status, subset=["Status"]) if "Status" in proj_df.columns and len(proj_df) > 0 else proj_df,
+        proj_df.style.map(color_status, subset=["Status"]) if "Status" in proj_df.columns and len(proj_df) > 0 else proj_df,
         use_container_width=True,
         height=300,
     )
@@ -360,13 +360,13 @@ elif page == "🏗️ Projects":
     st.caption(f"Showing {len(filtered)} of {len(projects)} projects")
 
     df = pd.DataFrame([{
-        "Project Name":    p.project_name,
-        "Country":         p.country,
-        "# Cams":          p.num_cams,
-        "Payment Month":   p.payment_month,
-        "Install Year":    p.installation_year,
+        "Project Name":    str(p.project_name or ""),
+        "Country":         str(p.country or ""),
+        "# Cams":          int(p.num_cams or 0),
+        "Payment Month":   str(p.payment_month or ""),
+        "Install Year":    str(p.installation_year) if p.installation_year else "",
         "Activation Date": p.activation_date.strftime("%Y-%m-%d") if p.activation_date else "",
-        "Status":          p.status,
+        "Status":          str(p.status or ""),
         "License EOP":     p.license_eop.strftime("%Y-%m-%d") if p.license_eop else "",
     } for p in filtered])
 
@@ -411,7 +411,7 @@ elif page == "🏗️ Projects":
                 st.error(f"Save failed: {e}")
     else:
         st.dataframe(
-            df.style.applymap(color_status, subset=["Status"]) if "Status" in df.columns and len(df) > 0 else df,
+            df.style.map(color_status, subset=["Status"]) if "Status" in df.columns and len(df) > 0 else df,
             use_container_width=True,
             height=600,
         )
@@ -478,14 +478,14 @@ elif page == "🧾 Invoice Details":
     st.caption(f"Showing {len(filtered_inv)} of {len(invoices)} invoices")
 
     df_inv = pd.DataFrame([{
-        "Invoice #":      int(i.invoice_number) if i.invoice_number else "",
-        "Project":        i.project_name,
-        "Maint. Year":    i.maintenance_year,
-        "Amount (€)":     i.payment_amount,
-        "Cameras":        int(i.cameras_number) if i.cameras_number else "",
+        "Invoice #":      str(int(i.invoice_number)) if i.invoice_number else "",
+        "Project":        str(i.project_name or ""),
+        "Maint. Year":    str(i.maintenance_year or ""),
+        "Amount (€)":     float(i.payment_amount) if i.payment_amount else 0.0,
+        "Cameras":        int(i.cameras_number) if i.cameras_number else 0,
         "Payment Date":   i.payment_date.strftime("%Y-%m-%d") if i.payment_date else "",
-        "Paid":           i.paid,
-        "Year":           i.year or "",
+        "Paid":           str(i.paid or ""),
+        "Year":           str(int(i.year)) if i.year else "",
     } for i in filtered_inv])
 
     def color_paid(val):
@@ -530,7 +530,7 @@ elif page == "🧾 Invoice Details":
                 st.error(f"Save failed: {e}")
     else:
         st.dataframe(
-            df_inv.style.applymap(color_paid, subset=["Paid"]),
+            df_inv.style.map(color_paid, subset=["Paid"]),
             use_container_width=True,
             height=550,
         )
@@ -562,7 +562,7 @@ elif page == "🧾 Invoice Details":
             return ""
 
     st.dataframe(
-        debt_df.style.applymap(color_debt, subset=["Debt (€)"]),
+        debt_df.style.map(color_debt, subset=["Debt (€)"]),
         use_container_width=True,
         height=400,
     )
