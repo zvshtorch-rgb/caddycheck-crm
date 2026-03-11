@@ -249,7 +249,7 @@ if page == "📊 Dashboard":
         return "color: #E74C3C"
 
     st.dataframe(
-        proj_df.style.applymap(color_status, subset=["Status"]),
+        proj_df.style.applymap(color_status, subset=["Status"]) if "Status" in proj_df.columns and len(proj_df) > 0 else proj_df,
         use_container_width=True,
         height=300,
     )
