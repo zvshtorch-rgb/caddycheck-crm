@@ -415,24 +415,33 @@ elif page == "🏗️ Projects":
             df.reset_index(drop=True),
             use_container_width=True,
             height=600,
-            num_rows="fixed",
+            num_rows="dynamic",
             key="proj_editor",
         )
         if st.button("💾 Save Changes", key="save_projects"):
-            # Apply edits back to project objects
-            proj_map = {p.project_name: p for p in filtered}
+            from models.project import Project as ProjectModel
+            proj_map = {p.project_name: p for p in projects}
+            new_count = 0
             for _, row in edited_df.iterrows():
-                p = proj_map.get(row["Project Name"])
-                if p is None:
+                name = _safe_str(row.get("Project Name", "")).strip()
+                if not name:
                     continue
-                p.country           = row["Country"]
-                p.num_cams          = int(row["# Cams"]) if row["# Cams"] else 0
-                p.payment_month     = row["Payment Month"]
-                p.installation_year = int(row["Install Year"]) if row["Install Year"] else None
-                p.status            = row["Status"]
-                if row["License EOP"]:
+                p = proj_map.get(name)
+                if p is None:
+                    # New project row
+                    p = ProjectModel(project_name=name)
+                    projects.append(p)
+                    proj_map[name] = p
+                    new_count += 1
+                p.country           = _safe_str(row.get("Country", ""))
+                p.num_cams          = _safe_int(row.get("# Cams", 0))
+                p.payment_month     = _safe_str(row.get("Payment Month", ""))
+                p.installation_year = _safe_int(row.get("Install Year")) or None
+                p.status            = _safe_str(row.get("Status", ""))
+                eop = row.get("License EOP", "")
+                if eop:
                     try:
-                        p.license_eop = datetime.datetime.strptime(str(row["License EOP"]), "%Y-%m-%d")
+                        p.license_eop = datetime.datetime.strptime(str(eop), "%Y-%m-%d")
                     except Exception:
                         pass
                 else:
@@ -440,7 +449,8 @@ elif page == "🏗️ Projects":
             try:
                 save_projects_to_excel(projects)
                 load_data.clear()
-                st.success("Projects saved successfully!")
+                msg = f"Saved! {new_count} new project(s) added." if new_count else "Projects saved successfully!"
+                st.success(msg)
             except Exception as e:
                 st.error(f"Save failed: {e}")
     else:
@@ -535,31 +545,57 @@ elif page == "🧾 Invoice Details":
             df_inv,
             use_container_width=True,
             height=550,
-            num_rows="fixed",
+            num_rows="dynamic",
             key="inv_editor",
         )
         if st.button("💾 Save Changes", key="save_invoices"):
-            inv_map = {i.invoice_number: i for i in filtered_inv if i.invoice_number}
+            from models.invoice import Invoice as InvoiceModel
+            inv_map = {i.invoice_number: i for i in invoices if i.invoice_number}
+            new_count = 0
             for _, row in edited_inv.iterrows():
-                inv_no = row["Invoice #"]
+                project = _safe_str(row.get("Project", "")).strip()
+                if not project:
+                    continue
+                inv_no_str = _safe_str(row.get("Invoice #", "")).strip()
                 try:
-                    inv_no = float(inv_no) if inv_no != "" else None
+                    inv_no = float(inv_no_str) if inv_no_str else None
                 except Exception:
                     inv_no = None
-                inv = inv_map.get(inv_no)
+                inv = inv_map.get(inv_no) if inv_no else None
                 if inv is None:
-                    continue
-                inv.paid           = str(row["Paid"])
-                inv.payment_amount = float(str(row["Amount (€)"]).replace(",", "")) if row["Amount (€)"] != "" else 0.0
-                if row["Payment Date"]:
+                    # New invoice row
+                    inv = InvoiceModel(
+                        invoice_number=inv_no,
+                        project_name=project,
+                        maintenance_year=_safe_str(row.get("Maint. Year", "")),
+                        payment_amount=_safe_float(row.get("Amount (€)", 0)),
+                        cameras_number=_safe_int(row.get("Cameras", 0)) or None,
+                        payment_date=None,
+                        paid=_safe_str(row.get("Paid", "No")),
+                        year=_safe_int(row.get("Year")) or None,
+                    )
+                    invoices.append(inv)
+                    if inv_no:
+                        inv_map[inv_no] = inv
+                    new_count += 1
+                else:
+                    inv.project_name   = project
+                    inv.maintenance_year = _safe_str(row.get("Maint. Year", ""))
+                    inv.paid           = _safe_str(row.get("Paid", ""))
+                    inv.payment_amount = _safe_float(row.get("Amount (€)", 0))
+                    inv.cameras_number = _safe_int(row.get("Cameras", 0)) or None
+                    inv.year           = _safe_int(row.get("Year")) or None
+                pd_str = _safe_str(row.get("Payment Date", "")).strip()
+                if pd_str:
                     try:
-                        inv.payment_date = datetime.datetime.strptime(str(row["Payment Date"]), "%Y-%m-%d")
+                        inv.payment_date = datetime.datetime.strptime(pd_str, "%Y-%m-%d")
                     except Exception:
                         pass
             try:
                 save_invoices_to_excel(invoices)
                 load_data.clear()
-                st.success("Invoices saved successfully!")
+                msg = f"Saved! {new_count} new invoice(s) added." if new_count else "Invoices saved successfully!"
+                st.success(msg)
             except Exception as e:
                 st.error(f"Save failed: {e}")
     else:
