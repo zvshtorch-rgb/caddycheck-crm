@@ -11,6 +11,40 @@ import streamlit as st
 # Make sure project root is on the path
 sys.path.insert(0, str(Path(__file__).parent))
 
+import math
+
+def _safe_int(v, default=0):
+    """Convert v to int safely, returning default for None/NaN/empty."""
+    try:
+        if v is None:
+            return default
+        if isinstance(v, float) and math.isnan(v):
+            return default
+        return int(v)
+    except Exception:
+        return default
+
+def _safe_float(v, default=0.0):
+    """Convert v to float safely, returning default for None/NaN/empty."""
+    try:
+        if v is None:
+            return default
+        f = float(v)
+        return default if math.isnan(f) else f
+    except Exception:
+        return default
+
+def _safe_str(v):
+    """Convert v to str, returning '' for None/NaN."""
+    if v is None:
+        return ""
+    try:
+        if isinstance(v, float) and math.isnan(v):
+            return ""
+    except Exception:
+        pass
+    return str(v)
+
 from config.settings import MONTH_ORDER, get_email_config, save_email_config
 from services.excel_service import (
     load_projects,
@@ -240,12 +274,12 @@ if page == "📊 Dashboard":
     st.subheader("Cameras by Project")
     sorted_proj = sorted(f_proj, key=lambda p: (0 if p.is_active() else 1, p.project_name))
     proj_df = pd.DataFrame([{
-        "Project Name":    str(p.project_name or ""),
-        "Country":         str(p.country or ""),
-        "# Cams":          int(p.num_cams or 0),
-        "Payment Month":   str(p.payment_month or ""),
-        "Install Year":    str(p.installation_year) if p.installation_year else "",
-        "Status":          str(p.status or ""),
+        "Project Name":    _safe_str(p.project_name),
+        "Country":         _safe_str(p.country),
+        "# Cams":          _safe_int(p.num_cams),
+        "Payment Month":   _safe_str(p.payment_month),
+        "Install Year":    _safe_str(p.installation_year),
+        "Status":          _safe_str(p.status),
     } for p in sorted_proj])
 
     def color_status(val):
@@ -360,13 +394,13 @@ elif page == "🏗️ Projects":
     st.caption(f"Showing {len(filtered)} of {len(projects)} projects")
 
     df = pd.DataFrame([{
-        "Project Name":    str(p.project_name or ""),
-        "Country":         str(p.country or ""),
-        "# Cams":          int(p.num_cams or 0),
-        "Payment Month":   str(p.payment_month or ""),
-        "Install Year":    str(p.installation_year) if p.installation_year else "",
+        "Project Name":    _safe_str(p.project_name),
+        "Country":         _safe_str(p.country),
+        "# Cams":          _safe_int(p.num_cams),
+        "Payment Month":   _safe_str(p.payment_month),
+        "Install Year":    _safe_str(p.installation_year),
         "Activation Date": p.activation_date.strftime("%Y-%m-%d") if p.activation_date else "",
-        "Status":          str(p.status or ""),
+        "Status":          _safe_str(p.status),
         "License EOP":     p.license_eop.strftime("%Y-%m-%d") if p.license_eop else "",
     } for p in filtered])
 
@@ -478,14 +512,14 @@ elif page == "🧾 Invoice Details":
     st.caption(f"Showing {len(filtered_inv)} of {len(invoices)} invoices")
 
     df_inv = pd.DataFrame([{
-        "Invoice #":      str(int(i.invoice_number)) if i.invoice_number else "",
-        "Project":        str(i.project_name or ""),
-        "Maint. Year":    str(i.maintenance_year or ""),
-        "Amount (€)":     float(i.payment_amount) if i.payment_amount else 0.0,
-        "Cameras":        int(i.cameras_number) if i.cameras_number else 0,
+        "Invoice #":      _safe_str(_safe_int(i.invoice_number) or ""),
+        "Project":        _safe_str(i.project_name),
+        "Maint. Year":    _safe_str(i.maintenance_year),
+        "Amount (€)":     _safe_float(i.payment_amount),
+        "Cameras":        _safe_int(i.cameras_number),
         "Payment Date":   i.payment_date.strftime("%Y-%m-%d") if i.payment_date else "",
-        "Paid":           str(i.paid or ""),
-        "Year":           str(int(i.year)) if i.year else "",
+        "Paid":           _safe_str(i.paid),
+        "Year":           _safe_str(_safe_int(i.year) or ""),
     } for i in filtered_inv])
 
     def color_paid(val):
