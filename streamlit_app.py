@@ -626,7 +626,7 @@ elif page == "🧾 Invoice Details":
             inv_map = {i.invoice_number: i for i in invoices if i.invoice_number}
             # Secondary lookup for invoices without invoice numbers — match by (project, maint_year, year)
             no_inv_map = {
-                (i.project_name.strip().lower(), str(i.maintenance_year).strip(), str(i.year)): i
+                (i.project_name.strip().lower(), str(i.maintenance_year).strip(), str(i.year) if i.year else ""): i
                 for i in invoices if not i.invoice_number
             }
             new_count = 0

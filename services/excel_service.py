@@ -380,6 +380,7 @@ def save_invoices_to_excel(
         if inv is None:
             continue
 
+        _safe_write(ws, row_idx, _INV_COL["Invoice Number"],   inv.invoice_number if inv.invoice_number else None)
         _safe_write(ws, row_idx, _INV_COL["Maintenance Year"], inv.maintenance_year or None)
         _safe_write(ws, row_idx, _INV_COL["Payment amount"],   inv.payment_amount if inv.payment_amount else None)
         _safe_write(ws, row_idx, _INV_COL["Cameras number"],   int(inv.cameras_number) if inv.cameras_number else None)
