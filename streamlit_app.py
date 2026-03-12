@@ -703,10 +703,19 @@ elif page == "💸 Debt Report":
     debt_inv = [i for i in invoices if i.is_unpaid()]
     if dsel_year != "All":
         debt_inv = [i for i in debt_inv if i.year == int(dsel_year)]
-    proj_country_map = {p.project_name.lower(): p.country for p in projects}
+
+    # Country lookup — normalize names aggressively, fallback to debt_summaries
+    import re as _re
+    def _norm(s):
+        return _re.sub(r'\s+', ' ', str(s or "").strip().lower())
+    proj_country_map = {_norm(p.project_name): p.country for p in projects}
+    ds_country_map   = {_norm(ds.project_name): ds.country for ds in debt_summaries}
+    def _get_country(name):
+        k = _norm(name)
+        return proj_country_map.get(k) or ds_country_map.get(k) or ""
+
     if dsel_country != "All":
-        debt_inv = [i for i in debt_inv
-                    if proj_country_map.get(i.project_name.lower().strip()) == dsel_country]
+        debt_inv = [i for i in debt_inv if _get_country(i.project_name) == dsel_country]
     if dsel_search.strip():
         debt_inv = [i for i in debt_inv if dsel_search.lower() in i.project_name.lower()]
 
@@ -723,9 +732,9 @@ elif page == "💸 Debt Report":
     # ── Detailed table: one row per unpaid invoice ────────────────────────────
     st.subheader("Unpaid Invoices Detail")
     detail_rows = [{
-        "Invoice #":      _safe_str(_safe_int(i.invoice_number) or ""),
+        "Invoice #":      str(int(i.invoice_number)) if i.invoice_number else "—",
         "Project Name":   _safe_str(i.project_name),
-        "Country":        _safe_str(proj_country_map.get(i.project_name.lower().strip(), "")),
+        "Country":        _safe_str(_get_country(i.project_name)),
         "Maint. Year":    _safe_str(i.maintenance_year),
         "Amount (€)":     _safe_float(i.payment_amount),
         "Year":           _safe_str(_safe_int(i.year) or ""),
@@ -751,9 +760,9 @@ elif page == "💸 Debt Report":
     proj_debt: dict = defaultdict(lambda: {"invoices": [], "total": 0.0, "country": ""})
     for i in debt_inv:
         key = i.project_name
-        proj_debt[key]["invoices"].append(_safe_str(_safe_int(i.invoice_number) or ""))
+        proj_debt[key]["invoices"].append(str(int(i.invoice_number)) if i.invoice_number else "")
         proj_debt[key]["total"]   += i.payment_amount
-        proj_debt[key]["country"]  = proj_country_map.get(i.project_name.lower().strip(), "")
+        proj_debt[key]["country"]  = _get_country(i.project_name)
 
     summary_rows = [{
         "Project Name":    name,
