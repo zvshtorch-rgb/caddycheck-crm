@@ -390,3 +390,75 @@ def save_invoices_to_excel(
 
     wb.save(filepath)
     logger.info("Invoices saved successfully.")
+
+
+def get_next_invoice_number(invoices: List[Invoice]) -> int:
+    """Return the next free monthly invoice number (max existing + 1)."""
+    max_no = 0
+    for inv in invoices:
+        if inv.invoice_number:
+            try:
+                n = int(inv.invoice_number)
+                if n > max_no:
+                    max_no = n
+            except (ValueError, TypeError):
+                pass
+    return max_no + 1
+
+
+def append_monthly_invoice_rows(
+    invoice_number: int,
+    projects: List[Project],
+    year: int,
+    filepath: Path = None,
+) -> int:
+    """
+    Append new rows to 'Invoice details' for each project in a monthly invoice.
+    Skips any project already present with this invoice_number (safe to re-run).
+    Returns number of rows appended.
+    """
+    if filepath is None:
+        filepath = get_data_paths()["projects_file"]
+    wb = openpyxl.load_workbook(filepath)
+    ws = wb[SHEET_INVOICE_DETAILS]
+
+    # Collect existing (invoice_number, project_name_lower) to avoid duplicates
+    existing = set()
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        inv_no = row[_INV_COL["Invoice Number"] - 1]
+        proj_name = row[_INV_COL["Project name"] - 1]
+        if inv_no and proj_name:
+            try:
+                existing.add((float(inv_no), str(proj_name).strip().lower()))
+            except (ValueError, TypeError):
+                pass
+
+    appended = 0
+    for proj in sorted(projects, key=lambda p: p.project_name):
+        if proj.num_cams <= 0:
+            continue
+        key = (float(invoice_number), proj.project_name.strip().lower())
+        if key in existing:
+            continue
+
+        maint_label = proj.get_maintenance_year_label(year)
+        amount = proj.get_expected_amount(year)
+
+        row_data = [None] * 8
+        row_data[_INV_COL["Invoice Number"] - 1]    = invoice_number
+        row_data[_INV_COL["Project name"] - 1]      = proj.project_name
+        row_data[_INV_COL["Maintenance Year"] - 1]  = maint_label
+        row_data[_INV_COL["Payment amount"] - 1]    = amount
+        row_data[_INV_COL["Cameras number"] - 1]    = proj.num_cams
+        row_data[_INV_COL["Paid"] - 1]              = "No"
+        row_data[_INV_COL["Year"] - 1]              = year
+
+        ws.append(row_data)
+        existing.add(key)
+        appended += 1
+
+    if appended > 0:
+        wb.save(filepath)
+        logger.info("Appended %d invoice rows for invoice #%d", appended, invoice_number)
+
+    return appended

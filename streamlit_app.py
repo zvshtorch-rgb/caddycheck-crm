@@ -54,6 +54,8 @@ from services.excel_service import (
     save_projects_to_excel,
     save_invoices_to_excel,
     get_projects_for_month,
+    get_next_invoice_number,
+    append_monthly_invoice_rows,
 )
 from services.invoice_service import generate_monthly_invoice, get_invoice_preview_data
 
@@ -591,7 +593,7 @@ elif page == "🧾 Invoice Details":
         "Payment Date":   i.payment_date.strftime("%Y-%m-%d") if i.payment_date else "",
         "Paid":           _safe_str(i.paid),
         "Year":           _safe_str(_safe_int(i.year) or ""),
-    } for i in filtered_inv])
+    } for i in filtered_inv]).sort_values(["Invoice #", "Project"], ignore_index=True)
 
     def color_paid(val):
         v = str(val).strip().lower()
@@ -885,6 +887,8 @@ elif page == "💸 Debt Report":
 elif page == "📅 Monthly Invoice":
     st.title("📅 Monthly Invoice")
 
+    next_inv_no = get_next_invoice_number(invoices)
+
     col1, col2, col3 = st.columns([2, 1, 2])
     with col1:
         sel_month = st.selectbox("Month", MONTH_ORDER, index=datetime.date.today().month - 1)
@@ -892,8 +896,8 @@ elif page == "📅 Monthly Invoice":
         sel_year = st.number_input("Year", min_value=2015, max_value=2035,
                                    value=datetime.date.today().year, step=1)
     with col3:
-        invoice_number = st.number_input("Invoice Number (optional, 0 = auto)",
-                                         min_value=0, value=0, step=1)
+        invoice_number = st.number_input("Invoice Number",
+                                         min_value=1, value=next_inv_no, step=1)
 
     month_projects = get_projects_for_month(projects, sel_month)
     st.markdown(f"**{len(month_projects)} project(s)** billed in **{sel_month}**")
@@ -919,10 +923,10 @@ elif page == "📅 Monthly Invoice":
             from config.settings import get_data_paths
             from services.pdf_service import generate_invoice_pdf
             paths = get_data_paths()
-            inv_no = invoice_number if invoice_number > 0 else None
+            inv_no = int(invoice_number)
             month_abbr = sel_month[:3]
-            pdf_filename = f"CC_M_inv_{inv_no or 'auto'}_{month_abbr}_{int(sel_year)}.pdf"
-            xlsx_filename = f"CC_M_inv_{inv_no or 'auto'}_{month_abbr}_{int(sel_year)}.xlsx"
+            pdf_filename = f"CC_M-inv_{inv_no}_{month_abbr}_{int(sel_year)}.pdf"
+            xlsx_filename = f"CC_M-inv_{inv_no}_{month_abbr}_{int(sel_year)}.xlsx"
 
             col_pdf, col_xlsx = st.columns(2)
 
@@ -972,6 +976,32 @@ elif page == "📅 Monthly Invoice":
                             except Exception as e:
                                 st.error(f"Excel generation failed: {e}")
 
+            # ── Save to Ledger ─────────────────────────────────────────────
+            st.markdown("---")
+            st.subheader("Save to Invoice Ledger")
+            st.caption(f"Appends invoice #{inv_no} rows for all {len(month_projects)} project(s) to Invoice Details.")
+            if st.button("💾 Save Invoice to Ledger", type="primary"):
+                from config.settings import get_data_paths
+                try:
+                    n = append_monthly_invoice_rows(
+                        invoice_number=inv_no,
+                        projects=month_projects,
+                        year=int(sel_year),
+                        filepath=get_data_paths()["projects_file"],
+                    )
+                    if n == 0:
+                        st.info(f"Invoice #{inv_no} already fully recorded — no new rows added.")
+                    else:
+                        st.success(f"Added {n} row(s) for invoice #{inv_no} to Invoice Details.")
+                        ok, gh_msg = _push_excel_to_github()
+                        if ok:
+                            st.success(gh_msg)
+                        else:
+                            st.warning(gh_msg)
+                        st.cache_data.clear()
+                except Exception as e:
+                    st.error(f"Failed to save: {e}")
+
             # ── Email section ──────────────────────────────────────────────
             st.markdown("---")
             st.subheader("Send Invoice by Email")
@@ -1000,7 +1030,7 @@ elif page == "📅 Monthly Invoice":
                                 projects=month_projects,
                                 month_name=sel_month,
                                 year=int(sel_year),
-                                invoice_number=invoice_number if invoice_number > 0 else None,
+                                invoice_number=inv_no,
                                 output_dir=Path(tmp_dir),
                                 template_path=paths["invoice_template"],
                             )
