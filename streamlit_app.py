@@ -498,7 +498,7 @@ elif page == "🏗️ Projects":
 elif page == "🧾 Invoice Details":
     st.title("🧾 Invoice Details")
 
-    with st.expander("🔍 Filters", expanded=True):
+    with st.expander("🔍 Filters", expanded=False):
         col1, col2, col3, col4 = st.columns(4)
         years = sorted({inv.year for inv in invoices if inv.year}, reverse=True)
         sel_year    = col1.selectbox("Year",    ["All"] + [str(y) for y in years], key="inv_year")
