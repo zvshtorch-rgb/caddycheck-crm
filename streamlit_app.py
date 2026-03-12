@@ -664,6 +664,7 @@ elif page == "🧾 Invoice Details":
                         no_inv_map[(project.lower(), maint_year, inv_year)] = inv
                     new_count += 1
                 else:
+                    inv.invoice_number = inv_no
                     inv.project_name   = project
                     inv.maintenance_year = _safe_str(row.get("Maint. Year", ""))
                     inv.paid           = _safe_str(row.get("Paid", ""))
