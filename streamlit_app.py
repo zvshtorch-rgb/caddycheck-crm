@@ -623,7 +623,7 @@ elif page == "🧾 Invoice Details":
         )
         if st.button("💾 Save Changes", key="save_invoices"):
             from models.invoice import Invoice as InvoiceModel
-            inv_map = {i.invoice_number: i for i in invoices if i.invoice_number}
+            inv_map = {(i.invoice_number, i.project_name.strip().lower()): i for i in invoices if i.invoice_number}
             # Secondary lookup for invoices without invoice numbers — match by (project, maint_year, year)
             no_inv_map = {
                 (i.project_name.strip().lower(), str(i.maintenance_year).strip(), str(i.year) if i.year else ""): i
@@ -642,7 +642,7 @@ elif page == "🧾 Invoice Details":
                 maint_year = _safe_str(row.get("Maint. Year", "")).strip()
                 inv_year = str(_safe_int(row.get("Year")) or "")
                 if inv_no:
-                    inv = inv_map.get(inv_no)
+                    inv = inv_map.get((inv_no, project.lower()))
                 else:
                     inv = no_inv_map.get((project.lower(), maint_year, inv_year))
                 if inv is None:
@@ -659,7 +659,7 @@ elif page == "🧾 Invoice Details":
                     )
                     invoices.append(inv)
                     if inv_no:
-                        inv_map[inv_no] = inv
+                        inv_map[(inv_no, project.lower())] = inv
                     else:
                         no_inv_map[(project.lower(), maint_year, inv_year)] = inv
                     new_count += 1
