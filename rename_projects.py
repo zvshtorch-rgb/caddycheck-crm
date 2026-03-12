@@ -8,45 +8,110 @@ DATA_FILE = Path(__file__).parent / "data" / "CaddyCheckProjectsInfo.xlsx"
 
 # {old_name_lower: canonical_name}  — case-insensitive match, exact canonical output
 RENAMES = {
-    # Proxy Delhaize Denderleew
-    "proxy delhaize denderleeuw":           "Proxy Delhaize Denderleew",
+    # Proxy Denderleew (spelling fix; Delhaize prefix removed by general rule below)
+    "proxy delhaize denderleeuw":               "Proxy Denderleew",
+    "proxy delhaize denderleew":                "Proxy Denderleew",
+
+    # Proxy Denderhoutem
+    "proxy delhaize denderhoutem (back)":       "Proxy Denderhoutem",
+    "proxy delhaize denderhoutem (top)":        "Proxy Denderhoutem",
+    "proxy delhaize denderhoutem":              "Proxy Denderhoutem",
+
+    # Proxy Berchem (explicit for canonical casing)
+    "proxy delhaize berchem":                   "Proxy Berchem",
+    "proxy berchem":                            "Proxy Berchem",
+
+    # Proxy Ooigem (fix ALL CAPS)
+    "proxy delhaize ooigem":                    "Proxy Ooigem",
+    "proxy ooigem":                             "Proxy Ooigem",
 
     # Spar Dadizele
-    "spar dadizele":                        "Spar Dadizele",
-    "spar dadizele (2nd)":                  "Spar Dadizele",
+    "spar dadizele":                            "Spar Dadizele",
+    "spar dadizele (2nd)":                      "Spar Dadizele",
 
-    # Proxy Delhaize Denderhoutem
-    "proxy delhaize denderhoutem (back)":   "Proxy Delhaize Denderhoutem",
-    "proxy delhaize denderhoutem (top)":    "Proxy Delhaize Denderhoutem",
+    # Spar Denderleew (vim3 variant)
+    "spar denderleew (vim3)":                   "Spar Denderleew",
 
-    # Plus Simpelveld Schouteten
-    "plus simpelveld schouteten":           "Plus Simpelveld Schouteten",
+    # Plus Simpelveld Schouteten (multiple spelling variants)
+    "plus simpelveld schouteten":               "Plus Simpelveld Schouteten",
+    "plus simpelveld schouteden":               "Plus Simpelveld Schouteten",
+    "plus simpleveld schouteden":               "Plus Simpelveld Schouteten",
 
     # Plus Klazienaveen Fischer
-    "plus klazienaveen":                    "Plus Klazienaveen Fischer",
-    "plus klazienaveen fischer":            "Plus Klazienaveen Fischer",
+    "plus klazienaveen":                        "Plus Klazienaveen Fischer",
+    "plus klazienaveen fischer":                "Plus Klazienaveen Fischer",
+
+    # Plus Kamerik Romijn (case fix)
+    "plus kamerik romijn":                      "Plus Kamerik Romijn",
+
+    # Plus Landgraaf Arts (case fix)
+    "plus landgraaf arts":                      "Plus Landgraaf Arts",
 
     # AH Merksem MAATJES (strip _x000D_ / \r)
-    "ah merksem maatjes":                   "AH Merksem MAATJES",
+    "ah merksem maatjes":                       "AH Merksem MAATJES",
+
+    # AH Dendermonde (typo fix)
+    "ah dendemonde":                            "AH Dendermonde",
+
+    # AD Geraardsbergen (_x000D_ suffix)
+    "ad geraardsbergen":                        "AD Geraardsbergen",
 
     # AD Aartselar
-    "ad aartselar (1 top)":                 "AD Aartselar",
-    "ad aartselar (4 back)":                "AD Aartselar",
-    "ad aartselar (4 top)":                 "AD Aartselar",
-    "ad delhaize aartselaar":               "AD Aartselar",
+    "ad aartselar (1 top)":                     "AD Aartselar",
+    "ad aartselar (4 back)":                    "AD Aartselar",
+    "ad aartselar (4 top)":                     "AD Aartselar",
+    "ad delhaize aartselaar":                   "AD Aartselar",
+
+    # AD Arendonk (ALL CAPS fix)
+    "ad arendonk":                              "AD Arendonk",
+
+    # AD Soumagne (spelling variants)
+    "ad soumagane":                             "AD Soumagne",
+    "ad soumagune":                             "AD Soumagne",
+
+    # AD Denderleeuw (spelling fix)
+    "ad denderleew":                            "AD Denderleeuw",
+
+    # Alvo Kontich (typo fix)
+    "alvo konitch":                             "Alvo Kontich",
+
+    # CM Alma Mol (case fix)
+    "cm alma mol":                              "CM Alma Mol",
+
+    # CM Waregem (typo fix)
+    "cm waregram":                              "CM Waregem",
+
+    # Coop Kockengen (spelling fix)
+    "coop cockengen":                           "Coop Kockengen",
+
+    # Edeka Dortmund (ALL CAPS fix)
+    "edeka dortmund":                           "Edeka Dortmund",
+
+    # Delhaize Belval Luxemburg (odd capitalisation)
+    "delhaize belval luxemburg":                "Delhaize Belval Luxemburg",
+
+    # Edeka Vogel-Lewandowski Dueren
+    "edeka vogel dueren":                       "Edeka Vogel-Lewandowski Dueren",
+
+    # Jumbo Groningen Pestman (case fix)
+    "jumbo groningen pestman":                  "Jumbo Groningen Pestman",
+
+    # Jumbo Olm Krimpen aan den Ijssel (ALL CAPS fix)
+    "jumbo olm krimpen aan den ijssel":         "Jumbo Olm Krimpen aan den Ijssel",
+
+    # Jumbo Gravendeel Van Der Hoek
+    "jumbo 's gravendeel van der hoek":         "Jumbo Gravendeel Van Der Hoek",
+    "jumbo gravendeel":                         "Jumbo Gravendeel Van Der Hoek",
 
     # Coop Bert Stuut
-    "coop bert stuut (back)":              "Coop Bert Stuut",
-    "coop bert stuut (top)":               "Coop Bert Stuut",
+    "coop bert stuut (back)":                   "Coop Bert Stuut",
+    "coop bert stuut (top)":                    "Coop Bert Stuut",
 
     # Jumbo Eindhoven Boschdijk
-    "jumbo eindhoven bosdijk":             "Jumbo Eindhoven Boschdijk",
+    "jumbo eindhoven bosdijk":                  "Jumbo Eindhoven Boschdijk",
     "jumbo eindhoven bosdijk (from side to td)": "Jumbo Eindhoven Boschdijk",
-    "jumbo eindhoven boschdijk":           "Jumbo Eindhoven Boschdijk",
+    "jumbo eindhoven boschdijk":                "Jumbo Eindhoven Boschdijk",
 }
-
-def normalize(val):
-    return str(val or "").strip().replace("\r", "").replace("_x000d_", "").lower()
 
 wb = openpyxl.load_workbook(DATA_FILE)
 
@@ -68,14 +133,20 @@ for sheet_name in ["Invoice details", "Projects overview"]:
         cell = row[proj_col - 1]
         if not cell.value:
             continue
-        raw = str(cell.value).strip().replace("\r", "").replace("_x000d_", "")
+        # Strip carriage returns and both cases of _x000D_
+        raw = str(cell.value).strip().replace("\r", "").replace("_x000D_", "").replace("_x000d_", "")
         key = raw.lower()
         if key in RENAMES:
             cell.value = RENAMES[key]
             updated += 1
         elif raw.lower().startswith("ad delhaize "):
-            # Strip "Delhaize " from "AD Delhaize X" → "AD X"
+            # "AD Delhaize X" → "AD X"
             new_name = "AD " + raw[len("AD Delhaize "):]
+            cell.value = new_name
+            updated += 1
+        elif raw.lower().startswith("proxy delhaize "):
+            # "Proxy Delhaize X" → "Proxy X"
+            new_name = "Proxy " + raw[len("Proxy Delhaize "):]
             cell.value = new_name
             updated += 1
         elif raw.lower().startswith("edeka ") and " - " in raw:
