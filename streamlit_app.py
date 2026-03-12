@@ -411,8 +411,20 @@ elif page == "🏗️ Projects":
 
     if CAN_EDIT:
         st.info("✏️ Admin mode: you can edit cells directly. Click **Save Changes** when done.")
+
+        if st.button("➕ Add New Project", key="btn_add_proj"):
+            st.session_state["add_proj_row"] = True
+
+        _empty_proj = {"Project Name": "", "Country": "", "# Cams": 0,
+                       "Payment Month": "", "Install Year": "",
+                       "Activation Date": "", "Status": "Active", "License EOP": ""}
+        if st.session_state.get("add_proj_row"):
+            df_edit = pd.concat([pd.DataFrame([_empty_proj]), df.reset_index(drop=True)], ignore_index=True)
+        else:
+            df_edit = df.reset_index(drop=True)
+
         edited_df = st.data_editor(
-            df.reset_index(drop=True),
+            df_edit,
             use_container_width=True,
             height=600,
             num_rows="dynamic",
@@ -449,6 +461,7 @@ elif page == "🏗️ Projects":
             try:
                 save_projects_to_excel(projects)
                 load_data.clear()
+                st.session_state.pop("add_proj_row", None)
                 msg = f"Saved! {new_count} new project(s) added." if new_count else "Projects saved successfully!"
                 st.success(msg)
             except Exception as e:
@@ -541,8 +554,20 @@ elif page == "🧾 Invoice Details":
 
     if CAN_EDIT:
         st.info("✏️ Admin mode: you can edit cells directly. Click **Save Changes** when done.")
+
+        if st.button("➕ Add New Invoice", key="btn_add_inv"):
+            st.session_state["add_inv_row"] = True
+
+        _empty_inv = {"Invoice #": "", "Project": "", "Maint. Year": "Y1",
+                      "Amount (€)": 0.0, "Cameras": 0,
+                      "Payment Date": "", "Paid": "No", "Year": str(datetime.date.today().year)}
+        if st.session_state.get("add_inv_row"):
+            df_inv_edit = pd.concat([pd.DataFrame([_empty_inv]), df_inv.reset_index(drop=True)], ignore_index=True)
+        else:
+            df_inv_edit = df_inv.reset_index(drop=True)
+
         edited_inv = st.data_editor(
-            df_inv,
+            df_inv_edit,
             use_container_width=True,
             height=550,
             num_rows="dynamic",
@@ -594,6 +619,7 @@ elif page == "🧾 Invoice Details":
             try:
                 save_invoices_to_excel(invoices)
                 load_data.clear()
+                st.session_state.pop("add_inv_row", None)
                 msg = f"Saved! {new_count} new invoice(s) added." if new_count else "Invoices saved successfully!"
                 st.success(msg)
             except Exception as e:
