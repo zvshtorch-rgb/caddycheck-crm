@@ -54,8 +54,6 @@ from services.excel_service import (
     save_projects_to_excel,
     save_invoices_to_excel,
     get_projects_for_month,
-    get_next_invoice_number,
-    append_monthly_invoice_rows,
 )
 from services.invoice_service import generate_monthly_invoice, get_invoice_preview_data
 
@@ -887,6 +885,7 @@ elif page == "💸 Debt Report":
 elif page == "📅 Monthly Invoice":
     st.title("📅 Monthly Invoice")
 
+    from services.excel_service import get_next_invoice_number, append_monthly_invoice_rows
     next_inv_no = get_next_invoice_number(invoices)
 
     col1, col2, col3 = st.columns([2, 1, 2])
