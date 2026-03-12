@@ -124,7 +124,7 @@ def save_data_paths(paths: dict) -> None:
 
 
 def get_email_config() -> dict:
-    """Load email configuration from file, returning defaults if missing."""
+    """Load email configuration from st.secrets (cloud) or local file, with defaults."""
     defaults = {
         "smtp_host": "smtp.gmail.com",
         "smtp_port": 587,
@@ -143,13 +143,25 @@ def get_email_config() -> dict:
             "Video Inform Ltd"
         ),
     }
+    # 1. Load from local file (local dev / Settings page saves here)
     if EMAIL_CONFIG_FILE.exists():
         try:
             with open(EMAIL_CONFIG_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                defaults.update(data)
+                defaults.update(json.load(f))
         except Exception:
             pass
+    # 2. Override with st.secrets [email] section if available (Streamlit Cloud)
+    try:
+        import streamlit as st
+        email_secrets = st.secrets.get("email", {})
+        if email_secrets:
+            for k, v in email_secrets.items():
+                # Convert comma-separated strings to lists for recipient fields
+                if k in ("default_recipients", "default_cc") and isinstance(v, str):
+                    v = [x.strip() for x in v.split(",") if x.strip()]
+                defaults[k] = v
+    except Exception:
+        pass
     return defaults
 
 
