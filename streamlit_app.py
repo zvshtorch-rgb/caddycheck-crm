@@ -624,6 +624,11 @@ elif page == "🧾 Invoice Details":
         if st.button("💾 Save Changes", key="save_invoices"):
             from models.invoice import Invoice as InvoiceModel
             inv_map = {i.invoice_number: i for i in invoices if i.invoice_number}
+            # Secondary lookup for invoices without invoice numbers — match by (project, maint_year, year)
+            no_inv_map = {
+                (i.project_name.strip().lower(), str(i.maintenance_year).strip(), str(i.year)): i
+                for i in invoices if not i.invoice_number
+            }
             new_count = 0
             for _, row in edited_inv.iterrows():
                 project = _safe_str(row.get("Project", "")).strip()
@@ -634,13 +639,18 @@ elif page == "🧾 Invoice Details":
                     inv_no = float(inv_no_str) if inv_no_str else None
                 except Exception:
                     inv_no = None
-                inv = inv_map.get(inv_no) if inv_no else None
+                maint_year = _safe_str(row.get("Maint. Year", "")).strip()
+                inv_year = str(_safe_int(row.get("Year")) or "")
+                if inv_no:
+                    inv = inv_map.get(inv_no)
+                else:
+                    inv = no_inv_map.get((project.lower(), maint_year, inv_year))
                 if inv is None:
-                    # New invoice row
+                    # Truly new invoice row
                     inv = InvoiceModel(
                         invoice_number=inv_no,
                         project_name=project,
-                        maintenance_year=_safe_str(row.get("Maint. Year", "")),
+                        maintenance_year=maint_year,
                         payment_amount=_safe_float(row.get("Amount (€)", 0)),
                         cameras_number=_safe_int(row.get("Cameras", 0)) or None,
                         payment_date=None,
@@ -650,6 +660,8 @@ elif page == "🧾 Invoice Details":
                     invoices.append(inv)
                     if inv_no:
                         inv_map[inv_no] = inv
+                    else:
+                        no_inv_map[(project.lower(), maint_year, inv_year)] = inv
                     new_count += 1
                 else:
                     inv.project_name   = project
