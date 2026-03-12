@@ -151,6 +151,33 @@ def load_data():
     return projects, invoices, debt_summaries, yearly_summary, str(paths["projects_file"])
 
 
+def _push_excel_to_github() -> tuple[bool, str]:
+    """Commit the updated Excel file back to GitHub so changes survive app restarts."""
+    try:
+        gh_cfg = st.secrets.get("github", {})
+        token    = gh_cfg.get("token", "")
+        repo_name = gh_cfg.get("repo", "zvshtorch-rgb/caddycheck-crm")
+        if not token:
+            return False, "GitHub token not set in secrets — changes saved locally only."
+        from github import Github
+        from config.settings import get_data_paths
+        data_file = get_data_paths()["projects_file"]
+        with open(data_file, "rb") as f:
+            content = f.read()
+        g = Github(token)
+        repo = g.get_repo(repo_name)
+        gh_file = repo.get_contents("data/CaddyCheckProjectsInfo.xlsx")
+        repo.update_file(
+            "data/CaddyCheckProjectsInfo.xlsx",
+            "CRM: update data via web app",
+            content,
+            gh_file.sha,
+        )
+        return True, "Saved and committed to GitHub."
+    except Exception as e:
+        return False, f"Local save OK but GitHub commit failed: {e}"
+
+
 def card(title: str, value: str, css_class: str):
     st.markdown(
         f'<div class="metric-card {css_class}">'
@@ -462,8 +489,9 @@ elif page == "🏗️ Projects":
                 save_projects_to_excel(projects)
                 load_data.clear()
                 st.session_state.pop("add_proj_row", None)
+                ok, gh_msg = _push_excel_to_github()
                 msg = f"Saved! {new_count} new project(s) added." if new_count else "Projects saved successfully!"
-                st.success(msg)
+                st.success(f"{msg}  \n{gh_msg}")
             except Exception as e:
                 st.error(f"Save failed: {e}")
     else:
@@ -640,8 +668,9 @@ elif page == "🧾 Invoice Details":
                 save_invoices_to_excel(invoices)
                 load_data.clear()
                 st.session_state.pop("add_inv_row", None)
+                ok, gh_msg = _push_excel_to_github()
                 msg = f"Saved! {new_count} new invoice(s) added." if new_count else "Invoices saved successfully!"
-                st.success(msg)
+                st.success(f"{msg}  \n{gh_msg}")
             except Exception as e:
                 st.error(f"Save failed: {e}")
     else:
