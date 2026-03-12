@@ -1022,20 +1022,20 @@ elif page == "📅 Monthly Invoice":
                     st.error("SMTP not configured. Go to ⚙️ Settings to set up email.")
                 else:
                     from services.email_service import send_invoice_email
+                    from services.invoice_service import generate_monthly_invoice_pdf
                     import tempfile
                     with tempfile.TemporaryDirectory() as tmp_dir:
                         try:
-                            out_path = generate_monthly_invoice(
+                            out_path = generate_monthly_invoice_pdf(
                                 projects=month_projects,
                                 month_name=sel_month,
                                 year=int(sel_year),
                                 invoice_number=inv_no,
                                 output_dir=Path(tmp_dir),
-                                template_path=paths["invoice_template"],
                             )
                             recipients = [r.strip() for r in to_addrs.split(",") if r.strip()]
                             cc_list = [c.strip() for c in cc_addrs.split(",") if c.strip()]
-                            success, msg = send_invoice_email(
+                            send_invoice_email(
                                 attachment_path=out_path,
                                 recipients=recipients,
                                 cc=cc_list,
@@ -1043,12 +1043,9 @@ elif page == "📅 Monthly Invoice":
                                 body=body,
                                 config=email_cfg,
                             )
-                            if success:
-                                st.success(f"Email sent! {msg}")
-                            else:
-                                st.error(f"Email failed: {msg}")
+                            st.success(f"Email sent with PDF attachment: {out_path.name}")
                         except Exception as e:
-                            st.error(f"Error: {e}")
+                            st.error(f"Email failed: {e}")
         else:
             st.info("Invoice generation requires Admin access.")
 
