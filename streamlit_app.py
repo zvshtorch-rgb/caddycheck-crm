@@ -166,7 +166,7 @@ st.sidebar.title("📊 CaddyCheck CRM")
 st.sidebar.markdown("---")
 page = st.sidebar.radio(
     "Navigation",
-    ["📊 Dashboard", "🏗️ Projects", "🧾 Invoice Details", "📅 Monthly Invoice", "⚙️ Settings"],
+    ["📊 Dashboard", "🏗️ Projects", "🧾 Invoice Details", "💸 Debt Report", "📅 Monthly Invoice", "⚙️ Settings"],
     label_visibility="collapsed",
 )
 st.sidebar.markdown("---")
@@ -682,6 +682,150 @@ elif page == "🧾 Invoice Details":
         use_container_width=True,
         height=400,
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: DEBT REPORT
+# ══════════════════════════════════════════════════════════════════════════════
+elif page == "💸 Debt Report":
+    st.title("💸 Debt Report")
+
+    # ── Filters ───────────────────────────────────────────────────────────────
+    with st.expander("🔍 Filters", expanded=False):
+        fc1, fc2, fc3 = st.columns(3)
+        debt_years    = sorted({inv.year for inv in invoices if inv.year}, reverse=True)
+        dsel_year     = fc1.selectbox("Year", ["All"] + [str(y) for y in debt_years], key="dr_year")
+        debt_countries = sorted({p.country for p in projects if p.country})
+        dsel_country  = fc2.selectbox("Country", ["All"] + debt_countries, key="dr_country")
+        dsel_search   = fc3.text_input("Search project", key="dr_search")
+
+    # Only unpaid invoices
+    debt_inv = [i for i in invoices if i.is_unpaid()]
+    if dsel_year != "All":
+        debt_inv = [i for i in debt_inv if i.year == int(dsel_year)]
+    proj_country_map = {p.project_name.lower(): p.country for p in projects}
+    if dsel_country != "All":
+        debt_inv = [i for i in debt_inv
+                    if proj_country_map.get(i.project_name.lower().strip()) == dsel_country]
+    if dsel_search.strip():
+        debt_inv = [i for i in debt_inv if dsel_search.lower() in i.project_name.lower()]
+
+    # ── Summary metrics ───────────────────────────────────────────────────────
+    total_debt_amt  = sum(i.payment_amount for i in debt_inv)
+    proj_with_debt  = len({i.project_name for i in debt_inv})
+    mc1, mc2, mc3 = st.columns(3)
+    mc1.metric("Unpaid Invoices",  len(debt_inv))
+    mc2.metric("Projects with Debt", proj_with_debt)
+    mc3.metric("Total Debt",       f"€{total_debt_amt:,.0f}")
+
+    st.markdown("---")
+
+    # ── Detailed table: one row per unpaid invoice ────────────────────────────
+    st.subheader("Unpaid Invoices Detail")
+    detail_rows = [{
+        "Invoice #":      _safe_str(_safe_int(i.invoice_number) or ""),
+        "Project Name":   _safe_str(i.project_name),
+        "Country":        _safe_str(proj_country_map.get(i.project_name.lower().strip(), "")),
+        "Maint. Year":    _safe_str(i.maintenance_year),
+        "Amount (€)":     _safe_float(i.payment_amount),
+        "Year":           _safe_str(_safe_int(i.year) or ""),
+        "Payment Date":   i.payment_date.strftime("%Y-%m-%d") if i.payment_date else "",
+    } for i in sorted(debt_inv, key=lambda x: (x.project_name, x.year or 0))]
+
+    if detail_rows:
+        detail_df = pd.DataFrame(detail_rows)
+        st.dataframe(detail_df, use_container_width=True, hide_index=True, height=350)
+
+        # Download detail as CSV
+        csv_detail = detail_df.to_csv(index=False).encode("utf-8")
+        st.download_button("⬇️ Download Detail CSV", csv_detail,
+                           file_name="debt_detail.csv", mime="text/csv")
+    else:
+        st.success("No unpaid invoices match the current filters.")
+
+    st.markdown("---")
+
+    # ── Summary table: grouped by project ────────────────────────────────────
+    st.subheader("Debt Summary by Project")
+    from collections import defaultdict
+    proj_debt: dict = defaultdict(lambda: {"invoices": [], "total": 0.0, "country": ""})
+    for i in debt_inv:
+        key = i.project_name
+        proj_debt[key]["invoices"].append(_safe_str(_safe_int(i.invoice_number) or ""))
+        proj_debt[key]["total"]   += i.payment_amount
+        proj_debt[key]["country"]  = proj_country_map.get(i.project_name.lower().strip(), "")
+
+    summary_rows = [{
+        "Project Name":    name,
+        "Country":         d["country"],
+        "Invoice Numbers": ", ".join(filter(None, d["invoices"])),
+        "Total Debt (€)":  d["total"],
+    } for name, d in sorted(proj_debt.items(), key=lambda x: -x[1]["total"])]
+
+    if summary_rows:
+        summary_df = pd.DataFrame(summary_rows)
+
+        def color_debt_amt(val):
+            try:
+                return "color: #E74C3C; font-weight: bold" if float(val) > 0 else ""
+            except Exception:
+                return ""
+
+        st.dataframe(
+            summary_df.style.map(color_debt_amt, subset=["Total Debt (€)"]),
+            use_container_width=True, hide_index=True, height=400,
+        )
+
+        # Download summary as CSV
+        csv_summary = summary_df.to_csv(index=False).encode("utf-8")
+        st.download_button("⬇️ Download Summary CSV", csv_summary,
+                           file_name="debt_summary.csv", mime="text/csv")
+
+        # Download summary as PDF
+        try:
+            from reportlab.lib.pagesizes import A4
+            from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+            from reportlab.lib import colors as rl_colors
+            from reportlab.lib.styles import getSampleStyleSheet
+            from io import BytesIO
+            pdf_buf = BytesIO()
+            doc = SimpleDocTemplate(pdf_buf, pagesize=A4,
+                                    leftMargin=18*3.54, rightMargin=18*3.54,
+                                    topMargin=16*3.54, bottomMargin=16*3.54)
+            styles = getSampleStyleSheet()
+            elems = []
+            elems.append(Paragraph("<b>CaddyCheck CRM — Debt Report</b>",
+                                   styles["Title"]))
+            elems.append(Paragraph(
+                f"Total Debt: €{total_debt_amt:,.0f}  |  "
+                f"Projects: {proj_with_debt}  |  Invoices: {len(debt_inv)}",
+                styles["Normal"]))
+            elems.append(Spacer(1, 12))
+            tbl_data = [["Project Name", "Country", "Invoice Numbers", "Total Debt (€)"]]
+            for r in summary_rows:
+                tbl_data.append([
+                    r["Project Name"], r["Country"],
+                    r["Invoice Numbers"], f"€{r['Total Debt (€)']:,.0f}",
+                ])
+            t = Table(tbl_data, repeatRows=1,
+                      colWidths=["35%", "12%", "33%", "20%"])
+            t.setStyle(TableStyle([
+                ("BACKGROUND",    (0, 0), (-1, 0), rl_colors.HexColor("#1B3A6B")),
+                ("TEXTCOLOR",     (0, 0), (-1, 0), rl_colors.white),
+                ("FONTNAME",      (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTSIZE",      (0, 0), (-1, -1), 8),
+                ("ROWBACKGROUNDS",(0, 1), (-1, -1),
+                 [rl_colors.white, rl_colors.HexColor("#EBF5FB")]),
+                ("GRID",          (0, 0), (-1, -1), 0.4, rl_colors.HexColor("#BDC3C7")),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ("TOPPADDING",    (0, 0), (-1, -1), 4),
+            ]))
+            elems.append(t)
+            doc.build(elems)
+            st.download_button("⬇️ Download Summary PDF", pdf_buf.getvalue(),
+                               file_name="debt_summary.pdf", mime="application/pdf")
+        except Exception as e:
+            st.warning(f"PDF export unavailable: {e}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
