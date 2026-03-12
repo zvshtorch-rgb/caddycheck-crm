@@ -111,6 +111,36 @@ RENAMES = {
     "jumbo eindhoven bosdijk":                  "Jumbo Eindhoven Boschdijk",
     "jumbo eindhoven bosdijk (from side to td)": "Jumbo Eindhoven Boschdijk",
     "jumbo eindhoven boschdijk":                "Jumbo Eindhoven Boschdijk",
+
+    # Eurospar (fix EuroSpar capitalisation; merge (2nd) variant)
+    "eurospar dadizele":                        "Eurospar Dadizele",
+    "eurospar dadizele (2nd)":                  "Eurospar Dadizele",
+    "eurospar denderleew":                      "Eurospar Denderleew",
+
+    # Delhaize Sint-Lievens-Houtem → Proxy Sint-Lievens-Houtem
+    "delhaize sint-lievens-houtem":             "Proxy Sint-Lievens-Houtem",
+
+    # Plus langraaf Aarts extra checkouts → Plus Landgraaf Arts
+    "plus langraaf aarts extra checkouts":      "Plus Landgraaf Arts",
+
+    # Alma Geel → CM Alma Geel
+    "alma geel":                                "CM Alma Geel",
+
+    # Plus Delft
+    "plus delft (1 top)":                       "Plus Delft",
+    "plus delft (4 back)":                      "Plus Delft",
+
+    # Plus Maastricht Caberg
+    "plus maastricht caberg":                   "Plus Maastricht Caberg",
+    "plus maastricht caberg  (from back to td)": "Plus Maastricht Caberg",
+
+    # Plus Meerkerk
+    "plus meerkerk (back)":                     "Plus Meerkerk",
+    "plus meerkerk (top)":                      "Plus Meerkerk",
+
+    # Jumbo Uden De Laak
+    "jumbo uden de laak (back)":               "Jumbo Uden De Laak",
+    "jumbo uden de laak (from back to td)":    "Jumbo Uden De Laak",
 }
 
 wb = openpyxl.load_workbook(DATA_FILE)
