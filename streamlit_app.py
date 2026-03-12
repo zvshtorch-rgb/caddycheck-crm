@@ -498,23 +498,22 @@ elif page == "🏗️ Projects":
 elif page == "🧾 Invoice Details":
     st.title("🧾 Invoice Details")
 
-    # Filters — row 1
-    col1, col2, col3, col4 = st.columns(4)
-    years = sorted({inv.year for inv in invoices if inv.year}, reverse=True)
-    sel_year    = col1.selectbox("Year",    ["All"] + [str(y) for y in years], key="inv_year")
-    sel_paid    = col2.selectbox("Paid Status", ["All", "Paid", "Unpaid", "Cancelled"], key="inv_paid")
-    countries   = sorted({p.country for p in projects if p.country})
-    sel_country = col3.selectbox("Country", ["All"] + countries, key="inv_country")
-    search      = col4.text_input("Search project name", key="inv_search")
+    with st.expander("🔍 Filters", expanded=True):
+        col1, col2, col3, col4 = st.columns(4)
+        years = sorted({inv.year for inv in invoices if inv.year}, reverse=True)
+        sel_year    = col1.selectbox("Year",    ["All"] + [str(y) for y in years], key="inv_year")
+        sel_paid    = col2.selectbox("Paid Status", ["All", "Paid", "Unpaid", "Cancelled"], key="inv_paid")
+        countries   = sorted({p.country for p in projects if p.country})
+        sel_country = col3.selectbox("Country", ["All"] + countries, key="inv_country")
+        search      = col4.text_input("Search project name", key="inv_search")
 
-    # Filters — row 2
-    col5, col6, col7, col8 = st.columns(4)
-    maint_years = sorted({inv.maintenance_year for inv in invoices if inv.maintenance_year})
-    sel_maint   = col5.selectbox("Maint. Year", ["All"] + maint_years, key="inv_maint")
-    inv_no_search = col6.text_input("Invoice #", key="inv_no_search")
-    amt_min     = col7.number_input("Min Amount (€)", min_value=0, value=0, step=100, key="inv_amt_min")
-    amt_max     = col8.number_input("Max Amount (€)", min_value=0, value=0, step=100, key="inv_amt_max",
-                                    help="0 = no limit")
+        col5, col6, col7, col8 = st.columns(4)
+        maint_years = sorted({inv.maintenance_year for inv in invoices if inv.maintenance_year})
+        sel_maint     = col5.selectbox("Maint. Year", ["All"] + maint_years, key="inv_maint")
+        inv_no_search = col6.text_input("Invoice #", key="inv_no_search")
+        amt_min       = col7.number_input("Min Amount (€)", min_value=0, value=0, step=100, key="inv_amt_min")
+        amt_max       = col8.number_input("Max Amount (€)", min_value=0, value=0, step=100, key="inv_amt_max",
+                                          help="0 = no limit")
 
     proj_country = {p.project_name.lower(): p.country for p in projects}
 
@@ -542,14 +541,18 @@ elif page == "🧾 Invoice Details":
         filtered_inv = [i for i in filtered_inv if i.payment_amount <= amt_max]
 
     # Summary row
+    total_all_f    = sum(i.payment_amount for i in filtered_inv)
     total_paid_f   = sum(i.payment_amount for i in filtered_inv if i.is_paid())
     total_unpaid_f = sum(i.payment_amount for i in filtered_inv if i.is_unpaid())
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Invoices shown",  len(filtered_inv))
-    c2.metric("Total Paid",      f"€{total_paid_f:,.0f}")
-    c3.metric("Total Unpaid",    f"€{total_unpaid_f:,.0f}")
+    total_cancel_f = sum(i.payment_amount for i in filtered_inv if i.is_cancelled())
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Invoices shown",    len(filtered_inv))
+    c2.metric("Total Amount",      f"€{total_all_f:,.0f}")
+    c3.metric("Total Paid",        f"€{total_paid_f:,.0f}")
+    c4.metric("Total Unpaid",      f"€{total_unpaid_f:,.0f}")
+    c5.metric("Total Cancelled",   f"€{total_cancel_f:,.0f}")
 
-    st.caption(f"Showing {len(filtered_inv)} of {len(invoices)} invoices")
+    st.caption(f"Showing {len(filtered_inv)} of {len(invoices)} invoices — use filters above to narrow results")
 
     df_inv = pd.DataFrame([{
         "Invoice #":      _safe_str(_safe_int(i.invoice_number) or ""),
