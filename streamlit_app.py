@@ -498,14 +498,23 @@ elif page == "🏗️ Projects":
 elif page == "🧾 Invoice Details":
     st.title("🧾 Invoice Details")
 
-    # Filters
+    # Filters — row 1
     col1, col2, col3, col4 = st.columns(4)
     years = sorted({inv.year for inv in invoices if inv.year}, reverse=True)
     sel_year    = col1.selectbox("Year",    ["All"] + [str(y) for y in years], key="inv_year")
-    sel_paid    = col2.selectbox("Status",  ["All", "Paid", "Unpaid", "Cancelled"], key="inv_paid")
+    sel_paid    = col2.selectbox("Paid Status", ["All", "Paid", "Unpaid", "Cancelled"], key="inv_paid")
     countries   = sorted({p.country for p in projects if p.country})
     sel_country = col3.selectbox("Country", ["All"] + countries, key="inv_country")
-    search      = col4.text_input("Search project", key="inv_search")
+    search      = col4.text_input("Search project name", key="inv_search")
+
+    # Filters — row 2
+    col5, col6, col7, col8 = st.columns(4)
+    maint_years = sorted({inv.maintenance_year for inv in invoices if inv.maintenance_year})
+    sel_maint   = col5.selectbox("Maint. Year", ["All"] + maint_years, key="inv_maint")
+    inv_no_search = col6.text_input("Invoice #", key="inv_no_search")
+    amt_min     = col7.number_input("Min Amount (€)", min_value=0, value=0, step=100, key="inv_amt_min")
+    amt_max     = col8.number_input("Max Amount (€)", min_value=0, value=0, step=100, key="inv_amt_max",
+                                    help="0 = no limit")
 
     proj_country = {p.project_name.lower(): p.country for p in projects}
 
@@ -523,6 +532,14 @@ elif page == "🧾 Invoice Details":
                         if proj_country.get(i.project_name.lower().strip()) == sel_country]
     if search:
         filtered_inv = [i for i in filtered_inv if search.lower() in i.project_name.lower()]
+    if sel_maint != "All":
+        filtered_inv = [i for i in filtered_inv if _safe_str(i.maintenance_year) == sel_maint]
+    if inv_no_search.strip():
+        filtered_inv = [i for i in filtered_inv if inv_no_search.strip() in _safe_str(i.invoice_number)]
+    if amt_min > 0:
+        filtered_inv = [i for i in filtered_inv if i.payment_amount >= amt_min]
+    if amt_max > 0:
+        filtered_inv = [i for i in filtered_inv if i.payment_amount <= amt_max]
 
     # Summary row
     total_paid_f   = sum(i.payment_amount for i in filtered_inv if i.is_paid())
