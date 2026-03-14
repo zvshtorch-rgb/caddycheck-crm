@@ -811,7 +811,7 @@ elif page == "💸 Debt Report":
         "Project Name":    name,
         "Country":         d["country"],
         "Invoice Numbers": ", ".join(filter(None, d["invoices"])),
-        "Total Debt (€)":  d["total"],
+        "Total Debt (€)":  int(round(d["total"])),
     } for name, d in sorted(proj_debt.items(), key=lambda x: -x[1]["total"])]
 
     if summary_rows:
