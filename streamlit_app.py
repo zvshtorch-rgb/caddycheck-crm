@@ -1,5 +1,6 @@
 """CaddyCheck CRM — Streamlit web app (role-based access)."""
 import datetime
+import calendar
 import sys
 from pathlib import Path
 
@@ -832,51 +833,169 @@ elif page == "💸 Debt Report":
         st.download_button("⬇️ Download Summary CSV", csv_summary,
                            file_name="debt_summary.csv", mime="text/csv")
 
-        # Download summary as PDF
+        # Download summary as PDF (split Y1 vs Y2+)
         try:
             from reportlab.lib.pagesizes import A4
+            from reportlab.lib.units import cm
+            from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+            from reportlab.lib.enums import TA_CENTER
             from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
             from reportlab.lib import colors as rl_colors
-            from reportlab.lib.styles import getSampleStyleSheet
             from io import BytesIO
+
+            # Split unpaid invoices into Y1 and Y2+
+            y1_inv  = [i for i in debt_inv if str(i.maintenance_year).strip().upper() == "Y1"]
+            y2_inv  = [i for i in debt_inv if str(i.maintenance_year).strip().upper() != "Y1"]
+
+            def _proj_debt_rows(inv_list):
+                pd_: dict = defaultdict(lambda: {"invoices": [], "total": 0.0, "country": ""})
+                for i in inv_list:
+                    pd_[i.project_name]["invoices"].append(
+                        str(int(i.invoice_number)) if i.invoice_number else "")
+                    pd_[i.project_name]["total"]   += i.payment_amount
+                    pd_[i.project_name]["country"]  = _get_country(i.project_name)
+                return sorted(pd_.items(), key=lambda x: -x[1]["total"])
+
+            def _make_section_table(rows, rl_colors):
+                hdr_color = rl_colors.HexColor("#1B3A6B")
+                tbl_data = [["Project Name", "Country", "Invoice #s", "Debt (€)"]]
+                for name, d in rows:
+                    tbl_data.append([
+                        name, d["country"],
+                        ", ".join(filter(None, d["invoices"])),
+                        f"€{d['total']:,.0f}",
+                    ])
+                t = Table(tbl_data, repeatRows=1,
+                          colWidths=[7.5*cm, 2*cm, 5*cm, 3*cm])
+                t.setStyle(TableStyle([
+                    ("BACKGROUND",     (0, 0), (-1, 0), hdr_color),
+                    ("TEXTCOLOR",      (0, 0), (-1, 0), rl_colors.white),
+                    ("FONTNAME",       (0, 0), (-1, 0), "Helvetica-Bold"),
+                    ("FONTSIZE",       (0, 0), (-1, -1), 8),
+                    ("ROWBACKGROUNDS", (0, 1), (-1, -1),
+                     [rl_colors.white, rl_colors.HexColor("#EBF5FB")]),
+                    ("GRID",           (0, 0), (-1, -1), 0.4, rl_colors.HexColor("#BDC3C7")),
+                    ("BOTTOMPADDING",  (0, 0), (-1, -1), 4),
+                    ("TOPPADDING",     (0, 0), (-1, -1), 4),
+                    ("ALIGN",          (3, 0), (3, -1), "RIGHT"),
+                ]))
+                return t
+
             pdf_buf = BytesIO()
             doc = SimpleDocTemplate(pdf_buf, pagesize=A4,
-                                    leftMargin=18*3.54, rightMargin=18*3.54,
-                                    topMargin=16*3.54, bottomMargin=16*3.54)
+                                    leftMargin=1.5*cm, rightMargin=1.5*cm,
+                                    topMargin=1.5*cm, bottomMargin=1.5*cm)
             styles = getSampleStyleSheet()
+            sec_style = ParagraphStyle("sec", parent=styles["Heading2"],
+                                       textColor=rl_colors.HexColor("#1B3A6B"))
             elems = []
-            elems.append(Paragraph("<b>CaddyCheck CRM — Debt Report</b>",
-                                   styles["Title"]))
+            elems.append(Paragraph("<b>CaddyCheck CRM — Debt Report</b>", styles["Title"]))
             elems.append(Paragraph(
-                f"Total Debt: €{total_debt_amt:,.0f}  |  "
-                f"Projects: {proj_with_debt}  |  Invoices: {len(debt_inv)}",
+                f"Generated: {datetime.datetime.now().strftime('%Y-%m-%d')}  |  "
+                f"Total Debt: €{total_debt_amt:,.0f}  |  Projects: {proj_with_debt}",
                 styles["Normal"]))
-            elems.append(Spacer(1, 12))
-            tbl_data = [["Project Name", "Country", "Invoice Numbers", "Total Debt (€)"]]
-            for r in summary_rows:
-                tbl_data.append([
-                    r["Project Name"], r["Country"],
-                    r["Invoice Numbers"], f"€{r['Total Debt (€)']:,.0f}",
-                ])
-            t = Table(tbl_data, repeatRows=1,
-                      colWidths=["35%", "12%", "33%", "20%"])
-            t.setStyle(TableStyle([
-                ("BACKGROUND",    (0, 0), (-1, 0), rl_colors.HexColor("#1B3A6B")),
-                ("TEXTCOLOR",     (0, 0), (-1, 0), rl_colors.white),
-                ("FONTNAME",      (0, 0), (-1, 0), "Helvetica-Bold"),
-                ("FONTSIZE",      (0, 0), (-1, -1), 8),
-                ("ROWBACKGROUNDS",(0, 1), (-1, -1),
-                 [rl_colors.white, rl_colors.HexColor("#EBF5FB")]),
-                ("GRID",          (0, 0), (-1, -1), 0.4, rl_colors.HexColor("#BDC3C7")),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-                ("TOPPADDING",    (0, 0), (-1, -1), 4),
-            ]))
-            elems.append(t)
+            elems.append(Spacer(1, 0.4*cm))
+
+            # Section A: Y1
+            y1_total = sum(i.payment_amount for i in y1_inv)
+            elems.append(Paragraph(
+                f"A. New Installation Debt (Y1)  —  €{y1_total:,.0f}", sec_style))
+            elems.append(Spacer(1, 0.2*cm))
+            y1_rows = _proj_debt_rows(y1_inv)
+            if y1_rows:
+                elems.append(_make_section_table(y1_rows, rl_colors))
+            else:
+                elems.append(Paragraph("No Y1 unpaid invoices.", styles["Normal"]))
+            elems.append(Spacer(1, 0.6*cm))
+
+            # Section B: Y2+
+            y2_total = sum(i.payment_amount for i in y2_inv)
+            elems.append(Paragraph(
+                f"B. Maintenance Debt (Y2+)  —  €{y2_total:,.0f}", sec_style))
+            elems.append(Spacer(1, 0.2*cm))
+            y2_rows = _proj_debt_rows(y2_inv)
+            if y2_rows:
+                elems.append(_make_section_table(y2_rows, rl_colors))
+            else:
+                elems.append(Paragraph("No Y2+ unpaid invoices.", styles["Normal"]))
+
             doc.build(elems)
-            st.download_button("⬇️ Download Summary PDF", pdf_buf.getvalue(),
-                               file_name="debt_summary.pdf", mime="application/pdf")
+            st.download_button("⬇️ Download Debt PDF", pdf_buf.getvalue(),
+                               file_name="debt_report.pdf", mime="application/pdf")
         except Exception as e:
             st.warning(f"PDF export unavailable: {e}")
+
+    st.markdown("---")
+
+    # ── Licenses expiring next month ──────────────────────────────────────────
+    st.subheader("Licenses Expiring Next Month")
+    today = datetime.datetime.now()
+    next_month = today.month % 12 + 1
+    next_month_year = today.year if today.month < 12 else today.year + 1
+    expiring = [
+        p for p in projects
+        if p.license_eop
+        and p.license_eop.month == next_month
+        and p.license_eop.year == next_month_year
+    ]
+    if expiring:
+        exp_rows = [{
+            "Project Name": p.project_name,
+            "Country":      p.country,
+            "# Cams":       p.num_cams,
+            "License EOP":  p.license_eop.strftime("%Y-%m-%d"),
+            "Status":       p.status,
+        } for p in sorted(expiring, key=lambda p: p.license_eop)]
+        st.dataframe(pd.DataFrame(exp_rows), use_container_width=True, hide_index=True)
+
+        # PDF export for licenses
+        try:
+            from reportlab.lib.pagesizes import A4
+            from reportlab.lib.units import cm
+            from reportlab.lib.styles import getSampleStyleSheet
+            from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+            from reportlab.lib import colors as rl_colors
+            from io import BytesIO
+            lic_buf = BytesIO()
+            lic_doc = SimpleDocTemplate(lic_buf, pagesize=A4,
+                                        leftMargin=1.5*cm, rightMargin=1.5*cm,
+                                        topMargin=1.5*cm, bottomMargin=1.5*cm)
+            styles = getSampleStyleSheet()
+            month_name_str = calendar.month_name[next_month]
+            elems = []
+            elems.append(Paragraph(
+                f"<b>Licenses to Renew — {month_name_str} {next_month_year}</b>",
+                styles["Title"]))
+            elems.append(Paragraph(
+                f"Generated: {today.strftime('%Y-%m-%d')}  |  {len(expiring)} license(s) expiring",
+                styles["Normal"]))
+            elems.append(Spacer(1, 0.4*cm))
+            tbl_data = [["Project Name", "Country", "# Cams", "License EOP", "Status"]]
+            for r in exp_rows:
+                tbl_data.append([r["Project Name"], r["Country"], str(r["# Cams"]),
+                                  r["License EOP"], r["Status"]])
+            t = Table(tbl_data, repeatRows=1,
+                      colWidths=[7*cm, 2.5*cm, 2*cm, 3*cm, 3*cm])
+            t.setStyle(TableStyle([
+                ("BACKGROUND",     (0, 0), (-1, 0), rl_colors.HexColor("#1B3A6B")),
+                ("TEXTCOLOR",      (0, 0), (-1, 0), rl_colors.white),
+                ("FONTNAME",       (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTSIZE",       (0, 0), (-1, -1), 8),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1),
+                 [rl_colors.white, rl_colors.HexColor("#FFF9E6")]),
+                ("GRID",           (0, 0), (-1, -1), 0.4, rl_colors.HexColor("#BDC3C7")),
+                ("BOTTOMPADDING",  (0, 0), (-1, -1), 4),
+                ("TOPPADDING",     (0, 0), (-1, -1), 4),
+            ]))
+            elems.append(t)
+            lic_doc.build(elems)
+            st.download_button("⬇️ Download Licenses PDF", lic_buf.getvalue(),
+                               file_name=f"licenses_{month_name_str}_{next_month_year}.pdf",
+                               mime="application/pdf")
+        except Exception as e:
+            st.warning(f"PDF export unavailable: {e}")
+    else:
+        st.info(f"No licenses expiring in {calendar.month_name[next_month]} {next_month_year}.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
