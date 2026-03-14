@@ -800,17 +800,18 @@ elif page == "💸 Debt Report":
     # ── Summary table: grouped by project ────────────────────────────────────
     st.subheader("Debt Summary by Project")
     from collections import defaultdict
-    proj_debt: dict = defaultdict(lambda: {"invoices": [], "total": 0.0, "country": ""})
+    proj_debt: dict = defaultdict(lambda: {"inv_nos": set(), "total": 0.0, "country": ""})
     for i in debt_inv:
         key = i.project_name
-        proj_debt[key]["invoices"].append(str(int(i.invoice_number)) if i.invoice_number else "")
+        if i.invoice_number:
+            proj_debt[key]["inv_nos"].add(str(int(i.invoice_number)))
         proj_debt[key]["total"]   += i.payment_amount
         proj_debt[key]["country"]  = _get_country(i.project_name)
 
     summary_rows = [{
         "Project Name":    name,
         "Country":         d["country"],
-        "Invoice Numbers": ", ".join(filter(None, d["invoices"])),
+        "Invoice Numbers": ", ".join(sorted(d["inv_nos"])),
         "Total Debt (€)":  int(round(d["total"])),
     } for name, d in sorted(proj_debt.items(), key=lambda x: -x[1]["total"])]
 
@@ -848,10 +849,10 @@ elif page == "💸 Debt Report":
             y2_inv  = [i for i in debt_inv if str(i.maintenance_year).strip().upper() != "Y1"]
 
             def _proj_debt_rows(inv_list):
-                pd_: dict = defaultdict(lambda: {"invoices": [], "total": 0.0, "country": ""})
+                pd_: dict = defaultdict(lambda: {"inv_nos": set(), "total": 0.0, "country": ""})
                 for i in inv_list:
-                    pd_[i.project_name]["invoices"].append(
-                        str(int(i.invoice_number)) if i.invoice_number else "")
+                    if i.invoice_number:
+                        pd_[i.project_name]["inv_nos"].add(str(int(i.invoice_number)))
                     pd_[i.project_name]["total"]   += i.payment_amount
                     pd_[i.project_name]["country"]  = _get_country(i.project_name)
                 return sorted(pd_.items(), key=lambda x: -x[1]["total"])
@@ -862,7 +863,7 @@ elif page == "💸 Debt Report":
                 for name, d in rows:
                     tbl_data.append([
                         name, d["country"],
-                        ", ".join(filter(None, d["invoices"])),
+                        ", ".join(sorted(d["inv_nos"])),
                         f"€{d['total']:,.0f}",
                     ])
                 t = Table(tbl_data, repeatRows=1,
