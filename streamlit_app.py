@@ -749,13 +749,24 @@ elif page == "💸 Debt Report":
 
     # Country lookup — normalize names aggressively, fallback to debt_summaries
     import re as _re
+    import unicodedata as _ud
     def _norm(s):
-        return _re.sub(r'\s+', ' ', str(s or "").strip().lower())
+        s = str(s or "").strip()
+        s = _re.sub(r'\s*\([^)]*\)', '', s).strip()          # strip "(coplementary)" etc.
+        s = _ud.normalize('NFKD', s).encode('ascii', 'ignore').decode('ascii')  # strip accents
+        return _re.sub(r'\s+', ' ', s).strip().lower()
     proj_country_map = {_norm(p.project_name): p.country for p in projects}
     ds_country_map   = {_norm(ds.project_name): ds.country for ds in debt_summaries}
     def _get_country(name):
         k = _norm(name)
-        return proj_country_map.get(k) or ds_country_map.get(k) or ""
+        result = proj_country_map.get(k) or ds_country_map.get(k)
+        if result:
+            return result
+        # Partial match: invoice name starts with a known project name or vice versa
+        for proj_k, country in proj_country_map.items():
+            if proj_k and k and (k.startswith(proj_k) or proj_k.startswith(k)):
+                return country
+        return ""
 
     if dsel_country != "All":
         debt_inv = [i for i in debt_inv if _get_country(i.project_name) == dsel_country]
