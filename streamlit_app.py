@@ -441,13 +441,15 @@ elif page == "🏗️ Projects":
         st.info("✏️ Admin mode: you can edit cells directly. Click **Save Changes** when done.")
 
         if st.button("➕ Add New Project", key="btn_add_proj"):
-            st.session_state["add_proj_row"] = True
+            st.session_state["add_proj_row"] = st.session_state.get("add_proj_row", 0) + 1
 
         _empty_proj = {"Project Name": "", "Country": "", "# Cams": 0,
                        "Payment Month": "", "Install Year": "",
                        "Activation Date": "", "Status": "Active", "License EOP": ""}
-        if st.session_state.get("add_proj_row"):
-            df_edit = pd.concat([pd.DataFrame([_empty_proj]), df.reset_index(drop=True)], ignore_index=True)
+        n_new = st.session_state.get("add_proj_row", 0)
+        if n_new:
+            empty_rows = pd.DataFrame([_empty_proj] * n_new)
+            df_edit = pd.concat([empty_rows, df.reset_index(drop=True)], ignore_index=True)
         else:
             df_edit = df.reset_index(drop=True)
 
@@ -456,7 +458,7 @@ elif page == "🏗️ Projects":
             use_container_width=True,
             height=600,
             num_rows="dynamic",
-            key="proj_editor",
+            key=f"proj_editor_{n_new}",
         )
         if st.button("💾 Save Changes", key="save_projects"):
             from models.project import Project as ProjectModel
