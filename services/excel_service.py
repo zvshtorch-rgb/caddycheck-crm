@@ -302,11 +302,13 @@ def save_projects_to_excel(
     # Build lookup: project_name -> Project
     proj_map = {p.project_name.strip(): p for p in projects}
 
+    existing_names = set()
     for row_idx in range(2, ws.max_row + 1):
         cell = ws.cell(row=row_idx, column=1)
         if isinstance(cell, MergedCell) or not cell.value:
             continue
         name = str(cell.value).strip()
+        existing_names.add(name)
         proj = proj_map.get(name)
         if proj is None:
             continue
@@ -319,6 +321,22 @@ def save_projects_to_excel(
         _safe_write(ws, row_idx, _PROJ_COL["Activation date"],    proj.activation_date)
         _safe_write(ws, row_idx, _PROJ_COL["Status"],             proj.status or None)
         _safe_write(ws, row_idx, _PROJ_COL["Licsense EOP "],      proj.license_eop)
+
+    # Append rows for brand-new projects not yet in the sheet
+    for proj in projects:
+        if proj.project_name.strip() in existing_names:
+            continue
+        row_data = [None] * 22
+        row_data[_PROJ_COL["Project Name"] - 1]       = proj.project_name
+        row_data[_PROJ_COL["Country"] - 1]            = proj.country or None
+        row_data[_PROJ_COL["# Cams"] - 1]             = proj.num_cams or None
+        row_data[_PROJ_COL["payment month"] - 1]      = proj.payment_month[:3] if proj.payment_month else None
+        row_data[_PROJ_COL["Installation Year"] - 1]  = proj.installation_year
+        row_data[_PROJ_COL["Activation date"] - 1]    = proj.activation_date
+        row_data[_PROJ_COL["Status"] - 1]             = proj.status or None
+        row_data[_PROJ_COL["Licsense EOP "] - 1]      = proj.license_eop
+        ws.append(row_data)
+        logger.info("Appended new project row: %s", proj.project_name)
 
     wb.save(filepath)
     logger.info("Projects saved successfully.")
