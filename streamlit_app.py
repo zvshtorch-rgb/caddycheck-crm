@@ -47,13 +47,17 @@ def _safe_str(v):
     return str(v)
 
 from config.settings import MONTH_ORDER, get_email_config, save_email_config
-from services.excel_service import (
+from services.supabase_service import (
     load_projects,
     load_invoices,
+    upsert_projects,
+    upsert_invoices,
+    get_next_invoice_number as _supa_next_inv_no,
+    append_invoice_rows as _supa_append_invoice,
+)
+from services.excel_service import (
     compute_debt_summaries,
     get_yearly_summary,
-    save_projects_to_excel,
-    save_invoices_to_excel,
     get_projects_for_month,
 )
 from services.invoice_service import generate_monthly_invoice, get_invoice_preview_data
@@ -143,13 +147,11 @@ st.markdown("""
 # ── Data loading (cached) ─────────────────────────────────────────────────────
 @st.cache_data(ttl=300)
 def load_data():
-    from config.settings import get_data_paths
-    paths = get_data_paths()
-    projects = load_projects(paths["projects_file"])
-    invoices = load_invoices(paths["projects_file"])
+    projects = load_projects()
+    invoices = load_invoices()
     debt_summaries = compute_debt_summaries(projects, invoices)
     yearly_summary = get_yearly_summary(invoices)
-    return projects, invoices, debt_summaries, yearly_summary, str(paths["projects_file"])
+    return projects, invoices, debt_summaries, yearly_summary, "Supabase"
 
 
 def _push_excel_to_github() -> tuple[bool, str]:
@@ -194,7 +196,7 @@ st.sidebar.title("📊 CaddyCheck CRM")
 st.sidebar.markdown("---")
 page = st.sidebar.radio(
     "Navigation",
-    ["📊 Dashboard", "🏗️ Projects", "🧾 Invoice Details", "💸 Debt Report", "📅 Monthly Invoice", "⚙️ Settings"],
+    ["📊 Dashboard", "🏗️ Projects", "🧾 Invoice Details", "💸 Debt Report", "📅 Monthly Invoice", "🎫 Tickets", "⚙️ Settings"],
     label_visibility="collapsed",
 )
 st.sidebar.markdown("---")
@@ -489,12 +491,11 @@ elif page == "🏗️ Projects":
                 else:
                     p.license_eop = None
             try:
-                save_projects_to_excel(projects)
+                upsert_projects(projects)
                 load_data.clear()
                 st.session_state.pop("add_proj_row", None)
-                ok, gh_msg = _push_excel_to_github()
                 msg = f"Saved! {new_count} new project(s) added." if new_count else "Projects saved successfully!"
-                st.success(f"{msg}  \n{gh_msg}")
+                st.success(msg)
             except Exception as e:
                 st.error(f"Save failed: {e}")
     else:
@@ -681,12 +682,11 @@ elif page == "🧾 Invoice Details":
                     except Exception:
                         pass
             try:
-                save_invoices_to_excel(invoices)
+                upsert_invoices(invoices)
                 load_data.clear()
                 st.session_state.pop("add_inv_row", None)
-                ok, gh_msg = _push_excel_to_github()
                 msg = f"Saved! {new_count} new invoice(s) added." if new_count else "Invoices saved successfully!"
-                st.success(f"{msg}  \n{gh_msg}")
+                st.success(msg)
             except Exception as e:
                 st.error(f"Save failed: {e}")
     else:
@@ -1018,8 +1018,7 @@ elif page == "💸 Debt Report":
 elif page == "📅 Monthly Invoice":
     st.title("📅 Monthly Invoice")
 
-    from services.excel_service import get_next_invoice_number, append_monthly_invoice_rows
-    next_inv_no = get_next_invoice_number(invoices)
+    next_inv_no = _supa_next_inv_no()
 
     col1, col2, col3 = st.columns([2, 1, 2])
     with col1:
@@ -1113,23 +1112,16 @@ elif page == "📅 Monthly Invoice":
             st.subheader("Save to Invoice Ledger")
             st.caption(f"Appends invoice #{inv_no} rows for all {len(month_projects)} project(s) to Invoice Details.")
             if st.button("💾 Save Invoice to Ledger", type="primary"):
-                from config.settings import get_data_paths
                 try:
-                    n = append_monthly_invoice_rows(
+                    n = _supa_append_invoice(
                         invoice_number=inv_no,
                         projects=month_projects,
                         year=int(sel_year),
-                        filepath=get_data_paths()["projects_file"],
                     )
                     if n == 0:
                         st.info(f"Invoice #{inv_no} already fully recorded — no new rows added.")
                     else:
                         st.success(f"Added {n} row(s) for invoice #{inv_no} to Invoice Details.")
-                        ok, gh_msg = _push_excel_to_github()
-                        if ok:
-                            st.success(gh_msg)
-                        else:
-                            st.warning(gh_msg)
                         st.cache_data.clear()
                 except Exception as e:
                     st.error(f"Failed to save: {e}")
@@ -1262,3 +1254,151 @@ elif page == "⚙️ Settings":
                     st.error(msg)
             except Exception as e:
                 st.error(str(e))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: TICKETS
+# ══════════════════════════════════════════════════════════════════════════════
+elif page == "🎫 Tickets":
+    from services.supabase_service import (
+        get_tickets, create_ticket, update_ticket, delete_ticket,
+    )
+
+    st.title("🎫 Support Tickets")
+
+    # ── Summary metrics ───────────────────────────────────────────────────────
+    all_tickets = get_tickets()
+    open_count     = sum(1 for t in all_tickets if t["status"] == "Open")
+    inprog_count   = sum(1 for t in all_tickets if t["status"] == "In Progress")
+    resolved_count = sum(1 for t in all_tickets if t["status"] in ("Resolved", "Closed"))
+
+    mc1, mc2, mc3, mc4 = st.columns(4)
+    mc1.metric("Total Tickets",   len(all_tickets))
+    mc2.metric("Open",            open_count)
+    mc3.metric("In Progress",     inprog_count)
+    mc4.metric("Resolved/Closed", resolved_count)
+
+    st.markdown("---")
+
+    # ── New ticket form ───────────────────────────────────────────────────────
+    if CAN_EDIT:
+        with st.expander("➕ New Ticket", expanded=False):
+            with st.form("new_ticket_form"):
+                project_names = sorted({p.project_name for p in projects})
+                t_project  = st.selectbox("Project", project_names, key="nt_proj")
+                t_title    = st.text_input("Title", key="nt_title")
+                t_desc     = st.text_area("Description", height=100, key="nt_desc")
+                t_priority = st.selectbox("Priority", ["Low", "Medium", "High", "Critical"], index=1, key="nt_prio")
+                submitted  = st.form_submit_button("Create Ticket", type="primary")
+            if submitted:
+                if not t_title.strip():
+                    st.error("Title is required.")
+                else:
+                    try:
+                        ticket = create_ticket(t_project, t_title.strip(), t_desc.strip(), t_priority)
+                        st.success(f"Ticket {ticket.get('ticket_number', '')} created!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to create ticket: {e}")
+
+    # ── Filters ───────────────────────────────────────────────────────────────
+    with st.expander("🔍 Filters", expanded=True):
+        fc1, fc2, fc3, fc4 = st.columns(4)
+        project_names_all = ["All"] + sorted({t["project_name"] for t in all_tickets})
+        tf_proj   = fc1.selectbox("Project",  project_names_all, key="tf_proj")
+        tf_status = fc2.selectbox("Status",   ["All", "Open", "In Progress", "Resolved", "Closed"], key="tf_status")
+        tf_prio   = fc3.selectbox("Priority", ["All", "Critical", "High", "Medium", "Low"], key="tf_prio")
+        tf_search = fc4.text_input("Search title", key="tf_search")
+
+    filtered_tickets = all_tickets
+    if tf_proj != "All":
+        filtered_tickets = [t for t in filtered_tickets if t["project_name"] == tf_proj]
+    if tf_status != "All":
+        filtered_tickets = [t for t in filtered_tickets if t["status"] == tf_status]
+    if tf_prio != "All":
+        filtered_tickets = [t for t in filtered_tickets if t["priority"] == tf_prio]
+    if tf_search.strip():
+        filtered_tickets = [t for t in filtered_tickets if tf_search.lower() in t["title"].lower()]
+
+    st.caption(f"Showing {len(filtered_tickets)} of {len(all_tickets)} tickets")
+
+    # ── Ticket table ──────────────────────────────────────────────────────────
+    PRIORITY_ORDER = {"Critical": 0, "High": 1, "Medium": 2, "Low": 3}
+    STATUS_ORDER   = {"Open": 0, "In Progress": 1, "Resolved": 2, "Closed": 3}
+    filtered_tickets = sorted(
+        filtered_tickets,
+        key=lambda t: (STATUS_ORDER.get(t["status"], 9), PRIORITY_ORDER.get(t["priority"], 9)),
+    )
+
+    def _prio_color(val):
+        return {"Critical": "color:#C0392B;font-weight:bold",
+                "High":     "color:#E67E22;font-weight:bold",
+                "Medium":   "color:#2980B9",
+                "Low":      "color:#27AE60"}.get(val, "")
+
+    def _status_color(val):
+        return {"Open":        "color:#E74C3C;font-weight:bold",
+                "In Progress": "color:#F39C12;font-weight:bold",
+                "Resolved":    "color:#27AE60",
+                "Closed":      "color:#95A5A6"}.get(val, "")
+
+    if filtered_tickets:
+        ticket_df = pd.DataFrame([{
+            "Ticket #":    t["ticket_number"],
+            "Project":     t["project_name"],
+            "Title":       t["title"],
+            "Priority":    t["priority"],
+            "Status":      t["status"],
+            "Created":     t["created_at"][:10] if t.get("created_at") else "",
+            "Updated":     t["updated_at"][:10] if t.get("updated_at") else "",
+        } for t in filtered_tickets])
+
+        st.dataframe(
+            ticket_df.style
+                .map(_prio_color,    subset=["Priority"])
+                .map(_status_color,  subset=["Status"]),
+            use_container_width=True,
+            hide_index=True,
+            height=350,
+        )
+    else:
+        st.info("No tickets match the current filters.")
+
+    # ── Edit / update a ticket ────────────────────────────────────────────────
+    if CAN_EDIT and filtered_tickets:
+        st.markdown("---")
+        st.subheader("Update Ticket")
+        ticket_options = {f"{t['ticket_number']} — {t['title']}": t for t in filtered_tickets}
+        selected_label = st.selectbox("Select ticket to update", list(ticket_options.keys()), key="sel_ticket")
+        sel_ticket = ticket_options[selected_label]
+
+        with st.form("update_ticket_form"):
+            uc1, uc2 = st.columns(2)
+            new_status   = uc1.selectbox("Status",   ["Open", "In Progress", "Resolved", "Closed"],
+                                          index=["Open", "In Progress", "Resolved", "Closed"].index(sel_ticket["status"])
+                                          if sel_ticket["status"] in ["Open", "In Progress", "Resolved", "Closed"] else 0,
+                                          key="upd_status")
+            new_priority = uc2.selectbox("Priority", ["Low", "Medium", "High", "Critical"],
+                                          index=["Low", "Medium", "High", "Critical"].index(sel_ticket["priority"])
+                                          if sel_ticket["priority"] in ["Low", "Medium", "High", "Critical"] else 1,
+                                          key="upd_prio")
+            new_notes = st.text_area("Notes / update comment", value=sel_ticket.get("notes") or "", height=80, key="upd_notes")
+            col_upd, col_del = st.columns([3, 1])
+            upd_btn = col_upd.form_submit_button("💾 Update Ticket", type="primary")
+            del_btn = col_del.form_submit_button("🗑️ Delete", type="secondary")
+
+        if upd_btn:
+            try:
+                update_ticket(sel_ticket["id"], status=new_status, priority=new_priority, notes=new_notes)
+                st.success("Ticket updated!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Update failed: {e}")
+
+        if del_btn:
+            try:
+                delete_ticket(sel_ticket["id"])
+                st.success(f"Ticket {sel_ticket['ticket_number']} deleted.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Delete failed: {e}")
