@@ -219,6 +219,36 @@ def append_invoice_rows(invoice_number: int, projects: list, year: int) -> int:
     return len(rows_to_insert)
 
 
+def get_invoices_by_number(invoice_number: int) -> List[dict]:
+    """Return all invoice rows (with id) for a given invoice number."""
+    client = _get_client()
+    resp = (
+        client.table("invoices")
+        .select("*")
+        .eq("invoice_number", str(invoice_number))
+        .order("project_name")
+        .execute()
+    )
+    return resp.data
+
+
+def mark_invoice_row_paid(
+    db_id: int,
+    payment_date: datetime.date,
+    payment_amount: Optional[float] = None,
+) -> None:
+    """Mark a single invoice row as paid by its DB id."""
+    client = _get_client()
+    fields: Dict[str, Any] = {
+        "paid": "Yes",
+        "payment_date": payment_date.isoformat(),
+    }
+    if payment_amount is not None:
+        fields["payment_amount"] = payment_amount
+    client.table("invoices").update(fields).eq("id", db_id).execute()
+    logger.info("Marked invoice row id=%d as paid (date=%s)", db_id, payment_date)
+
+
 def get_next_invoice_number() -> int:
     """Return max invoice_number + 1 from the invoices table."""
     client = _get_client()

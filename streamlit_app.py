@@ -196,7 +196,7 @@ st.sidebar.title("📊 CaddyCheck CRM")
 st.sidebar.markdown("---")
 page = st.sidebar.radio(
     "Navigation",
-    ["📊 Dashboard", "🏗️ Projects", "🧾 Invoice Details", "💸 Debt Report", "📅 Monthly Invoice", "🎫 Tickets", "⚙️ Settings"],
+    ["📊 Dashboard", "🏗️ Projects", "🧾 Invoice Details", "💸 Debt Report", "📅 Monthly Invoice", "🎫 Tickets", "🏦 Bank Payment", "⚙️ Settings"],
     label_visibility="collapsed",
 )
 st.sidebar.markdown("---")
@@ -1402,3 +1402,159 @@ elif page == "🎫 Tickets":
                 st.rerun()
             except Exception as e:
                 st.error(f"Delete failed: {e}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: BANK PAYMENT
+# ══════════════════════════════════════════════════════════════════════════════
+elif page == "🏦 Bank Payment":
+    from services.bank_pdf_service import parse_swift_pdf
+    from services.supabase_service import get_invoices_by_number, mark_invoice_row_paid
+
+    st.title("🏦 Bank Payment Import")
+
+    if not CAN_EDIT:
+        st.warning("Read-only mode — contact an admin to record payments.")
+        st.stop()
+
+    def _render_invoice_lookup(inv_no: int, pay_date: datetime.date, key_prefix: str):
+        """Look up rows for inv_no and render selection + confirm UI."""
+        if inv_no <= 0:
+            st.info("Enter a valid invoice number to look up matching rows.")
+            return
+
+        with st.spinner("Looking up invoice in database…"):
+            try:
+                rows = get_invoices_by_number(inv_no)
+            except Exception as exc:
+                st.error(f"Lookup failed: {exc}")
+                return
+
+        if not rows:
+            st.warning(f"No invoice rows found for invoice **#{inv_no}**.")
+            return
+
+        df = pd.DataFrame([{
+            "id":           r["id"],
+            "Project":      r["project_name"],
+            "Maint. Year":  r["maintenance_year"],
+            "Amount (€)":   _safe_float(r.get("payment_amount")),
+            "Cameras":      r.get("cameras_number"),
+            "Paid":         r.get("paid", "No"),
+            "Payment Date": (r["payment_date"] or "")[:10] if r.get("payment_date") else "",
+        } for r in rows])
+
+        st.dataframe(
+            df[["Project", "Maint. Year", "Amount (€)", "Cameras", "Paid", "Payment Date"]],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        unpaid_projects = list(df[df["Paid"] != "Yes"]["Project"])
+        if not unpaid_projects:
+            st.success(f"All rows for invoice **#{inv_no}** are already marked as paid.")
+            return
+
+        selected = st.multiselect(
+            "Select project row(s) to mark as paid",
+            options=list(df["Project"]),
+            default=unpaid_projects,
+            key=f"{key_prefix}_sel",
+        )
+
+        if not selected:
+            return
+
+        confirm_date = st.date_input(
+            "Payment date to record",
+            value=pay_date,
+            key=f"{key_prefix}_date",
+        )
+
+        # Show per-row amounts and let admin optionally override
+        sel_df = df[df["Project"].isin(selected)][["Project", "Amount (€)"]].copy()
+        st.caption("Amounts below will be recorded (these are the invoiced amounts):")
+        st.dataframe(sel_df, use_container_width=True, hide_index=True)
+
+        if st.button("✅ Confirm — Mark as Paid", type="primary", key=f"{key_prefix}_confirm"):
+            errors = []
+            for _, row in df[df["Project"].isin(selected)].iterrows():
+                try:
+                    mark_invoice_row_paid(
+                        db_id=int(row["id"]),
+                        payment_date=confirm_date,
+                        payment_amount=row["Amount (€)"],
+                    )
+                except Exception as exc:
+                    errors.append(f"{row['Project']}: {exc}")
+            if errors:
+                st.error("Some updates failed:\n" + "\n".join(errors))
+            else:
+                st.cache_data.clear()
+                st.success(
+                    f"✅ Marked **{len(selected)}** row(s) as paid for invoice **#{inv_no}**!"
+                )
+                st.rerun()
+
+    # ── PDF upload section ────────────────────────────────────────────────────
+    st.markdown("Upload a SWIFT MT103 bank transfer PDF to auto-extract payment details.")
+    uploaded = st.file_uploader("Upload bank transfer PDF", type=["pdf"])
+
+    if uploaded:
+        with st.spinner("Parsing PDF…"):
+            try:
+                parsed = parse_swift_pdf(uploaded.read())
+            except Exception as exc:
+                st.error(f"Failed to parse PDF: {exc}")
+                st.stop()
+
+        st.markdown("### Extracted Payment Data")
+        st.caption("All fields are editable — correct any parsing errors before proceeding.")
+
+        ec1, ec2, ec3 = st.columns(3)
+        inv_no = ec1.number_input(
+            "Invoice #",
+            value=int(parsed["invoice_number"]) if parsed["invoice_number"] else 0,
+            min_value=0, step=1, key="pdf_inv_no",
+        )
+        pay_date = ec2.date_input(
+            "Payment Date",
+            value=parsed["payment_date"] if parsed["payment_date"] else datetime.date.today(),
+            key="pdf_pay_date",
+        )
+        ec3.metric(
+            "Instructed Amount",
+            f"€{parsed['instructed_amount']:,.2f}" if parsed["instructed_amount"] else "—",
+        )
+
+        if parsed["received_amount"] and parsed["instructed_amount"]:
+            fee = parsed["instructed_amount"] - parsed["received_amount"]
+            if fee > 0:
+                st.info(
+                    f"Bank fee deducted: €{fee:,.2f}  "
+                    f"(instructed €{parsed['instructed_amount']:,.2f} → "
+                    f"received €{parsed['received_amount']:,.2f}). "
+                    "The invoiced amount will be kept as-is."
+                )
+
+        if not parsed["invoice_number"] and not parsed["payment_date"]:
+            st.warning(
+                "Could not extract payment data from this PDF. "
+                "Use the manual lookup below instead."
+            )
+
+        st.markdown("---")
+        st.markdown("### Matching Invoice Rows")
+        _render_invoice_lookup(inv_no, pay_date, key_prefix="pdf")
+
+    # ── Manual lookup (no PDF) ────────────────────────────────────────────────
+    st.markdown("---")
+    with st.expander("🔍 Manual Lookup (no PDF)", expanded=not bool(uploaded)):
+        mc1, mc2 = st.columns(2)
+        manual_inv_no = mc1.number_input(
+            "Invoice #", min_value=0, step=1, key="manual_inv_no",
+        )
+        manual_date = mc2.date_input(
+            "Payment Date", value=datetime.date.today(), key="manual_date",
+        )
+        _render_invoice_lookup(manual_inv_no, manual_date, key_prefix="manual")
