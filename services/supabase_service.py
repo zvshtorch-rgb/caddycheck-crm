@@ -313,3 +313,149 @@ def update_ticket(ticket_id: int, **fields) -> dict:
 def delete_ticket(ticket_id: int) -> None:
     client = _get_client()
     client.table("tickets").delete().eq("id", ticket_id).execute()
+
+
+# ── Subscriptions ──────────────────────────────────────────────────────────────
+
+def get_subscription(project_name: str) -> Optional[dict]:
+    """Return the current subscription row for a project, or None."""
+    client = _get_client()
+    resp = (
+        client.table("subscriptions")
+        .select("*")
+        .eq("project_name", project_name)
+        .execute()
+    )
+    return resp.data[0] if resp.data else None
+
+
+def upsert_subscription(
+    project_name: str,
+    valid_until: datetime.date,
+    cameras_allowed: int,
+    valid_from: Optional[datetime.date] = None,
+    module_name: str = "Video Inform Profiler",
+) -> dict:
+    """Create or update the subscription record for a project."""
+    client = _get_client()
+    row: Dict[str, Any] = {
+        "project_name":    project_name,
+        "valid_until":     valid_until.isoformat(),
+        "cameras_allowed": cameras_allowed,
+        "valid_from":      (valid_from or datetime.date.today()).isoformat(),
+        "module_name":     module_name,
+        "status":          "active",
+        "updated_at":      datetime.datetime.utcnow().isoformat(),
+    }
+    resp = (
+        client.table("subscriptions")
+        .upsert(row, on_conflict="project_name")
+        .execute()
+    )
+    return resp.data[0] if resp.data else {}
+
+
+def create_renewal_link(
+    project_name: str,
+    target_valid_until: datetime.date,
+    cameras_allowed: int,
+    invoice_number: Optional[str] = None,
+    payment_amount: Optional[float] = None,
+    expires_days: int = 30,
+) -> str:
+    """
+    Generate a secure renewal token, persist it, and return the token string.
+    The caller builds the full URL as: <base_url>/?token=<returned_token>
+    """
+    import secrets as _secrets
+    client = _get_client()
+
+    sub = get_subscription(project_name)
+    token = _secrets.token_urlsafe(32)
+    expires_at = datetime.datetime.utcnow() + datetime.timedelta(days=expires_days)
+
+    row: Dict[str, Any] = {
+        "project_name":       project_name,
+        "subscription_id":    sub["id"] if sub else None,
+        "token":              token,
+        "expires_at":         expires_at.isoformat(),
+        "target_valid_until": target_valid_until.isoformat(),
+        "cameras_allowed":    cameras_allowed,
+        "status":             "pending",
+        "invoice_number":     str(invoice_number) if invoice_number else None,
+        "payment_amount":     payment_amount,
+    }
+    client.table("renewal_links").insert(row).execute()
+    logger.info("Created renewal token for %s → valid_until=%s", project_name, target_valid_until)
+    return token
+
+
+def process_renewal_token(token: str) -> dict:
+    """
+    Validate and apply a renewal token.
+    Returns dict: {success, message, project_name?, valid_until?, cameras_allowed?}
+    """
+    client = _get_client()
+    resp = client.table("renewal_links").select("*").eq("token", token).execute()
+
+    if not resp.data:
+        return {"success": False, "message": "Invalid renewal link."}
+
+    link = resp.data[0]
+
+    if link["status"] == "used":
+        used_str = (link.get("used_at") or "")[:10]
+        return {
+            "success": False,
+            "message": f"This renewal link was already used on {used_str}.",
+        }
+
+    # Check expiry
+    try:
+        expires_at = datetime.datetime.fromisoformat(
+            link["expires_at"].replace("Z", "+00:00")
+        )
+        if datetime.datetime.now(datetime.timezone.utc) > expires_at:
+            client.table("renewal_links").update({"status": "expired"}).eq("id", link["id"]).execute()
+            return {"success": False, "message": "This renewal link has expired."}
+    except Exception:
+        pass
+
+    # Apply renewal
+    target_date = datetime.date.fromisoformat(link["target_valid_until"])
+    project_name = link["project_name"]
+    cameras = link.get("cameras_allowed") or 0
+
+    upsert_subscription(
+        project_name=project_name,
+        valid_until=target_date,
+        cameras_allowed=cameras,
+    )
+
+    # Mark token as used
+    client.table("renewal_links").update({
+        "status": "used",
+        "used_at": datetime.datetime.utcnow().isoformat(),
+    }).eq("id", link["id"]).execute()
+
+    logger.info("Renewal token used: %s → %s until %s", project_name, cameras, target_date)
+    return {
+        "success":         True,
+        "message":         f"Subscription renewed until {target_date.strftime('%B %d, %Y')}.",
+        "project_name":    project_name,
+        "valid_until":     target_date,
+        "cameras_allowed": cameras,
+    }
+
+
+def get_renewal_links(project_name: Optional[str] = None) -> List[dict]:
+    """Return renewal link history, newest first. Optionally filtered by project."""
+    client = _get_client()
+    query = (
+        client.table("renewal_links")
+        .select("*")
+        .order("created_at", desc=True)
+    )
+    if project_name:
+        query = query.eq("project_name", project_name)
+    return query.execute().data

@@ -111,6 +111,29 @@ def _login_form():
         else:
             st.error("Incorrect password. Try again.")
 
+# ── Public renewal token handler (no login required) ──────────────────────────
+_renew_token = st.query_params.get("token", "")
+if _renew_token:
+    from services.supabase_service import process_renewal_token as _process_token
+    st.markdown("## 🔑 Subscription Renewal")
+    with st.spinner("Validating renewal link…"):
+        try:
+            _result = _process_token(_renew_token)
+        except Exception as _e:
+            _result = {"success": False, "message": str(_e)}
+    if _result["success"]:
+        st.success(f"✅ {_result['message']}")
+        st.markdown(
+            f"**Project:** {_result['project_name']}  \n"
+            f"**Valid until:** {_result['valid_until'].strftime('%B %d, %Y')}  \n"
+            f"**Cameras licensed:** {_result['cameras_allowed']}"
+        )
+        st.info("Your subscription has been updated. You can close this page.")
+    else:
+        st.error(f"❌ {_result['message']}")
+        st.caption("Contact your account manager if you believe this is an error.")
+    st.stop()
+
 # Gate access
 if "role" not in st.session_state:
     _login_form()
@@ -1409,13 +1432,41 @@ elif page == "🎫 Tickets":
 # ══════════════════════════════════════════════════════════════════════════════
 elif page == "🏦 Bank Payment":
     from services.bank_pdf_service import parse_swift_pdf
-    from services.supabase_service import get_invoices_by_number, mark_invoice_row_paid
+    from services.supabase_service import (
+        get_invoices_by_number, mark_invoice_row_paid,
+        get_subscription, upsert_subscription, create_renewal_link,
+    )
 
     st.title("🏦 Bank Payment Import")
 
     if not CAN_EDIT:
         st.warning("Read-only mode — contact an admin to record payments.")
         st.stop()
+
+    # ── Show renewal result from previous confirmation ────────────────────────
+    if "_renewal_result" in st.session_state:
+        _rr = st.session_state.pop("_renewal_result")
+        st.success(
+            f"✅ Invoice **#{_rr['inv_no']}** — marked **{_rr['count']}** project(s) as paid."
+        )
+        _base_url = st.secrets.get("app", {}).get("base_url", "").rstrip("/")
+        if _rr["links"]:
+            st.markdown("### 🔑 Renewal Links")
+            st.caption(
+                "Send each link to the customer. "
+                "When opened, the subscription is activated automatically."
+            )
+            for _rl in _rr["links"]:
+                _url = f"{_base_url}/?token={_rl['token']}" if _base_url else f"?token={_rl['token']}"
+                with st.container(border=True):
+                    _lc1, _lc2 = st.columns([2, 3])
+                    _lc1.markdown(
+                        f"**{_rl['project']}**  \n"
+                        f"📅 Valid until: **{_rl['valid_until'].strftime('%d %b %Y')}**  \n"
+                        f"📷 Cameras: **{_rl['cameras']}**"
+                    )
+                    _lc2.code(_url, language=None)
+        st.markdown("---")
 
     def _render_invoice_lookup(inv_no: int, pay_date: datetime.date, key_prefix: str):
         """Look up rows for inv_no and render selection + confirm UI."""
@@ -1439,7 +1490,7 @@ elif page == "🏦 Bank Payment":
             "Project":      r["project_name"],
             "Maint. Year":  r["maintenance_year"],
             "Amount (€)":   _safe_float(r.get("payment_amount")),
-            "Cameras":      r.get("cameras_number"),
+            "Cameras":      _safe_int(r.get("cameras_number")),
             "Paid":         r.get("paid", "No"),
             "Payment Date": (r["payment_date"] or "")[:10] if r.get("payment_date") else "",
         } for r in rows])
@@ -1471,29 +1522,74 @@ elif page == "🏦 Bank Payment":
             key=f"{key_prefix}_date",
         )
 
-        # Show per-row amounts and let admin optionally override
-        sel_df = df[df["Project"].isin(selected)][["Project", "Amount (€)"]].copy()
-        st.caption("Amounts below will be recorded (these are the invoiced amounts):")
+        sel_df = df[df["Project"].isin(selected)][["Project", "Amount (€)", "Cameras"]].copy()
+        st.caption("The following rows will be marked paid and subscriptions extended by 1 year:")
         st.dataframe(sel_df, use_container_width=True, hide_index=True)
 
-        if st.button("✅ Confirm — Mark as Paid", type="primary", key=f"{key_prefix}_confirm"):
+        if st.button("✅ Confirm — Mark as Paid & Generate Renewal Links", type="primary", key=f"{key_prefix}_confirm"):
             errors = []
+            renewal_links = []
+
             for _, row in df[df["Project"].isin(selected)].iterrows():
+                proj = row["Project"]
                 try:
+                    # 1. Mark invoice row as paid
                     mark_invoice_row_paid(
                         db_id=int(row["id"]),
                         payment_date=confirm_date,
                         payment_amount=row["Amount (€)"],
                     )
+
+                    # 2. Compute new valid_until (extend from current expiry or today)
+                    sub = get_subscription(proj)
+                    if sub and sub.get("valid_until"):
+                        current_until = datetime.date.fromisoformat(sub["valid_until"][:10])
+                        base = max(current_until, confirm_date)
+                    else:
+                        base = confirm_date
+                    try:
+                        target_until = base.replace(year=base.year + 1)
+                    except ValueError:           # Feb 29 edge case
+                        target_until = base.replace(year=base.year + 1, day=28)
+
+                    cameras = _safe_int(row["Cameras"])
+
+                    # 3. Upsert subscription record
+                    upsert_subscription(
+                        project_name=proj,
+                        valid_until=target_until,
+                        cameras_allowed=cameras,
+                        valid_from=confirm_date,
+                    )
+
+                    # 4. Generate renewal token
+                    token = create_renewal_link(
+                        project_name=proj,
+                        target_valid_until=target_until,
+                        cameras_allowed=cameras,
+                        invoice_number=str(inv_no),
+                        payment_amount=row["Amount (€)"],
+                    )
+
+                    renewal_links.append({
+                        "project":     proj,
+                        "valid_until": target_until,
+                        "cameras":     cameras,
+                        "token":       token,
+                    })
+
                 except Exception as exc:
-                    errors.append(f"{row['Project']}: {exc}")
+                    errors.append(f"{proj}: {exc}")
+
             if errors:
                 st.error("Some updates failed:\n" + "\n".join(errors))
             else:
                 st.cache_data.clear()
-                st.success(
-                    f"✅ Marked **{len(selected)}** row(s) as paid for invoice **#{inv_no}**!"
-                )
+                st.session_state["_renewal_result"] = {
+                    "inv_no": inv_no,
+                    "count":  len(selected),
+                    "links":  renewal_links,
+                }
                 st.rerun()
 
     # ── PDF upload section ────────────────────────────────────────────────────
