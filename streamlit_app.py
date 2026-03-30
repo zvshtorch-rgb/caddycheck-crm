@@ -609,16 +609,22 @@ elif page == "🧾 Invoice Details":
 
     st.caption(f"Showing {len(filtered_inv)} of {len(invoices)} invoices — use filters above to narrow results")
 
-    df_inv = pd.DataFrame([{
-        "Invoice #":      _safe_str(_safe_int(i.invoice_number) or ""),
-        "Project":        _safe_str(i.project_name),
-        "Maint. Year":    _safe_str(i.maintenance_year),
-        "Amount (€)":     _safe_float(i.payment_amount),
-        "Cameras":        _safe_int(i.cameras_number),
-        "Payment Date":   i.payment_date.strftime("%Y-%m-%d") if i.payment_date else "",
-        "Paid":           _safe_str(i.paid),
-        "Year":           _safe_str(_safe_int(i.year) or ""),
-    } for i in filtered_inv]).sort_values(["Invoice #", "Project"], ignore_index=True)
+   df_inv = pd.DataFrame(
+    [
+        {
+            "Invoice #": _safe_str(_safe_int(i.invoice_number) or ""),
+            "Project": _safe_str(i.project_name),
+            "Maint. Year": _safe_str(i.maintenance_year),
+            "Amount (€)": _safe_float(i.payment_amount),
+            "Cameras": _safe_int(i.cameras_number),
+            "Payment Date": i.payment_date.strftime("%Y-%m-%d") if i.payment_date else "",
+            "Paid": _safe_str(i.paid),
+            "Year": _safe_str(_safe_int(i.year) or ""),
+        }
+        for i in filtered_inv
+    ],
+    columns=_invoice_columns,
+).sort_values(["Invoice #", "Project"], ignore_index=True)
 
     def color_paid(val):
         v = str(val).strip().lower()
