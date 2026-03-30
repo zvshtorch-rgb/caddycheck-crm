@@ -357,7 +357,19 @@ def save_invoices_to_excel(
     wb = openpyxl.load_workbook(filepath)
     ws = wb[SHEET_INVOICE_DETAILS]
 
-    # Build lookup: invoice_number -> Invoice  (fall back to row order)
+    def _invoice_identity(invoice_number, project_name, maintenance_year, year):
+        try:
+            inv_no = float(invoice_number) if invoice_number not in (None, "") else None
+        except (ValueError, TypeError):
+            inv_no = None
+        return (
+            inv_no,
+            str(project_name or "").strip().lower(),
+            str(maintenance_year or "").strip(),
+            int(year) if year not in (None, "") else None,
+        )
+
+    # Build lookup: invoice_number -> Invoice and (project, maint year, year) -> Invoice
     inv_by_number: dict = {}
     inv_by_name_year: dict = {}
     for inv in invoices:
@@ -366,10 +378,21 @@ def save_invoices_to_excel(
         key = (inv.project_name.lower().strip(), inv.maintenance_year, inv.year)
         inv_by_name_year[key] = inv
 
+    existing_keys = set()
+
     for row_idx in range(2, ws.max_row + 1):
         inv_no_cell = ws.cell(row=row_idx, column=_INV_COL["Invoice Number"])
         if isinstance(inv_no_cell, MergedCell):
             continue
+
+        existing_keys.add(
+            _invoice_identity(
+                ws.cell(row=row_idx, column=_INV_COL["Invoice Number"]).value,
+                ws.cell(row=row_idx, column=_INV_COL["Project name"]).value,
+                ws.cell(row=row_idx, column=_INV_COL["Maintenance Year"]).value,
+                ws.cell(row=row_idx, column=_INV_COL["Year"]).value,
+            )
+        )
 
         inv: Optional[Invoice] = None
         if inv_no_cell.value:
@@ -399,12 +422,32 @@ def save_invoices_to_excel(
             continue
 
         _safe_write(ws, row_idx, _INV_COL["Invoice Number"],   inv.invoice_number if inv.invoice_number else None)
+        _safe_write(ws, row_idx, _INV_COL["Project name"],     inv.project_name or None)
         _safe_write(ws, row_idx, _INV_COL["Maintenance Year"], inv.maintenance_year or None)
         _safe_write(ws, row_idx, _INV_COL["Payment amount"],   inv.payment_amount if inv.payment_amount else None)
         _safe_write(ws, row_idx, _INV_COL["Cameras number"],   int(inv.cameras_number) if inv.cameras_number else None)
         _safe_write(ws, row_idx, _INV_COL["Payment Date"],     inv.payment_date)
         _safe_write(ws, row_idx, _INV_COL["Paid"],             inv.paid or None)
         _safe_write(ws, row_idx, _INV_COL["Year"],             inv.year)
+
+    # Append brand-new invoices that do not already exist in the sheet.
+    for inv in invoices:
+        identity = _invoice_identity(inv.invoice_number, inv.project_name, inv.maintenance_year, inv.year)
+        if identity in existing_keys:
+            continue
+
+        row_data = [None] * 8
+        row_data[_INV_COL["Invoice Number"] - 1] = inv.invoice_number if inv.invoice_number else None
+        row_data[_INV_COL["Project name"] - 1] = inv.project_name or None
+        row_data[_INV_COL["Maintenance Year"] - 1] = inv.maintenance_year or None
+        row_data[_INV_COL["Payment amount"] - 1] = inv.payment_amount if inv.payment_amount else None
+        row_data[_INV_COL["Cameras number"] - 1] = int(inv.cameras_number) if inv.cameras_number else None
+        row_data[_INV_COL["Payment Date"] - 1] = inv.payment_date
+        row_data[_INV_COL["Paid"] - 1] = inv.paid or None
+        row_data[_INV_COL["Year"] - 1] = inv.year
+        ws.append(row_data)
+        existing_keys.add(identity)
+        logger.info("Appended new invoice row: %s / %s", inv.invoice_number, inv.project_name)
 
     wb.save(filepath)
     logger.info("Invoices saved successfully.")

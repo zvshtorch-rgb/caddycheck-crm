@@ -59,6 +59,12 @@ from services.excel_service import (
     compute_debt_summaries,
     get_yearly_summary,
     get_projects_for_month,
+    load_projects as load_projects_excel,
+    load_invoices as load_invoices_excel,
+    save_projects_to_excel,
+    save_invoices_to_excel,
+    get_next_invoice_number as _excel_next_inv_no,
+    append_monthly_invoice_rows as _excel_append_invoice,
 )
 from services.invoice_service import generate_monthly_invoice, get_invoice_preview_data
 
@@ -110,6 +116,10 @@ def _login_form():
             st.rerun()
         else:
             st.error("Incorrect password. Try again.")
+
+
+if "_flash_success" in st.session_state:
+    st.success(st.session_state.pop("_flash_success"))
 
 # ── Public renewal token handler (no login required) ──────────────────────────
 _renew_token = st.query_params.get("token", "")
@@ -170,11 +180,49 @@ st.markdown("""
 # ── Data loading (cached) ─────────────────────────────────────────────────────
 @st.cache_data(ttl=300)
 def load_data():
-    projects = load_projects()
-    invoices = load_invoices()
+    source_name = "Supabase"
+    try:
+        projects = load_projects()
+        invoices = load_invoices()
+    except RuntimeError as exc:
+        if "Supabase credentials not configured" not in str(exc):
+            raise
+        projects = load_projects_excel()
+        invoices = load_invoices_excel()
+        source_name = "Excel (local fallback)"
     debt_summaries = compute_debt_summaries(projects, invoices)
     yearly_summary = get_yearly_summary(invoices)
-    return projects, invoices, debt_summaries, yearly_summary, "Supabase"
+    return projects, invoices, debt_summaries, yearly_summary, source_name
+
+
+def _is_excel_source(source_name: str) -> bool:
+    return source_name.startswith("Excel")
+
+
+def _save_projects(projects, source_name: str) -> None:
+    if _is_excel_source(source_name):
+        save_projects_to_excel(projects)
+        return
+    upsert_projects(projects)
+
+
+def _save_invoices(invoices, source_name: str) -> None:
+    if _is_excel_source(source_name):
+        save_invoices_to_excel(invoices)
+        return
+    upsert_invoices(invoices)
+
+
+def _get_next_invoice_number(invoices, source_name: str) -> int:
+    if _is_excel_source(source_name):
+        return _excel_next_inv_no(invoices)
+    return _supa_next_inv_no()
+
+
+def _append_invoice_rows(invoice_number: int, projects, year: int, source_name: str) -> int:
+    if _is_excel_source(source_name):
+        return _excel_append_invoice(invoice_number=invoice_number, projects=projects, year=year)
+    return _supa_append_invoice(invoice_number=invoice_number, projects=projects, year=year)
 
 
 def _push_excel_to_github() -> tuple[bool, str]:
@@ -185,7 +233,10 @@ def _push_excel_to_github() -> tuple[bool, str]:
         repo_name = gh_cfg.get("repo", "zvshtorch-rgb/caddycheck-crm")
         if not token:
             return False, "GitHub token not set in secrets — changes saved locally only."
-        from github import Github
+        try:
+            from github import Github
+        except ImportError:
+            return False, "PyGithub is not installed — changes saved locally only."
         from config.settings import get_data_paths
         data_file = get_data_paths()["projects_file"]
         with open(data_file, "rb") as f:
@@ -514,11 +565,12 @@ elif page == "🏗️ Projects":
                 else:
                     p.license_eop = None
             try:
-                upsert_projects(projects)
+                _save_projects(projects, _data_path)
                 load_data.clear()
                 st.session_state.pop("add_proj_row", None)
                 msg = f"Saved! {new_count} new project(s) added." if new_count else "Projects saved successfully!"
-                st.success(msg)
+                st.session_state["_flash_success"] = msg
+                st.rerun()
             except Exception as e:
                 st.error(f"Save failed: {e}")
     else:
@@ -609,22 +661,33 @@ elif page == "🧾 Invoice Details":
 
     st.caption(f"Showing {len(filtered_inv)} of {len(invoices)} invoices — use filters above to narrow results")
 
-   df_inv = pd.DataFrame(
-    [
-        {
-            "Invoice #": _safe_str(_safe_int(i.invoice_number) or ""),
-            "Project": _safe_str(i.project_name),
-            "Maint. Year": _safe_str(i.maintenance_year),
-            "Amount (€)": _safe_float(i.payment_amount),
-            "Cameras": _safe_int(i.cameras_number),
-            "Payment Date": i.payment_date.strftime("%Y-%m-%d") if i.payment_date else "",
-            "Paid": _safe_str(i.paid),
-            "Year": _safe_str(_safe_int(i.year) or ""),
-        }
-        for i in filtered_inv
-    ],
-    columns=_invoice_columns,
-).sort_values(["Invoice #", "Project"], ignore_index=True)
+    _invoice_columns = [
+        "Invoice #",
+        "Project",
+        "Maint. Year",
+        "Amount (€)",
+        "Cameras",
+        "Payment Date",
+        "Paid",
+        "Year",
+    ]
+
+    df_inv = pd.DataFrame(
+        [
+            {
+                "Invoice #": _safe_str(_safe_int(i.invoice_number) or ""),
+                "Project": _safe_str(i.project_name),
+                "Maint. Year": _safe_str(i.maintenance_year),
+                "Amount (€)": _safe_float(i.payment_amount),
+                "Cameras": _safe_int(i.cameras_number),
+                "Payment Date": i.payment_date.strftime("%Y-%m-%d") if i.payment_date else "",
+                "Paid": _safe_str(i.paid),
+                "Year": _safe_str(_safe_int(i.year) or ""),
+            }
+            for i in filtered_inv
+        ],
+        columns=_invoice_columns,
+    ).sort_values(["Invoice #", "Project"], ignore_index=True)
 
     def color_paid(val):
         v = str(val).strip().lower()
@@ -637,13 +700,15 @@ elif page == "🧾 Invoice Details":
         st.info("✏️ Admin mode: you can edit cells directly. Click **Save Changes** when done.")
 
         if st.button("➕ Add New Invoice", key="btn_add_inv"):
-            st.session_state["add_inv_row"] = True
+            st.session_state["add_inv_row"] = st.session_state.get("add_inv_row", 0) + 1
 
         _empty_inv = {"Invoice #": "", "Project": "", "Maint. Year": "Y1",
                       "Amount (€)": 0.0, "Cameras": 0,
                       "Payment Date": "", "Paid": "No", "Year": str(datetime.date.today().year)}
-        if st.session_state.get("add_inv_row"):
-            df_inv_edit = pd.concat([pd.DataFrame([_empty_inv]), df_inv.reset_index(drop=True)], ignore_index=True)
+        n_new_inv = st.session_state.get("add_inv_row", 0)
+        if n_new_inv:
+            empty_rows = pd.DataFrame([_empty_inv] * n_new_inv)
+            df_inv_edit = pd.concat([empty_rows, df_inv.reset_index(drop=True)], ignore_index=True)
         else:
             df_inv_edit = df_inv.reset_index(drop=True)
 
@@ -652,7 +717,7 @@ elif page == "🧾 Invoice Details":
             use_container_width=True,
             height=550,
             num_rows="dynamic",
-            key="inv_editor",
+            key=f"inv_editor_{n_new_inv}",
         )
         if st.button("💾 Save Changes", key="save_invoices"):
             from models.invoice import Invoice as InvoiceModel
@@ -711,11 +776,12 @@ elif page == "🧾 Invoice Details":
                     except Exception:
                         pass
             try:
-                upsert_invoices(invoices)
+                _save_invoices(invoices, _data_path)
                 load_data.clear()
                 st.session_state.pop("add_inv_row", None)
                 msg = f"Saved! {new_count} new invoice(s) added." if new_count else "Invoices saved successfully!"
-                st.success(msg)
+                st.session_state["_flash_success"] = msg
+                st.rerun()
             except Exception as e:
                 st.error(f"Save failed: {e}")
     else:
@@ -1047,7 +1113,7 @@ elif page == "💸 Debt Report":
 elif page == "📅 Monthly Invoice":
     st.title("📅 Monthly Invoice")
 
-    next_inv_no = _supa_next_inv_no()
+    next_inv_no = _get_next_invoice_number(invoices, _data_path)
 
     col1, col2, col3 = st.columns([2, 1, 2])
     with col1:
@@ -1142,11 +1208,7 @@ elif page == "📅 Monthly Invoice":
             st.caption(f"Appends invoice #{inv_no} rows for all {len(month_projects)} project(s) to Invoice Details.")
             if st.button("💾 Save Invoice to Ledger", type="primary"):
                 try:
-                    n = _supa_append_invoice(
-                        invoice_number=inv_no,
-                        projects=month_projects,
-                        year=int(sel_year),
-                    )
+                    n = _append_invoice_rows(invoice_number=inv_no, projects=month_projects, year=int(sel_year), source_name=_data_path)
                     if n == 0:
                         st.info(f"Invoice #{inv_no} already fully recorded — no new rows added.")
                     else:
