@@ -247,9 +247,16 @@ def _find_invoice_header_row(worksheet) -> Optional[tuple[int, dict[str, int]]]:
                 labels["maintenance_year"] = col_idx
             elif "line total" in normalized or normalized in ("amount", "amount (€)", "total"):
                 labels["payment_amount"] = col_idx
-        if {"project_name", "cameras_number", "maintenance_year", "payment_amount"}.issubset(labels):
+        if {"project_name", "cameras_number", "payment_amount"}.issubset(labels):
             return row_idx, labels
     return None
+
+
+def _infer_maintenance_year_label(title: str) -> str:
+    normalized_title = _safe_str(title).strip().lower()
+    if "trial" in normalized_title:
+        return "Paid Trial-0.5Y"
+    return ""
 
 
 def _extract_invoice_number(worksheet) -> Optional[int]:
@@ -317,12 +324,17 @@ def _parse_uploaded_invoice_xlsx(file_bytes: bytes) -> tuple[dict, list[dict]]:
         if project_name.lower() == "license period":
             break
 
-        maint_year = _safe_str(worksheet.cell(row=row_idx, column=columns["maintenance_year"]).value).strip()
-        if not maint_year:
-            break
-
         cameras_number = _safe_int(worksheet.cell(row=row_idx, column=columns["cameras_number"]).value, default=0)
         payment_amount = _safe_float(worksheet.cell(row=row_idx, column=columns["payment_amount"]).value, default=0.0)
+        maint_year_col = columns.get("maintenance_year")
+        maint_year = ""
+        if maint_year_col is not None:
+            maint_year = _safe_str(worksheet.cell(row=row_idx, column=maint_year_col).value).strip()
+        if not maint_year:
+            maint_year = _infer_maintenance_year_label(title)
+        if not maint_year and payment_amount <= 0:
+            break
+
         if cameras_number <= 0 and payment_amount <= 0:
             continue
 
