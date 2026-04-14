@@ -118,8 +118,16 @@ def _login_form():
             st.error("Incorrect password. Try again.")
 
 
-if "_flash_success" in st.session_state:
-    st.success(st.session_state.pop("_flash_success"))
+def _consume_flash_success(current_page: str) -> str:
+    message = st.session_state.get("_flash_success", "")
+    if not message:
+        return ""
+    flash_page = st.session_state.get("_flash_success_page")
+    if flash_page not in (None, current_page):
+        return ""
+    st.session_state.pop("_flash_success", None)
+    st.session_state.pop("_flash_success_page", None)
+    return message
 
 # ── Public renewal token handler (no login required) ──────────────────────────
 _renew_token = st.query_params.get("token", "")
@@ -288,12 +296,18 @@ except Exception as e:
     st.error(f"Failed to load data: {e}")
     st.stop()
 
+page_flash_success = _consume_flash_success(page)
+if page_flash_success:
+    st.toast(page_flash_success, icon="✅")
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE: DASHBOARD
 # ══════════════════════════════════════════════════════════════════════════════
 if page == "📊 Dashboard":
     st.title("📊 Dashboard")
+    if page_flash_success:
+        st.success(page_flash_success)
 
     # ── Filters ───────────────────────────────────────────────────────────────
     with st.expander("Filters", expanded=True):
@@ -475,6 +489,8 @@ if page == "📊 Dashboard":
 # ══════════════════════════════════════════════════════════════════════════════
 elif page == "🏗️ Projects":
     st.title("🏗️ Projects")
+    if page_flash_success:
+        st.success(page_flash_success)
 
     # Filters
     col1, col2, col3 = st.columns(3)
@@ -570,6 +586,7 @@ elif page == "🏗️ Projects":
                 st.session_state.pop("add_proj_row", None)
                 msg = f"Saved! {new_count} new project(s) added." if new_count else "Projects saved successfully!"
                 st.session_state["_flash_success"] = msg
+                st.session_state["_flash_success_page"] = "🏗️ Projects"
                 st.rerun()
             except Exception as e:
                 st.error(f"Save failed: {e}")
@@ -604,6 +621,8 @@ elif page == "🏗️ Projects":
 # ══════════════════════════════════════════════════════════════════════════════
 elif page == "🧾 Invoice Details":
     st.title("🧾 Invoice Details")
+    if page_flash_success:
+        st.success(page_flash_success)
 
     with st.expander("🔍 Filters", expanded=False):
         col1, col2, col3, col4 = st.columns(4)
@@ -781,6 +800,7 @@ elif page == "🧾 Invoice Details":
                 st.session_state.pop("add_inv_row", None)
                 msg = f"Saved! {new_count} new invoice(s) added." if new_count else "Invoices saved successfully!"
                 st.session_state["_flash_success"] = msg
+                st.session_state["_flash_success_page"] = "🧾 Invoice Details"
                 st.rerun()
             except Exception as e:
                 st.error(f"Save failed: {e}")
