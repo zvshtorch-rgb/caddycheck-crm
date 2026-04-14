@@ -284,6 +284,10 @@ page = st.sidebar.radio(
 st.sidebar.markdown("---")
 role_icon = "✏️" if CAN_EDIT else "👁️"
 st.sidebar.caption(f"{role_icon} Logged in as **{ROLES[ROLE]['label']}**")
+if st.sidebar.button("Refresh Data"):
+    load_data.clear()
+    st.cache_data.clear()
+    st.rerun()
 if st.sidebar.button("Logout"):
     del st.session_state["role"]
     st.rerun()
