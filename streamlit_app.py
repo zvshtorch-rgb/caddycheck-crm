@@ -691,9 +691,12 @@ elif page == "🧾 Invoice Details":
         "Year",
     ]
 
+    invoice_index_map = {id(inv): idx for idx, inv in enumerate(invoices)}
+
     df_inv = pd.DataFrame(
         [
             {
+                "_invoice_index": invoice_index_map[id(i)],
                 "Invoice #": _safe_str(_safe_int(i.invoice_number) or ""),
                 "Project": _safe_str(i.project_name),
                 "Maint. Year": _safe_str(i.maintenance_year),
@@ -705,7 +708,7 @@ elif page == "🧾 Invoice Details":
             }
             for i in filtered_inv
         ],
-        columns=_invoice_columns,
+        columns=["_invoice_index", *_invoice_columns],
     ).sort_values(["Invoice #", "Project"], ignore_index=True)
 
     def color_paid(val):
@@ -721,7 +724,7 @@ elif page == "🧾 Invoice Details":
         if st.button("➕ Add New Invoice", key="btn_add_inv"):
             st.session_state["add_inv_row"] = st.session_state.get("add_inv_row", 0) + 1
 
-        _empty_inv = {"Invoice #": "", "Project": "", "Maint. Year": "Y1",
+        _empty_inv = {"_invoice_index": "", "Invoice #": "", "Project": "", "Maint. Year": "Y1",
                       "Amount (€)": 0.0, "Cameras": 0,
                       "Payment Date": "", "Paid": "No", "Year": str(datetime.date.today().year)}
         n_new_inv = st.session_state.get("add_inv_row", 0)
@@ -736,6 +739,7 @@ elif page == "🧾 Invoice Details":
             use_container_width=True,
             height=550,
             num_rows="dynamic",
+            column_config={"_invoice_index": None},
             key=f"inv_editor_{n_new_inv}",
         )
         if st.button("💾 Save Changes", key="save_invoices"):
@@ -751,6 +755,11 @@ elif page == "🧾 Invoice Details":
                 project = _safe_str(row.get("Project", "")).strip()
                 if not project:
                     continue
+                raw_invoice_index = row.get("_invoice_index", "")
+                existing_invoice_index = _safe_int(raw_invoice_index, default=-1)
+                inv = None
+                if existing_invoice_index >= 0 and existing_invoice_index < len(invoices):
+                    inv = invoices[existing_invoice_index]
                 inv_no_str = _safe_str(row.get("Invoice #", "")).strip()
                 try:
                     inv_no = float(inv_no_str) if inv_no_str else None
@@ -758,9 +767,9 @@ elif page == "🧾 Invoice Details":
                     inv_no = None
                 maint_year = _safe_str(row.get("Maint. Year", "")).strip()
                 inv_year = str(_safe_int(row.get("Year")) or "")
-                if inv_no:
+                if inv is None and inv_no:
                     inv = inv_map.get((inv_no, project.lower()))
-                else:
+                elif inv is None:
                     inv = no_inv_map.get((project.lower(), maint_year, inv_year))
                 if inv is None:
                     # Truly new invoice row
