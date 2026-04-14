@@ -268,6 +268,30 @@ def append_invoice_rows(invoice_number: int, projects: list, year: int) -> int:
     return len(rows_to_insert)
 
 
+def replace_invoice_rows(invoice_number: int, rows: list[Dict[str, Any]]) -> int:
+    """Replace all rows for a single invoice number with the provided payload."""
+    client = _get_client()
+    invoice_number_str = str(int(invoice_number))
+    client.table("invoices").delete().eq("invoice_number", invoice_number_str).execute()
+
+    if not rows:
+        logger.info("Cleared invoice #%s with no replacement rows", invoice_number_str)
+        return 0
+
+    batch_size = 50
+    normalized_rows = []
+    for row in rows:
+        normalized = dict(row)
+        normalized["invoice_number"] = invoice_number_str
+        normalized_rows.append(normalized)
+
+    for i in range(0, len(normalized_rows), batch_size):
+        client.table("invoices").insert(normalized_rows[i:i + batch_size]).execute()
+
+    logger.info("Replaced invoice #%s with %d rows", invoice_number_str, len(normalized_rows))
+    return len(normalized_rows)
+
+
 def get_invoices_by_number(invoice_number: int) -> List[dict]:
     """Return all invoice rows (with id) for a given invoice number."""
     client = _get_client()

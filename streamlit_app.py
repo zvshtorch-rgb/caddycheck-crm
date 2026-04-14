@@ -1,6 +1,8 @@
 """CaddyCheck CRM — Streamlit web app (role-based access)."""
 import datetime
 import calendar
+import io
+import re
 import sys
 from pathlib import Path
 
@@ -8,6 +10,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+import openpyxl
 
 # Make sure project root is on the path
 sys.path.insert(0, str(Path(__file__).parent))
@@ -52,6 +55,7 @@ from services.supabase_service import (
     load_invoices,
     upsert_projects,
     upsert_invoices,
+    replace_invoice_rows,
     get_next_invoice_number as _supa_next_inv_no,
     append_invoice_rows as _supa_append_invoice,
 )
@@ -225,6 +229,58 @@ def _get_next_invoice_number(invoices, source_name: str) -> int:
     if _is_excel_source(source_name):
         return _excel_next_inv_no(invoices)
     return _supa_next_inv_no()
+
+
+def _parse_uploaded_invoice_xlsx(file_bytes: bytes) -> tuple[dict, list[dict]]:
+    workbook = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+    worksheet = workbook.worksheets[0]
+
+    raw_invoice_number = worksheet.cell(row=5, column=10).value
+    try:
+        invoice_number = int(raw_invoice_number)
+    except (TypeError, ValueError):
+        invoice_number = None
+
+    title = _safe_str(worksheet.cell(row=12, column=5).value).strip()
+    year_match = re.search(r"(20\d{2})", title)
+    invoice_year = int(year_match.group(1)) if year_match else None
+
+    rows: list[dict] = []
+    for row_idx in range(20, worksheet.max_row + 1):
+        project_name = _safe_str(worksheet.cell(row=row_idx, column=1).value).strip()
+        if not project_name:
+            continue
+        if project_name.lower() == "license period":
+            break
+
+        maint_year = _safe_str(worksheet.cell(row=row_idx, column=8).value).strip()
+        if not maint_year:
+            break
+
+        cameras_number = _safe_int(worksheet.cell(row=row_idx, column=7).value, default=0)
+        payment_amount = _safe_float(worksheet.cell(row=row_idx, column=10).value, default=0.0)
+        if cameras_number <= 0 and payment_amount <= 0:
+            continue
+
+        rows.append({
+            "invoice_number": str(invoice_number) if invoice_number is not None else None,
+            "project_name": project_name,
+            "maintenance_year": maint_year,
+            "payment_amount": payment_amount,
+            "cameras_number": cameras_number or None,
+            "payment_date": None,
+            "paid": "No",
+            "year": invoice_year,
+        })
+
+    metadata = {
+        "invoice_number": invoice_number,
+        "title": title,
+        "year": invoice_year,
+        "row_count": len(rows),
+        "total_amount": sum(float(row["payment_amount"] or 0) for row in rows),
+    }
+    return metadata, rows
 
 
 def _append_invoice_rows(invoice_number: int, projects, year: int, source_name: str) -> int:
@@ -724,6 +780,61 @@ elif page == "🧾 Invoice Details":
 
     if CAN_EDIT:
         st.info("✏️ Admin mode: you can edit cells directly. Click **Save Changes** when done.")
+
+        with st.expander("📥 Import Invoice XLSX", expanded=False):
+            if _is_excel_source(_data_path):
+                st.warning("XLSX import is only available when the app is connected to Supabase.")
+            else:
+                uploaded_invoice_xlsx = st.file_uploader(
+                    "Upload invoice XLSX",
+                    type=["xlsx"],
+                    key="invoice_xlsx_upload",
+                    help="Upload a generated invoice workbook and replace that invoice number in Supabase.",
+                )
+                if uploaded_invoice_xlsx is not None:
+                    try:
+                        import_meta, import_rows = _parse_uploaded_invoice_xlsx(uploaded_invoice_xlsx.getvalue())
+                        inferred_invoice_number = import_meta["invoice_number"] or 0
+                        target_invoice_number = st.number_input(
+                            "Invoice number to replace",
+                            min_value=1,
+                            step=1,
+                            value=max(1, inferred_invoice_number),
+                            key="invoice_import_target_number",
+                        )
+                        st.caption(
+                            f"Parsed {import_meta['row_count']} rows from '{import_meta['title'] or uploaded_invoice_xlsx.name}' "
+                            f"for year {import_meta['year'] or 'unknown'} with total €{import_meta['total_amount']:,.0f}."
+                        )
+                        preview_df = pd.DataFrame([
+                            {
+                                "Project": row["project_name"],
+                                "Maint. Year": row["maintenance_year"],
+                                "Amount (€)": row["payment_amount"],
+                                "Cameras": row["cameras_number"],
+                                "Year": row["year"],
+                            }
+                            for row in import_rows
+                        ])
+                        st.dataframe(preview_df, use_container_width=True, height=250)
+
+                        project_counts = preview_df["Project"].value_counts()
+                        duplicate_projects = project_counts[project_counts > 1]
+                        if not duplicate_projects.empty:
+                            st.error(
+                                "The uploaded file contains duplicate project rows: "
+                                + ", ".join(duplicate_projects.index.tolist())
+                            )
+                        elif st.button("Replace Invoice From XLSX", key="replace_invoice_from_xlsx"):
+                            replace_invoice_rows(target_invoice_number, import_rows)
+                            load_data.clear()
+                            st.session_state["_flash_success"] = (
+                                f"Invoice {target_invoice_number} replaced from uploaded XLSX with {len(import_rows)} row(s)."
+                            )
+                            st.session_state["_flash_success_page"] = "🧾 Invoice Details"
+                            st.rerun()
+                    except Exception as exc:
+                        st.error(f"Failed to parse uploaded invoice XLSX: {exc}")
 
         if st.button("➕ Add New Invoice", key="btn_add_inv"):
             st.session_state["add_inv_row"] = st.session_state.get("add_inv_row", 0) + 1
