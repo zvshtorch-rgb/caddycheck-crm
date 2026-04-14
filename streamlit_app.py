@@ -1069,12 +1069,17 @@ elif page == "💸 Debt Report":
 
     # ── Filters ───────────────────────────────────────────────────────────────
     with st.expander("🔍 Filters", expanded=False):
-        fc1, fc2, fc3 = st.columns(3)
+        fc1, fc2, fc3, fc4 = st.columns(4)
         debt_years    = sorted({inv.year for inv in invoices if inv.year}, reverse=True)
         dsel_year     = fc1.selectbox("Year", ["All"] + [str(y) for y in debt_years], key="dr_year")
         debt_countries = sorted({p.country for p in projects if p.country})
         dsel_country  = fc2.selectbox("Country", ["All"] + debt_countries, key="dr_country")
         dsel_search   = fc3.text_input("Search project", key="dr_search")
+        dsel_debt_type = fc4.selectbox(
+            "Debt Type",
+            ["All", "New Installation (Y1)", "Maintenance (Y2+)"],
+            key="dr_debt_type",
+        )
 
     # Only unpaid invoices
     debt_inv = [i for i in invoices if i.is_unpaid()]
@@ -1106,14 +1111,38 @@ elif page == "💸 Debt Report":
         debt_inv = [i for i in debt_inv if _get_country(i.project_name) == dsel_country]
     if dsel_search.strip():
         debt_inv = [i for i in debt_inv if dsel_search.lower() in i.project_name.lower()]
+    if dsel_debt_type == "New Installation (Y1)":
+        debt_inv = [i for i in debt_inv if str(i.maintenance_year).strip().upper() == "Y1"]
+    elif dsel_debt_type == "Maintenance (Y2+)":
+        debt_inv = [i for i in debt_inv if str(i.maintenance_year).strip().upper() != "Y1"]
 
     # ── Summary metrics ───────────────────────────────────────────────────────
     total_debt_amt  = sum(i.payment_amount for i in debt_inv)
     proj_with_debt  = len({i.project_name for i in debt_inv})
-    mc1, mc2, mc3 = st.columns(3)
+    all_unpaid = [i for i in invoices if i.is_unpaid()]
+    if dsel_year != "All":
+        all_unpaid = [i for i in all_unpaid if i.year == int(dsel_year)]
+    if dsel_country != "All":
+        all_unpaid = [i for i in all_unpaid if _get_country(i.project_name) == dsel_country]
+    if dsel_search.strip():
+        all_unpaid = [i for i in all_unpaid if dsel_search.lower() in i.project_name.lower()]
+
+    y1_total_amt = sum(i.payment_amount for i in all_unpaid if str(i.maintenance_year).strip().upper() == "Y1")
+    y2_total_amt = sum(i.payment_amount for i in all_unpaid if str(i.maintenance_year).strip().upper() != "Y1")
+
+    mc1, mc2, mc3, mc4, mc5 = st.columns(5)
     mc1.metric("Unpaid Invoices",  len(debt_inv))
     mc2.metric("Projects with Debt", proj_with_debt)
     mc3.metric("Total Debt",       f"€{total_debt_amt:,.0f}")
+    mc4.metric("Y1 Debt",          f"€{y1_total_amt:,.0f}")
+    mc5.metric("Y2+ Debt",         f"€{y2_total_amt:,.0f}")
+
+    if dsel_debt_type == "New Installation (Y1)":
+        st.caption("Showing only first-year debt (Y1).")
+    elif dsel_debt_type == "Maintenance (Y2+)":
+        st.caption("Showing only maintenance debt (Y2+).")
+    else:
+        st.caption("Use the Debt Type filter to switch between all debt, Y1, and Y2+.")
 
     st.markdown("---")
 
