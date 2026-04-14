@@ -115,14 +115,47 @@ def upsert_projects(projects: list) -> None:
 
 # ── Invoices ──────────────────────────────────────────────────────────────────
 
-# Cache: (project_name_lower, maintenance_year, year) -> db row id
+# Cache lookups for matching in-memory invoices back to DB rows.
 _invoice_id_map: Dict[tuple, int] = {}
+_invoice_number_project_id_map: Dict[tuple, int] = {}
+
+
+def _invoice_identity(project_name: str, maintenance_year: str, year: Optional[int]) -> tuple:
+    return (
+        str(project_name or "").strip().lower(),
+        str(maintenance_year or "").strip(),
+        int(year) if year not in (None, "") else None,
+    )
+
+
+def _invoice_number_project_identity(invoice_number: Any, project_name: str) -> Optional[tuple]:
+    project_key = str(project_name or "").strip().lower()
+    if not project_key or invoice_number in (None, ""):
+        return None
+    try:
+        return (str(int(float(invoice_number))), project_key)
+    except (TypeError, ValueError):
+        return None
+
+
+def _invoice_row(inv) -> Dict[str, Any]:
+    return {
+        "invoice_number": str(int(inv.invoice_number)) if inv.invoice_number else None,
+        "project_name": inv.project_name,
+        "maintenance_year": inv.maintenance_year,
+        "payment_amount": inv.payment_amount,
+        "cameras_number": int(inv.cameras_number) if inv.cameras_number else None,
+        "payment_date": inv.payment_date.date().isoformat() if inv.payment_date else None,
+        "paid": inv.paid,
+        "year": inv.year,
+    }
 
 
 def load_invoices() -> list:
     from models.invoice import Invoice
-    global _invoice_id_map
+    global _invoice_id_map, _invoice_number_project_id_map
     _invoice_id_map = {}
+    _invoice_number_project_id_map = {}
     client = _get_client()
     resp = client.table("invoices").select("*").execute()
     invoices = []
@@ -138,12 +171,18 @@ def load_invoices() -> list:
             year=row.get("year"),
         )
         invoices.append(inv)
-        key = (
-            row.get("project_name", "").lower().strip(),
-            str(row.get("maintenance_year", "")),
+        key = _invoice_identity(
+            row.get("project_name", ""),
+            row.get("maintenance_year", ""),
             row.get("year"),
         )
         _invoice_id_map[key] = row["id"]
+        numbered_key = _invoice_number_project_identity(
+            row.get("invoice_number"),
+            row.get("project_name", ""),
+        )
+        if numbered_key is not None:
+            _invoice_number_project_id_map[numbered_key] = row["id"]
 
     logger.info("Loaded %d invoices from Supabase", len(invoices))
     return invoices
@@ -153,20 +192,25 @@ def upsert_invoices(invoices: list) -> None:
     client = _get_client()
     to_update: list = []
     to_insert: list = []
+    deduped_invoices: Dict[tuple, Any] = {}
+    duplicate_count = 0
 
     for inv in invoices:
-        key = (inv.project_name.lower().strip(), str(inv.maintenance_year), inv.year)
-        db_id = _invoice_id_map.get(key)
-        row: Dict[str, Any] = {
-            "invoice_number": str(int(inv.invoice_number)) if inv.invoice_number else None,
-            "project_name": inv.project_name,
-            "maintenance_year": inv.maintenance_year,
-            "payment_amount": inv.payment_amount,
-            "cameras_number": int(inv.cameras_number) if inv.cameras_number else None,
-            "payment_date": inv.payment_date.date().isoformat() if inv.payment_date else None,
-            "paid": inv.paid,
-            "year": inv.year,
-        }
+        numbered_key = _invoice_number_project_identity(inv.invoice_number, inv.project_name)
+        logical_key = _invoice_identity(inv.project_name, inv.maintenance_year, inv.year)
+        dedupe_key = numbered_key if numbered_key is not None else logical_key
+        if dedupe_key in deduped_invoices:
+            duplicate_count += 1
+        deduped_invoices[dedupe_key] = inv
+
+    for dedupe_key, inv in deduped_invoices.items():
+        logical_key = _invoice_identity(inv.project_name, inv.maintenance_year, inv.year)
+        db_id = None
+        if len(dedupe_key) == 2:
+            db_id = _invoice_number_project_id_map.get(dedupe_key)
+        if db_id is None:
+            db_id = _invoice_id_map.get(logical_key)
+        row = _invoice_row(inv)
         if db_id is not None:
             row["id"] = db_id
             to_update.append(row)
@@ -182,6 +226,11 @@ def upsert_invoices(invoices: list) -> None:
         for i in range(0, len(to_insert), batch_size):
             client.table("invoices").insert(to_insert[i:i+batch_size]).execute()
 
+    if duplicate_count:
+        logger.warning(
+            "Collapsed %d duplicate invoice row(s) before saving to Supabase",
+            duplicate_count,
+        )
     logger.info("Updated %d + inserted %d invoices", len(to_update), len(to_insert))
 
 
