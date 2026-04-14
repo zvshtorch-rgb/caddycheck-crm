@@ -359,6 +359,14 @@ def _parse_uploaded_invoice_xlsx(file_bytes: bytes) -> tuple[dict, list[dict]]:
     return metadata, rows
 
 
+def _is_missing_supabase_table_error(exc: Exception, table_name: str) -> bool:
+    message = str(exc).lower()
+    return (
+        "could not find the table" in message
+        and table_name.lower() in message
+    )
+
+
 def _append_invoice_rows(invoice_number: int, projects, year: int, source_name: str) -> int:
     if _is_excel_source(source_name):
         return _excel_append_invoice(invoice_number=invoice_number, projects=projects, year=year)
@@ -1814,12 +1822,13 @@ elif page == "🏦 Bank Payment":
         )
 
         sel_df = df[df["Project"].isin(selected)][["Project", "Amount (€)", "Cameras"]].copy()
-        st.caption("The following rows will be marked paid and subscriptions extended by 1 year:")
+        st.caption("The following rows will be marked paid. If subscription tables exist, renewal links will also be generated.")
         st.dataframe(sel_df, use_container_width=True, hide_index=True)
 
         if st.button("✅ Confirm — Mark as Paid & Generate Renewal Links", type="primary", key=f"{key_prefix}_confirm"):
             errors = []
             renewal_links = []
+            renewal_warnings = []
 
             for _, row in df[df["Project"].isin(selected)].iterrows():
                 proj = row["Project"]
@@ -1831,43 +1840,54 @@ elif page == "🏦 Bank Payment":
                         payment_amount=row["Amount (€)"],
                     )
 
-                    # 2. Compute new valid_until (extend from current expiry or today)
-                    sub = get_subscription(proj)
-                    if sub and sub.get("valid_until"):
-                        current_until = datetime.date.fromisoformat(sub["valid_until"][:10])
-                        base = max(current_until, confirm_date)
-                    else:
-                        base = confirm_date
                     try:
-                        target_until = base.replace(year=base.year + 1)
-                    except ValueError:           # Feb 29 edge case
-                        target_until = base.replace(year=base.year + 1, day=28)
+                        # 2. Compute new valid_until (extend from current expiry or today)
+                        sub = get_subscription(proj)
+                        if sub and sub.get("valid_until"):
+                            current_until = datetime.date.fromisoformat(sub["valid_until"][:10])
+                            base = max(current_until, confirm_date)
+                        else:
+                            base = confirm_date
+                        try:
+                            target_until = base.replace(year=base.year + 1)
+                        except ValueError:           # Feb 29 edge case
+                            target_until = base.replace(year=base.year + 1, day=28)
 
-                    cameras = _safe_int(row["Cameras"])
+                        cameras = _safe_int(row["Cameras"])
 
-                    # 3. Upsert subscription record
-                    upsert_subscription(
-                        project_name=proj,
-                        valid_until=target_until,
-                        cameras_allowed=cameras,
-                        valid_from=confirm_date,
-                    )
+                        # 3. Upsert subscription record
+                        upsert_subscription(
+                            project_name=proj,
+                            valid_until=target_until,
+                            cameras_allowed=cameras,
+                            valid_from=confirm_date,
+                        )
 
-                    # 4. Generate renewal token
-                    token = create_renewal_link(
-                        project_name=proj,
-                        target_valid_until=target_until,
-                        cameras_allowed=cameras,
-                        invoice_number=str(inv_no),
-                        payment_amount=row["Amount (€)"],
-                    )
+                        # 4. Generate renewal token
+                        token = create_renewal_link(
+                            project_name=proj,
+                            target_valid_until=target_until,
+                            cameras_allowed=cameras,
+                            invoice_number=str(inv_no),
+                            payment_amount=row["Amount (€)"],
+                        )
 
-                    renewal_links.append({
-                        "project":     proj,
-                        "valid_until": target_until,
-                        "cameras":     cameras,
-                        "token":       token,
-                    })
+                        renewal_links.append({
+                            "project":     proj,
+                            "valid_until": target_until,
+                            "cameras":     cameras,
+                            "token":       token,
+                        })
+                    except Exception as renewal_exc:
+                        if (
+                            _is_missing_supabase_table_error(renewal_exc, "subscriptions")
+                            or _is_missing_supabase_table_error(renewal_exc, "renewal_links")
+                        ):
+                            renewal_warnings.append(
+                                f"{proj}: payment recorded, but renewal tables are not set up in Supabase yet."
+                            )
+                        else:
+                            raise renewal_exc
 
                 except Exception as exc:
                     errors.append(f"{proj}: {exc}")
@@ -1875,6 +1895,8 @@ elif page == "🏦 Bank Payment":
             if errors:
                 st.error("Some updates failed:\n" + "\n".join(errors))
             else:
+                if renewal_warnings:
+                    st.warning("\n".join(renewal_warnings))
                 st.cache_data.clear()
                 st.session_state["_renewal_result"] = {
                     "inv_no": inv_no,
