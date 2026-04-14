@@ -17,6 +17,7 @@ INVOICE_TEMPLATE = DATA_DIR / "CC_M_inv_8669_Dec_2025.xlsx"
 EMAIL_CONFIG_FILE = CONFIG_DIR / "email_config.json"
 OVERRIDES_FILE = CONFIG_DIR / "project_overrides.json"
 DATA_PATHS_FILE = CONFIG_DIR / "data_paths.json"
+SENT_INVOICES_LOG_FILE = CONFIG_DIR / "sent_invoices_log.json"
 
 # Sheet names
 SHEET_PROJECTS_OVERVIEW = "Projects overview"
@@ -194,3 +195,24 @@ def save_email_config(config: dict) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     with open(EMAIL_CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
+
+
+def load_sent_invoices_log() -> list:
+    """Load sent invoice email history."""
+    if SENT_INVOICES_LOG_FILE.exists():
+        try:
+            with open(SENT_INVOICES_LOG_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data if isinstance(data, list) else []
+        except Exception:
+            pass
+    return []
+
+
+def append_sent_invoice_log(entry: dict) -> None:
+    """Append a sent invoice email record to the local log file."""
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    entries = load_sent_invoices_log()
+    entries.append(entry)
+    with open(SENT_INVOICES_LOG_FILE, "w", encoding="utf-8") as f:
+        json.dump(entries, f, indent=2)

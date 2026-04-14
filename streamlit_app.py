@@ -49,7 +49,13 @@ def _safe_str(v):
         pass
     return str(v)
 
-from config.settings import MONTH_ORDER, get_email_config, save_email_config
+from config.settings import (
+    MONTH_ORDER,
+    get_email_config,
+    save_email_config,
+    load_sent_invoices_log,
+    append_sent_invoice_log,
+)
 from services.supabase_service import (
     load_projects,
     load_invoices,
@@ -1363,6 +1369,9 @@ elif page == "📅 Monthly Invoice":
         st.warning("No projects found for the selected month.")
     else:
         preview_rows = get_invoice_preview_data(month_projects, sel_month, int(sel_year))
+        preview_total_amount = sum(
+            float(r["line_total"]) for r in preview_rows if isinstance(r.get("line_total"), (int, float))
+        )
         preview_df = pd.DataFrame([{
             "Project": _safe_str(r["project_name"]),
             "# Cams": _safe_str(r["num_cams"]),
@@ -1451,6 +1460,7 @@ elif page == "📅 Monthly Invoice":
             # ── Email section ──────────────────────────────────────────────
             st.markdown("---")
             st.subheader("Send Invoice by Email")
+            st.caption("Sending the PDF does not add invoice rows to the ledger unless you enable the option below.")
             email_cfg = get_email_config()
 
             with st.form("email_form"):
@@ -1462,6 +1472,7 @@ elif page == "📅 Monthly Invoice":
                 subject = st.text_input("Subject", subject_tpl.format(month=sel_month, year=sel_year))
                 body_tpl = email_cfg.get("default_body_template", "")
                 body = st.text_area("Body", body_tpl.format(month=sel_month, year=sel_year), height=150)
+                save_to_ledger_on_send = st.checkbox("Also save invoice to ledger before sending", value=True)
                 send_btn = st.form_submit_button("Send Email")
 
             if send_btn:
@@ -1473,6 +1484,14 @@ elif page == "📅 Monthly Invoice":
                     import tempfile
                     with tempfile.TemporaryDirectory() as tmp_dir:
                         try:
+                            ledger_rows_added = None
+                            if save_to_ledger_on_send:
+                                ledger_rows_added = _append_invoice_rows(
+                                    invoice_number=inv_no,
+                                    projects=month_projects,
+                                    year=int(sel_year),
+                                    source_name=_data_path,
+                                )
                             out_path = generate_monthly_invoice_pdf(
                                 projects=month_projects,
                                 month_name=sel_month,
@@ -1490,9 +1509,52 @@ elif page == "📅 Monthly Invoice":
                                 body=body,
                                 config=email_cfg,
                             )
-                            st.success(f"Email sent with PDF attachment: {out_path.name}")
+                            append_sent_invoice_log({
+                                "sent_at": datetime.datetime.utcnow().isoformat(),
+                                "invoice_number": inv_no,
+                                "month": sel_month,
+                                "year": int(sel_year),
+                                "pdf_filename": out_path.name,
+                                "recipients": recipients,
+                                "cc": cc_list,
+                                "subject": subject,
+                                "project_count": len(month_projects),
+                                "total_amount": preview_total_amount,
+                                "saved_to_ledger": bool(save_to_ledger_on_send),
+                                "ledger_rows_added": ledger_rows_added,
+                            })
+                            if save_to_ledger_on_send:
+                                st.cache_data.clear()
+                            if save_to_ledger_on_send and ledger_rows_added is not None:
+                                st.success(
+                                    f"Email sent with PDF attachment: {out_path.name}. Ledger rows added: {ledger_rows_added}."
+                                )
+                            else:
+                                st.success(f"Email sent with PDF attachment: {out_path.name}")
                         except Exception as e:
                             st.error(f"Email failed: {e}")
+
+            st.markdown("---")
+            st.subheader("Sent PDF Invoices")
+            sent_invoice_rows = load_sent_invoices_log()
+            if sent_invoice_rows:
+                sent_invoice_df = pd.DataFrame([
+                    {
+                        "Sent At": _safe_str(row.get("sent_at", "")).replace("T", " ")[:19],
+                        "Invoice #": _safe_int(row.get("invoice_number"), default=0),
+                        "Month": _safe_str(row.get("month", "")),
+                        "Year": _safe_int(row.get("year"), default=0),
+                        "PDF": _safe_str(row.get("pdf_filename", "")),
+                        "Projects": _safe_int(row.get("project_count"), default=0),
+                        "Total (€)": f"€{_safe_float(row.get('total_amount', 0.0)):,.0f}",
+                        "To": ", ".join(row.get("recipients", [])),
+                        "Saved To Ledger": "Yes" if row.get("saved_to_ledger") else "No",
+                    }
+                    for row in reversed(sent_invoice_rows)
+                ])
+                st.dataframe(sent_invoice_df, use_container_width=True, hide_index=True, height=260)
+            else:
+                st.info("No invoice PDFs have been logged as sent yet.")
         else:
             st.info("Invoice generation requires Admin access.")
 
