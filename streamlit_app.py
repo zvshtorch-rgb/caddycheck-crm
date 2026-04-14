@@ -231,34 +231,98 @@ def _get_next_invoice_number(invoices, source_name: str) -> int:
     return _supa_next_inv_no()
 
 
+def _find_invoice_header_row(worksheet) -> Optional[tuple[int, dict[str, int]]]:
+    for row_idx in range(1, min(worksheet.max_row, 80) + 1):
+        labels = {}
+        for col_idx in range(1, min(worksheet.max_column, 20) + 1):
+            cell_value = _safe_str(worksheet.cell(row=row_idx, column=col_idx).value).strip().lower()
+            if not cell_value:
+                continue
+            normalized = re.sub(r"\s+", " ", cell_value)
+            if "supermarket" in normalized or normalized == "project" or "project name" in normalized:
+                labels["project_name"] = col_idx
+            elif normalized in ("units", "cameras", "camera", "qty", "quantity"):
+                labels["cameras_number"] = col_idx
+            elif normalized in ("year", "maint. year", "maintenance year"):
+                labels["maintenance_year"] = col_idx
+            elif "line total" in normalized or normalized in ("amount", "amount (€)", "total"):
+                labels["payment_amount"] = col_idx
+        if {"project_name", "cameras_number", "maintenance_year", "payment_amount"}.issubset(labels):
+            return row_idx, labels
+    return None
+
+
+def _extract_invoice_number(worksheet) -> Optional[int]:
+    preferred_cells = [(5, 10), (5, 9), (4, 10)]
+    for row_idx, col_idx in preferred_cells:
+        try:
+            return int(worksheet.cell(row=row_idx, column=col_idx).value)
+        except (TypeError, ValueError):
+            pass
+
+    for row_idx in range(1, min(worksheet.max_row, 20) + 1):
+        for col_idx in range(1, min(worksheet.max_column, 12) + 1):
+            label = _safe_str(worksheet.cell(row=row_idx, column=col_idx).value).strip().lower()
+            if "invoice" in label and "#" in label or label == "invoice #":
+                for neighbor_col in range(col_idx + 1, min(col_idx + 4, worksheet.max_column) + 1):
+                    try:
+                        return int(worksheet.cell(row=row_idx, column=neighbor_col).value)
+                    except (TypeError, ValueError):
+                        continue
+    return None
+
+
+def _extract_invoice_title_and_year(worksheet) -> tuple[str, Optional[int]]:
+    candidate_text = []
+    for row_idx in range(1, min(worksheet.max_row, 20) + 1):
+        for col_idx in range(1, min(worksheet.max_column, 12) + 1):
+            value = _safe_str(worksheet.cell(row=row_idx, column=col_idx).value).strip()
+            if value:
+                candidate_text.append(value)
+
+    title = ""
+    for value in candidate_text:
+        if "maintenance" in value.lower() or "trial" in value.lower():
+            title = value
+            break
+    if not title and candidate_text:
+        title = candidate_text[0]
+
+    year_match = re.search(r"(20\d{2})", title)
+    if not year_match:
+        for value in candidate_text:
+            year_match = re.search(r"(20\d{2})", value)
+            if year_match:
+                break
+    return title, int(year_match.group(1)) if year_match else None
+
+
 def _parse_uploaded_invoice_xlsx(file_bytes: bytes) -> tuple[dict, list[dict]]:
     workbook = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
     worksheet = workbook.worksheets[0]
 
-    raw_invoice_number = worksheet.cell(row=5, column=10).value
-    try:
-        invoice_number = int(raw_invoice_number)
-    except (TypeError, ValueError):
-        invoice_number = None
+    invoice_number = _extract_invoice_number(worksheet)
+    title, invoice_year = _extract_invoice_title_and_year(worksheet)
+    header_info = _find_invoice_header_row(worksheet)
+    if header_info is None:
+        raise ValueError("Could not find invoice table headers in the uploaded XLSX")
 
-    title = _safe_str(worksheet.cell(row=12, column=5).value).strip()
-    year_match = re.search(r"(20\d{2})", title)
-    invoice_year = int(year_match.group(1)) if year_match else None
+    header_row_idx, columns = header_info
 
     rows: list[dict] = []
-    for row_idx in range(20, worksheet.max_row + 1):
-        project_name = _safe_str(worksheet.cell(row=row_idx, column=1).value).strip()
+    for row_idx in range(header_row_idx + 1, worksheet.max_row + 1):
+        project_name = _safe_str(worksheet.cell(row=row_idx, column=columns["project_name"]).value).strip()
         if not project_name:
             continue
         if project_name.lower() == "license period":
             break
 
-        maint_year = _safe_str(worksheet.cell(row=row_idx, column=8).value).strip()
+        maint_year = _safe_str(worksheet.cell(row=row_idx, column=columns["maintenance_year"]).value).strip()
         if not maint_year:
             break
 
-        cameras_number = _safe_int(worksheet.cell(row=row_idx, column=7).value, default=0)
-        payment_amount = _safe_float(worksheet.cell(row=row_idx, column=10).value, default=0.0)
+        cameras_number = _safe_int(worksheet.cell(row=row_idx, column=columns["cameras_number"]).value, default=0)
+        payment_amount = _safe_float(worksheet.cell(row=row_idx, column=columns["payment_amount"]).value, default=0.0)
         if cameras_number <= 0 and payment_amount <= 0:
             continue
 
@@ -818,21 +882,24 @@ elif page == "🧾 Invoice Details":
                         ])
                         st.dataframe(preview_df, use_container_width=True, height=250)
 
-                        project_counts = preview_df["Project"].value_counts()
-                        duplicate_projects = project_counts[project_counts > 1]
-                        if not duplicate_projects.empty:
-                            st.error(
-                                "The uploaded file contains duplicate project rows: "
-                                + ", ".join(duplicate_projects.index.tolist())
-                            )
-                        elif st.button("Replace Invoice From XLSX", key="replace_invoice_from_xlsx"):
-                            replace_invoice_rows(target_invoice_number, import_rows)
-                            load_data.clear()
-                            st.session_state["_flash_success"] = (
-                                f"Invoice {target_invoice_number} replaced from uploaded XLSX with {len(import_rows)} row(s)."
-                            )
-                            st.session_state["_flash_success_page"] = "🧾 Invoice Details"
-                            st.rerun()
+                        if preview_df.empty:
+                            st.warning("No invoice rows were found in the uploaded XLSX.")
+                        else:
+                            project_counts = preview_df["Project"].value_counts()
+                            duplicate_projects = project_counts[project_counts > 1]
+                            if not duplicate_projects.empty:
+                                st.error(
+                                    "The uploaded file contains duplicate project rows: "
+                                    + ", ".join(duplicate_projects.index.tolist())
+                                )
+                            elif st.button("Replace Invoice From XLSX", key="replace_invoice_from_xlsx"):
+                                replace_invoice_rows(target_invoice_number, import_rows)
+                                load_data.clear()
+                                st.session_state["_flash_success"] = (
+                                    f"Invoice {target_invoice_number} replaced from uploaded XLSX with {len(import_rows)} row(s)."
+                                )
+                                st.session_state["_flash_success_page"] = "🧾 Invoice Details"
+                                st.rerun()
                     except Exception as exc:
                         st.error(f"Failed to parse uploaded invoice XLSX: {exc}")
 
