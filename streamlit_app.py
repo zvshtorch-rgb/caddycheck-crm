@@ -247,6 +247,24 @@ def _extract_question_year(question: str) -> Optional[int]:
     return int(match.group(1)) if match else None
 
 
+def _extract_question_invoice_number(question: str) -> Optional[int]:
+    match = re.search(r"(?:invoice\s*#?|inv\s*#?)\s*(\d{3,6})", question, re.IGNORECASE)
+    if match:
+        return int(match.group(1))
+    standalone = re.search(r"\b(8\d{3,5})\b", question)
+    return int(standalone.group(1)) if standalone else None
+
+
+def _extract_question_month(question: str) -> str:
+    q = _normalize_query_text(question)
+    for month in MONTH_ORDER:
+        full = month.lower()
+        short = month[:3].lower()
+        if re.search(rf"\b{re.escape(full)}\b", q) or re.search(rf"\b{re.escape(short)}\b", q):
+            return month
+    return ""
+
+
 def _match_project_from_question(question: str, projects, invoices) -> str:
     q = _normalize_query_text(question)
     candidates = sorted({p.project_name for p in projects} | {i.project_name for i in invoices}, key=len, reverse=True)
@@ -283,6 +301,19 @@ def _build_invoice_answer_df(invoice_rows, projects) -> pd.DataFrame:
     ])
 
 
+def _build_project_answer_df(project_rows) -> pd.DataFrame:
+    return pd.DataFrame([
+        {
+            "Project": p.project_name,
+            "Country": p.country,
+            "# Cams": p.num_cams,
+            "Payment Month": p.payment_month,
+            "Status": p.status,
+        }
+        for p in project_rows
+    ])
+
+
 def _answer_data_question(question: str, projects, invoices, debt_summaries) -> tuple[str, Optional[pd.DataFrame]]:
     q = _normalize_query_text(question)
     if not q:
@@ -291,13 +322,47 @@ def _answer_data_question(question: str, projects, invoices, debt_summaries) -> 
     project_name = _match_project_from_question(question, projects, invoices)
     country_name = _match_country_from_question(question, projects)
     year = _extract_question_year(question)
+    invoice_number = _extract_question_invoice_number(question)
+    month_name = _extract_question_month(question)
 
     if "next invoice" in q:
         next_inv = _get_next_invoice_number(invoices, _data_path)
         return f"The next invoice number is {next_inv}.", None
 
+    if invoice_number is not None and ("invoice" in q or "inv" in q):
+        invoice_rows = [inv for inv in invoices if _safe_int(inv.invoice_number, default=0) == invoice_number]
+        if year is not None:
+            invoice_rows = [inv for inv in invoice_rows if inv.year == year]
+
+        if ("sent" in q or "emailed" in q or "email" in q):
+            sent_rows = [row for row in load_sent_invoices_log() if _safe_int(row.get("invoice_number"), default=0) == invoice_number]
+            if not sent_rows:
+                return f"Invoice {invoice_number} has no sent PDF log entry.", None
+            df = pd.DataFrame([
+                {
+                    "Sent At": _safe_str(row.get("sent_at", "")).replace("T", " ")[:19],
+                    "Invoice #": _safe_int(row.get("invoice_number"), default=0),
+                    "Month": _safe_str(row.get("month", "")),
+                    "Year": _safe_int(row.get("year"), default=0),
+                    "PDF": _safe_str(row.get("pdf_filename", "")),
+                    "To": ", ".join(row.get("recipients", [])),
+                    "Saved To Ledger": "Yes" if row.get("saved_to_ledger") else "No",
+                }
+                for row in reversed(sent_rows)
+            ])
+            return f"Found {len(df)} sent PDF log record(s) for invoice {invoice_number}.", df
+
+        if not invoice_rows:
+            return f"Invoice {invoice_number} is not in the invoice ledger.", None
+
+        total_amount = sum(float(inv.payment_amount) for inv in invoice_rows)
+        df = _build_invoice_answer_df(invoice_rows, projects)
+        return f"Invoice {invoice_number} has {len(df)} row(s) totaling €{total_amount:,.0f}.", df
+
     if ("sent" in q or "emailed" in q or "email" in q) and ("pdf" in q or "invoice" in q):
         rows = load_sent_invoices_log()
+        if invoice_number is not None:
+            rows = [row for row in rows if _safe_int(row.get("invoice_number"), default=0) == invoice_number]
         if year is not None:
             rows = [row for row in rows if _safe_int(row.get("year"), default=0) == year]
         if project_name:
@@ -323,6 +388,19 @@ def _answer_data_question(question: str, projects, invoices, debt_summaries) -> 
             active_projects = [p for p in active_projects if p.country == country_name]
         return f"There are {len(active_projects)} active project(s){' in ' + country_name if country_name else ''}.", None
 
+    if ("project" in q or "bill" in q) and month_name:
+        month_projects = get_projects_for_month(projects, month_name)
+        if year is not None:
+            filtered_projects = month_projects
+        else:
+            filtered_projects = month_projects
+        if country_name:
+            filtered_projects = [p for p in filtered_projects if p.country == country_name]
+        if not filtered_projects:
+            return f"No projects found for {month_name}{' ' + str(year) if year else ''}.", None
+        df = _build_project_answer_df(filtered_projects)
+        return f"Found {len(df)} project(s) billed in {month_name}{' ' + str(year) if year else ''}.", df
+
     if project_name and any(token in q for token in ["project", "status", "country", "payment month", "camera", "cams", "details"]):
         project = next((p for p in projects if p.project_name == project_name), None)
         if project is None:
@@ -339,6 +417,8 @@ def _answer_data_question(question: str, projects, invoices, debt_summaries) -> 
 
     if "debt" in q or "unpaid" in q:
         debt_rows = [inv for inv in invoices if inv.is_unpaid()]
+        if invoice_number is not None:
+            debt_rows = [inv for inv in debt_rows if _safe_int(inv.invoice_number, default=0) == invoice_number]
         if year is not None:
             debt_rows = [inv for inv in debt_rows if inv.year == year]
         if country_name:
@@ -356,6 +436,23 @@ def _answer_data_question(question: str, projects, invoices, debt_summaries) -> 
         df = _build_invoice_answer_df(debt_rows, projects)
         return f"I found {len(df)} unpaid invoice row(s) totaling €{total_amount:,.0f}.", df
 
+    if "top" in q and "debt" in q:
+        debt_by_project = {}
+        for inv in invoices:
+            if not inv.is_unpaid():
+                continue
+            if year is not None and inv.year != year:
+                continue
+            debt_by_project.setdefault(inv.project_name, 0.0)
+            debt_by_project[inv.project_name] += float(inv.payment_amount)
+        if not debt_by_project:
+            return "No unpaid debt rows match that question.", None
+        df = pd.DataFrame([
+            {"Project": name, "Debt (€)": amount}
+            for name, amount in sorted(debt_by_project.items(), key=lambda item: item[1], reverse=True)[:10]
+        ])
+        return "Here are the top debt projects.", df
+
     if "invoice" in q and project_name:
         project_invoices = [inv for inv in invoices if inv.project_name == project_name]
         if year is not None:
@@ -370,7 +467,8 @@ def _answer_data_question(question: str, projects, invoices, debt_summaries) -> 
 
     return (
         "I can answer questions like: 'What is the Y1 debt for 2026?', 'Show unpaid invoices for AD Denderleeuw', "
-        "'How many active projects are in Belgium?', 'What invoices exist for Rewe Schorn - Bergheim?', or 'Show sent PDF invoices for 2026'.",
+        "'How many active projects are in Belgium?', 'What invoices exist for Rewe Schorn - Bergheim?', "
+        "'Show invoice 8676', 'Was invoice 8676 sent?', 'Which projects are billed in April?', or 'Show sent PDF invoices for 2026'.",
         None,
     )
 
@@ -779,12 +877,27 @@ elif page == "❓ Ask Data":
     st.title("❓ Ask Data")
     st.caption("Ask questions about projects, invoices, debt, or sent PDF invoices.")
 
+    quick_question_cols = st.columns(4)
+    quick_questions = [
+        "What is the Y1 debt for 2026?",
+        "Show unpaid invoices for AD Denderleeuw",
+        "Show invoice 8669",
+        "Show sent PDF invoices for 2026",
+    ]
+    for idx, quick_question in enumerate(quick_questions):
+        if quick_question_cols[idx].button(quick_question, key=f"ask_quick_{idx}", use_container_width=True):
+            st.session_state["ask_data_question"] = quick_question
+            answer_text, answer_df = _answer_data_question(quick_question, projects, invoices, debt_summaries)
+            st.session_state["ask_data_answer_text"] = answer_text
+            st.session_state["ask_data_answer_df"] = answer_df.to_dict(orient="records") if answer_df is not None else None
+            st.rerun()
+
     with st.form("ask_data_form"):
         question = st.text_area(
             "Question",
             value=st.session_state.get("ask_data_question", ""),
             height=100,
-            placeholder="Examples: What is the Y2+ debt for 2026? Show unpaid invoices for AD Denderleeuw. How many active projects are in Belgium?",
+            placeholder="Examples: What is the Y2+ debt for 2026? Show unpaid invoices for AD Denderleeuw. Show invoice 8676. Which projects are billed in April?",
         )
         submitted = st.form_submit_button("Ask")
 
@@ -802,7 +915,7 @@ elif page == "❓ Ask Data":
     else:
         st.info(
             "Try: 'What is the Y1 debt for 2026?', 'Show unpaid invoices for Proxy Muizen', "
-            "'How many active projects are in Belgium?', or 'Show sent PDF invoices'."
+            "'How many active projects are in Belgium?', 'Show invoice 8676', or 'Show sent PDF invoices'."
         )
 
     if answer_rows:
