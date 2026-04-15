@@ -1137,6 +1137,18 @@ elif page == "💸 Debt Report":
     mc4.metric("Y1 Debt",          f"€{y1_total_amt:,.0f}")
     mc5.metric("Y2+ Debt",         f"€{y2_total_amt:,.0f}")
 
+    if mc4.button("Show Y1 Invoice List", key="dr_show_y1", use_container_width=True):
+        st.session_state["dr_debt_type"] = "New Installation (Y1)"
+        st.rerun()
+    if mc5.button("Show Y2+ Invoice List", key="dr_show_y2", use_container_width=True):
+        st.session_state["dr_debt_type"] = "Maintenance (Y2+)"
+        st.rerun()
+
+    if dsel_debt_type != "All":
+        if st.button("Clear Debt Type Filter", key="dr_clear_debt_type"):
+            st.session_state["dr_debt_type"] = "All"
+            st.rerun()
+
     if dsel_debt_type == "New Installation (Y1)":
         st.caption("Showing only first-year debt (Y1).")
     elif dsel_debt_type == "Maintenance (Y2+)":
