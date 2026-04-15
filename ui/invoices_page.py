@@ -13,7 +13,7 @@ from PySide6.QtGui import QColor, QFont, QAction
 
 from config.settings import MONTH_ORDER
 from models.project import Project
-from models.invoice import Invoice, DebtSummary
+from models.invoice import Invoice, DebtSummary, group_monthly_invoices
 
 logger = logging.getLogger(__name__)
 
@@ -51,10 +51,12 @@ class InvoicesPage(QWidget):
         self._dirty = False
         self._updating_table = False
         self._displayed_invoices: List[Invoice] = []
+        self._monthly_invoice_summaries = []
 
         self._build_ui()
         self._populate_debt_table()
         self._populate_invoice_table()
+        self._refresh_monthly_invoice_table()
 
     # ── UI construction ────────────────────────────────────────────────────────
 
@@ -196,6 +198,74 @@ class InvoicesPage(QWidget):
         self._inv_count_label.setStyleSheet("color: #555; font-size: 12px;")
         inv_layout.addWidget(self._inv_count_label)
 
+        monthly_group = QGroupBox("Monthly Invoices Status")
+        monthly_group.setStyleSheet(
+            "QGroupBox { font-weight: bold; font-size: 13px; color: #2C3E50; "
+            "border: 1px solid #DEE2E6; border-radius: 8px; margin-top: 8px; }"
+            "QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 4px; }"
+        )
+        monthly_layout = QVBoxLayout(monthly_group)
+
+        monthly_hint = QLabel(
+            "Combined monthly invoices are detected when the same invoice number appears on multiple projects."
+        )
+        monthly_hint.setStyleSheet("color: #555; font-size: 12px;")
+        monthly_layout.addWidget(monthly_hint)
+
+        monthly_summary_row = QHBoxLayout()
+        monthly_summary_row.setSpacing(24)
+        self._monthly_total_label = QLabel("Monthly invoices: 0")
+        self._monthly_paid_label = QLabel("Paid monthly invoices: 0")
+        self._monthly_open_label = QLabel("Open / mixed: 0")
+        for label, color in [
+            (self._monthly_total_label, "#2C3E50"),
+            (self._monthly_paid_label, "#27AE60"),
+            (self._monthly_open_label, "#E67E22"),
+        ]:
+            label.setStyleSheet(f"font-size: 13px; font-weight: 600; color: {color};")
+            monthly_summary_row.addWidget(label)
+        monthly_summary_row.addStretch()
+        monthly_layout.addLayout(monthly_summary_row)
+
+        monthly_filter_row = QHBoxLayout()
+        monthly_filter_row.addWidget(QLabel("Year:"))
+        self._monthly_year_cb = QComboBox()
+        self._monthly_year_cb.setFixedHeight(30)
+        self._monthly_year_cb.currentTextChanged.connect(self._apply_monthly_invoice_filter)
+        monthly_filter_row.addWidget(self._monthly_year_cb)
+
+        monthly_filter_row.addWidget(QLabel("Status:"))
+        self._monthly_status_cb = QComboBox()
+        self._monthly_status_cb.setFixedHeight(30)
+        self._monthly_status_cb.currentTextChanged.connect(self._apply_monthly_invoice_filter)
+        monthly_filter_row.addWidget(self._monthly_status_cb)
+        monthly_filter_row.addStretch()
+        monthly_layout.addLayout(monthly_filter_row)
+
+        self._monthly_table = QTableWidget()
+        self._monthly_table.setColumnCount(10)
+        self._monthly_table.setHorizontalHeaderLabels([
+            "Invoice #", "Year", "Projects", "Total (€)", "Status",
+            "Paid", "Unpaid", "Cancelled", "Last Payment", "Included Projects",
+        ])
+        self._monthly_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._monthly_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self._monthly_table.setSortingEnabled(True)
+        self._monthly_table.setAlternatingRowColors(True)
+        self._monthly_table.horizontalHeader().setSectionResizeMode(9, QHeaderView.Stretch)
+        self._monthly_table.setMaximumHeight(220)
+        self._monthly_table.setStyleSheet(
+            "QTableWidget { border: none; gridline-color: #DEE2E6; }"
+            "QTableWidget::item:selected { background: #D6EAF8; color: #2C3E50; }"
+        )
+        monthly_layout.addWidget(self._monthly_table)
+
+        self._monthly_count_label = QLabel()
+        self._monthly_count_label.setStyleSheet("color: #555; font-size: 12px;")
+        monthly_layout.addWidget(self._monthly_count_label)
+
+        inv_layout.addWidget(monthly_group)
+
         splitter.addWidget(inv_frame)
 
         # Debt summary group
@@ -311,6 +381,103 @@ class InvoicesPage(QWidget):
             f"Showing {len(invoices)} of {len(self._invoices)} invoices"
         )
 
+    @staticmethod
+    def _monthly_status_color(status: str) -> QColor:
+        status_key = str(status).strip().lower()
+        if status_key == "paid":
+            return QColor("#27AE60")
+        if status_key in {"partial", "mixed", "paid / cancelled"}:
+            return QColor("#F39C12")
+        if status_key in {"unpaid", "unpaid / cancelled"}:
+            return QColor("#E74C3C")
+        if status_key == "cancelled":
+            return QColor("#7F8C8D")
+        return QColor("#2C3E50")
+
+    def _refresh_monthly_invoice_table(self):
+        self._monthly_invoice_summaries = group_monthly_invoices(self._invoices)
+
+        paid_count = sum(1 for summary in self._monthly_invoice_summaries if summary.status == "Paid")
+        open_count = len(self._monthly_invoice_summaries) - paid_count
+        self._monthly_total_label.setText(
+            f"Monthly invoices: {len(self._monthly_invoice_summaries)}"
+        )
+        self._monthly_paid_label.setText(f"Paid monthly invoices: {paid_count}")
+        self._monthly_open_label.setText(f"Open / mixed: {open_count}")
+
+        current_year = self._monthly_year_cb.currentText()
+        current_status = self._monthly_status_cb.currentText()
+        years = sorted({summary.year for summary in self._monthly_invoice_summaries if summary.year}, reverse=True)
+        statuses = sorted({summary.status for summary in self._monthly_invoice_summaries})
+
+        self._monthly_year_cb.blockSignals(True)
+        self._monthly_year_cb.clear()
+        self._monthly_year_cb.addItem("All")
+        for year in years:
+            self._monthly_year_cb.addItem(str(year))
+        if current_year and self._monthly_year_cb.findText(current_year) >= 0:
+            self._monthly_year_cb.setCurrentText(current_year)
+        self._monthly_year_cb.blockSignals(False)
+
+        self._monthly_status_cb.blockSignals(True)
+        self._monthly_status_cb.clear()
+        self._monthly_status_cb.addItem("All")
+        for status in statuses:
+            self._monthly_status_cb.addItem(status)
+        if current_status and self._monthly_status_cb.findText(current_status) >= 0:
+            self._monthly_status_cb.setCurrentText(current_status)
+        self._monthly_status_cb.blockSignals(False)
+
+        self._apply_monthly_invoice_filter()
+
+    def _apply_monthly_invoice_filter(self, _=None):
+        year_text = self._monthly_year_cb.currentText()
+        status_text = self._monthly_status_cb.currentText()
+
+        filtered = [
+            summary for summary in self._monthly_invoice_summaries
+            if (year_text == "All" or str(summary.year or "") == year_text)
+            and (status_text == "All" or summary.status == status_text)
+        ]
+
+        self._monthly_table.setSortingEnabled(False)
+        self._monthly_table.setRowCount(len(filtered))
+
+        for row, summary in enumerate(filtered):
+            values = [
+                str(summary.invoice_number),
+                str(summary.year) if summary.year else "",
+                str(summary.project_count),
+                f"{summary.total_amount:,.2f}",
+                summary.status,
+                str(summary.paid_rows),
+                str(summary.unpaid_rows),
+                str(summary.cancelled_rows),
+                summary.last_payment_date.strftime("%Y-%m-%d") if summary.last_payment_date else "",
+                ", ".join(summary.project_names),
+            ]
+
+            for col, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                if col in {0, 1, 2, 5, 6, 7}:
+                    item.setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
+                elif col == 3:
+                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                    item.setData(Qt.DisplayRole, round(summary.total_amount, 2))
+                else:
+                    item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+                item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                if col == 4:
+                    item.setForeground(self._monthly_status_color(summary.status))
+                    item.setFont(QFont("", -1, QFont.Bold))
+                self._monthly_table.setItem(row, col, item)
+
+        self._monthly_table.setSortingEnabled(True)
+        self._monthly_table.resizeRowsToContents()
+        self._monthly_count_label.setText(
+            f"Showing {len(filtered)} of {len(self._monthly_invoice_summaries)} combined monthly invoices"
+        )
+
     # ── Item changed (inline edit) ─────────────────────────────────────────────
 
     def _on_item_changed(self, item: QTableWidgetItem):
@@ -375,6 +542,7 @@ class InvoicesPage(QWidget):
         self._dirty = True
         self._save_btn.setEnabled(True)
         self._dirty_label.setText("Unsaved changes")
+        self._refresh_monthly_invoice_table()
 
     # ── Right-click context menu ───────────────────────────────────────────────
 

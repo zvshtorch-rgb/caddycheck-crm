@@ -78,6 +78,7 @@ from services.excel_service import (
     append_monthly_invoice_rows as _excel_append_invoice,
 )
 from services.invoice_service import generate_monthly_invoice, get_invoice_preview_data
+from models.invoice import group_monthly_invoices
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -1316,6 +1317,87 @@ elif page == "🧾 Invoice Details":
             height=550,
         )
 
+    st.markdown("---")
+    st.subheader("Monthly Invoice Status")
+    st.caption(
+        "Combined monthly invoices are inferred when the same invoice number appears on multiple projects, which matches the shared invoices introduced from Aug 2025 onward."
+    )
+
+    monthly_invoice_summaries = group_monthly_invoices(invoices)
+    if monthly_invoice_summaries:
+        monthly_years = sorted({summary.year for summary in monthly_invoice_summaries if summary.year}, reverse=True)
+        monthly_statuses = sorted({summary.status for summary in monthly_invoice_summaries})
+
+        mi1, mi2 = st.columns(2)
+        monthly_year_filter = mi1.selectbox(
+            "Monthly Invoice Year",
+            ["All"] + [str(year) for year in monthly_years],
+            key="monthly_invoice_status_year",
+        )
+        monthly_status_filter = mi2.selectbox(
+            "Monthly Invoice Status",
+            ["All"] + monthly_statuses,
+            key="monthly_invoice_status_filter",
+        )
+
+        filtered_monthly_summaries = [
+            summary for summary in monthly_invoice_summaries
+            if (monthly_year_filter == "All" or str(summary.year or "") == monthly_year_filter)
+            and (monthly_status_filter == "All" or summary.status == monthly_status_filter)
+        ]
+
+        mm1, mm2, mm3, mm4 = st.columns(4)
+        mm1.metric("Monthly invoices", len(filtered_monthly_summaries))
+        mm2.metric(
+            "Grouped amount",
+            f"€{sum(summary.total_amount for summary in filtered_monthly_summaries):,.0f}",
+        )
+        mm3.metric(
+            "Paid monthly invoices",
+            sum(1 for summary in filtered_monthly_summaries if summary.status == "Paid"),
+        )
+        mm4.metric(
+            "Open / mixed",
+            sum(1 for summary in filtered_monthly_summaries if summary.status != "Paid"),
+        )
+
+        monthly_status_df = pd.DataFrame([
+            {
+                "Invoice #": str(summary.invoice_number),
+                "Year": _safe_str(summary.year or ""),
+                "Projects": summary.project_count,
+                "Total (€)": round(summary.total_amount, 2),
+                "Status": summary.status,
+                "Paid Rows": summary.paid_rows,
+                "Unpaid Rows": summary.unpaid_rows,
+                "Cancelled Rows": summary.cancelled_rows,
+                "Last Payment": summary.last_payment_date.strftime("%Y-%m-%d") if summary.last_payment_date else "",
+                "Included Projects": ", ".join(summary.project_names),
+            }
+            for summary in filtered_monthly_summaries
+        ])
+
+        def color_monthly_status(val):
+            value = str(val).strip().lower()
+            if value == "paid":
+                return "color: #27AE60; font-weight: bold"
+            if value in {"partial", "mixed", "paid / cancelled"}:
+                return "color: #F39C12; font-weight: bold"
+            if value in {"unpaid", "unpaid / cancelled"}:
+                return "color: #E74C3C; font-weight: bold"
+            if value == "cancelled":
+                return "color: #7F8C8D; font-weight: bold"
+            return ""
+
+        st.dataframe(
+            monthly_status_df.style.map(color_monthly_status, subset=["Status"]),
+            use_container_width=True,
+            hide_index=True,
+            height=260,
+        )
+    else:
+        st.info("No combined monthly invoices were found in the ledger yet.")
+
     # ── Debt Summary ──────────────────────────────────────────────────────────
     st.markdown("---")
     st.subheader("Debt Summary by Project")
@@ -1355,6 +1437,15 @@ elif page == "🧾 Invoice Details":
 elif page == "💸 Debt Report":
     st.title("💸 Debt Report")
 
+    debt_type_options = ["All", "New Installation (Y1)", "Maintenance (Y2+)"]
+    pending_debt_type = st.session_state.pop("_pending_dr_debt_type", None)
+    if pending_debt_type in debt_type_options:
+        st.session_state["dr_debt_type"] = pending_debt_type
+    active_debt_type = st.session_state.get("dr_debt_type", "All")
+    if active_debt_type not in debt_type_options:
+        active_debt_type = "All"
+        st.session_state["dr_debt_type"] = active_debt_type
+
     # ── Filters ───────────────────────────────────────────────────────────────
     with st.expander("🔍 Filters", expanded=False):
         fc1, fc2, fc3, fc4 = st.columns(4)
@@ -1365,9 +1456,11 @@ elif page == "💸 Debt Report":
         dsel_search   = fc3.text_input("Search project", key="dr_search")
         dsel_debt_type = fc4.selectbox(
             "Debt Type",
-            ["All", "New Installation (Y1)", "Maintenance (Y2+)"],
-            key="dr_debt_type",
+            debt_type_options,
+            index=debt_type_options.index(active_debt_type),
+            key="dr_debt_type_widget",
         )
+        st.session_state["dr_debt_type"] = dsel_debt_type
 
     # Only unpaid invoices
     debt_inv = [i for i in invoices if i.is_unpaid()]
@@ -1426,15 +1519,15 @@ elif page == "💸 Debt Report":
     mc5.metric("Y2+ Debt",         f"€{y2_total_amt:,.0f}")
 
     if mc4.button("Show Y1 Invoice List", key="dr_show_y1", use_container_width=True):
-        st.session_state["dr_debt_type"] = "New Installation (Y1)"
+        st.session_state["_pending_dr_debt_type"] = "New Installation (Y1)"
         st.rerun()
     if mc5.button("Show Y2+ Invoice List", key="dr_show_y2", use_container_width=True):
-        st.session_state["dr_debt_type"] = "Maintenance (Y2+)"
+        st.session_state["_pending_dr_debt_type"] = "Maintenance (Y2+)"
         st.rerun()
 
     if dsel_debt_type != "All":
         if st.button("Clear Debt Type Filter", key="dr_clear_debt_type"):
-            st.session_state["dr_debt_type"] = "All"
+            st.session_state["_pending_dr_debt_type"] = "All"
             st.rerun()
 
     if dsel_debt_type == "New Installation (Y1)":
