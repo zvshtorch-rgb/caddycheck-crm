@@ -1441,10 +1441,15 @@ elif page == "💸 Debt Report":
     pending_debt_type = st.session_state.pop("_pending_dr_debt_type", None)
     if pending_debt_type in debt_type_options:
         st.session_state["dr_debt_type"] = pending_debt_type
+        st.session_state["dr_debt_type_widget"] = pending_debt_type
     active_debt_type = st.session_state.get("dr_debt_type", "All")
     if active_debt_type not in debt_type_options:
         active_debt_type = "All"
         st.session_state["dr_debt_type"] = active_debt_type
+    widget_debt_type = st.session_state.get("dr_debt_type_widget", active_debt_type)
+    if widget_debt_type not in debt_type_options:
+        widget_debt_type = active_debt_type
+        st.session_state["dr_debt_type_widget"] = widget_debt_type
 
     # ── Filters ───────────────────────────────────────────────────────────────
     with st.expander("🔍 Filters", expanded=False):
@@ -1457,7 +1462,7 @@ elif page == "💸 Debt Report":
         dsel_debt_type = fc4.selectbox(
             "Debt Type",
             debt_type_options,
-            index=debt_type_options.index(active_debt_type),
+            index=debt_type_options.index(widget_debt_type),
             key="dr_debt_type_widget",
         )
         st.session_state["dr_debt_type"] = dsel_debt_type
