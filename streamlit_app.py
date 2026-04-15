@@ -5,6 +5,7 @@ import io
 import re
 import sys
 from pathlib import Path
+from typing import Optional
 
 import pandas as pd
 import plotly.express as px
@@ -237,6 +238,143 @@ def _get_next_invoice_number(invoices, source_name: str) -> int:
     return _supa_next_inv_no()
 
 
+def _normalize_query_text(value: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9+ ]", " ", _safe_str(value).lower())).strip()
+
+
+def _extract_question_year(question: str) -> Optional[int]:
+    match = re.search(r"\b(20\d{2})\b", question)
+    return int(match.group(1)) if match else None
+
+
+def _match_project_from_question(question: str, projects, invoices) -> str:
+    q = _normalize_query_text(question)
+    candidates = sorted({p.project_name for p in projects} | {i.project_name for i in invoices}, key=len, reverse=True)
+    for name in candidates:
+        normalized = _normalize_query_text(name)
+        if normalized and normalized in q:
+            return name
+    return ""
+
+
+def _match_country_from_question(question: str, projects) -> str:
+    q = _normalize_query_text(question)
+    countries = sorted({p.country for p in projects if p.country}, key=len, reverse=True)
+    for country in countries:
+        normalized = _normalize_query_text(country)
+        if normalized and normalized in q:
+            return country
+    return ""
+
+
+def _build_invoice_answer_df(invoice_rows, projects) -> pd.DataFrame:
+    country_map = {p.project_name.lower().strip(): p.country for p in projects}
+    return pd.DataFrame([
+        {
+            "Invoice #": str(int(inv.invoice_number)) if inv.invoice_number else "—",
+            "Project": inv.project_name,
+            "Country": country_map.get(inv.project_name.lower().strip(), ""),
+            "Maint. Year": inv.maintenance_year,
+            "Amount (€)": float(inv.payment_amount),
+            "Paid": inv.paid,
+            "Year": inv.year or "",
+        }
+        for inv in invoice_rows
+    ])
+
+
+def _answer_data_question(question: str, projects, invoices, debt_summaries) -> tuple[str, Optional[pd.DataFrame]]:
+    q = _normalize_query_text(question)
+    if not q:
+        return "Ask a question about projects, invoices, debt, or sent PDFs.", None
+
+    project_name = _match_project_from_question(question, projects, invoices)
+    country_name = _match_country_from_question(question, projects)
+    year = _extract_question_year(question)
+
+    if "next invoice" in q:
+        next_inv = _get_next_invoice_number(invoices, _data_path)
+        return f"The next invoice number is {next_inv}.", None
+
+    if ("sent" in q or "emailed" in q or "email" in q) and ("pdf" in q or "invoice" in q):
+        rows = load_sent_invoices_log()
+        if year is not None:
+            rows = [row for row in rows if _safe_int(row.get("year"), default=0) == year]
+        if project_name:
+            rows = [row for row in rows if project_name.lower() in _safe_str(row.get("subject", "")).lower()]
+        if not rows:
+            return "No sent PDF invoices match that question.", None
+        df = pd.DataFrame([
+            {
+                "Sent At": _safe_str(row.get("sent_at", "")).replace("T", " ")[:19],
+                "Invoice #": _safe_int(row.get("invoice_number"), default=0),
+                "Month": _safe_str(row.get("month", "")),
+                "Year": _safe_int(row.get("year"), default=0),
+                "PDF": _safe_str(row.get("pdf_filename", "")),
+                "To": ", ".join(row.get("recipients", [])),
+            }
+            for row in reversed(rows)
+        ])
+        return f"Found {len(df)} sent PDF invoice record(s).", df
+
+    if "active" in q and "project" in q and ("how many" in q or "count" in q or "number" in q):
+        active_projects = [p for p in projects if p.is_active()]
+        if country_name:
+            active_projects = [p for p in active_projects if p.country == country_name]
+        return f"There are {len(active_projects)} active project(s){' in ' + country_name if country_name else ''}.", None
+
+    if project_name and any(token in q for token in ["project", "status", "country", "payment month", "camera", "cams", "details"]):
+        project = next((p for p in projects if p.project_name == project_name), None)
+        if project is None:
+            return f"I could not find project details for {project_name}.", None
+        df = pd.DataFrame([{
+            "Project": project.project_name,
+            "Country": project.country,
+            "# Cams": project.num_cams,
+            "Payment Month": project.payment_month,
+            "Install Year": project.installation_year or "",
+            "Status": project.status,
+        }])
+        return f"Here are the project details for {project_name}.", df
+
+    if "debt" in q or "unpaid" in q:
+        debt_rows = [inv for inv in invoices if inv.is_unpaid()]
+        if year is not None:
+            debt_rows = [inv for inv in debt_rows if inv.year == year]
+        if country_name:
+            project_names_in_country = {p.project_name for p in projects if p.country == country_name}
+            debt_rows = [inv for inv in debt_rows if inv.project_name in project_names_in_country]
+        if project_name:
+            debt_rows = [inv for inv in debt_rows if inv.project_name == project_name]
+        if "y1" in q or "first year" in q or "new installation" in q:
+            debt_rows = [inv for inv in debt_rows if str(inv.maintenance_year).strip().upper() == "Y1"]
+        elif "y2+" in q or "maintenance" in q:
+            debt_rows = [inv for inv in debt_rows if str(inv.maintenance_year).strip().upper() != "Y1"]
+        if not debt_rows:
+            return "No unpaid invoice rows match that question.", None
+        total_amount = sum(float(inv.payment_amount) for inv in debt_rows)
+        df = _build_invoice_answer_df(debt_rows, projects)
+        return f"I found {len(df)} unpaid invoice row(s) totaling €{total_amount:,.0f}.", df
+
+    if "invoice" in q and project_name:
+        project_invoices = [inv for inv in invoices if inv.project_name == project_name]
+        if year is not None:
+            project_invoices = [inv for inv in project_invoices if inv.year == year]
+        if not project_invoices:
+            return f"No invoice rows found for {project_name}{' in ' + str(year) if year else ''}.", None
+        df = _build_invoice_answer_df(project_invoices, projects)
+        return f"I found {len(df)} invoice row(s) for {project_name}.", df
+
+    if "country" in q and ("debt" in q or "unpaid" in q) and not country_name:
+        return "I could not match the country name in that question.", None
+
+    return (
+        "I can answer questions like: 'What is the Y1 debt for 2026?', 'Show unpaid invoices for AD Denderleeuw', "
+        "'How many active projects are in Belgium?', 'What invoices exist for Rewe Schorn - Bergheim?', or 'Show sent PDF invoices for 2026'.",
+        None,
+    )
+
+
 def _find_invoice_header_row(worksheet) -> Optional[tuple[int, dict[str, int]]]:
     for row_idx in range(1, min(worksheet.max_row, 80) + 1):
         labels = {}
@@ -424,7 +562,7 @@ st.sidebar.title("📊 CaddyCheck CRM")
 st.sidebar.markdown("---")
 page = st.sidebar.radio(
     "Navigation",
-    ["📊 Dashboard", "🏗️ Projects", "🧾 Invoice Details", "💸 Debt Report", "📅 Monthly Invoice", "🎫 Tickets", "🏦 Bank Payment", "⚙️ Settings"],
+    ["📊 Dashboard", "❓ Ask Data", "🏗️ Projects", "🧾 Invoice Details", "💸 Debt Report", "📅 Monthly Invoice", "🎫 Tickets", "🏦 Bank Payment", "⚙️ Settings"],
     label_visibility="collapsed",
 )
 st.sidebar.markdown("---")
@@ -632,6 +770,43 @@ if page == "📊 Dashboard":
         fig.update_layout(height=380)
 
     st.plotly_chart(fig, use_container_width=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: ASK DATA
+# ══════════════════════════════════════════════════════════════════════════════
+elif page == "❓ Ask Data":
+    st.title("❓ Ask Data")
+    st.caption("Ask questions about projects, invoices, debt, or sent PDF invoices.")
+
+    with st.form("ask_data_form"):
+        question = st.text_area(
+            "Question",
+            value=st.session_state.get("ask_data_question", ""),
+            height=100,
+            placeholder="Examples: What is the Y2+ debt for 2026? Show unpaid invoices for AD Denderleeuw. How many active projects are in Belgium?",
+        )
+        submitted = st.form_submit_button("Ask")
+
+    if submitted:
+        st.session_state["ask_data_question"] = question
+        answer_text, answer_df = _answer_data_question(question, projects, invoices, debt_summaries)
+        st.session_state["ask_data_answer_text"] = answer_text
+        st.session_state["ask_data_answer_df"] = answer_df.to_dict(orient="records") if answer_df is not None else None
+
+    answer_text = st.session_state.get("ask_data_answer_text")
+    answer_rows = st.session_state.get("ask_data_answer_df")
+
+    if answer_text:
+        st.success(answer_text)
+    else:
+        st.info(
+            "Try: 'What is the Y1 debt for 2026?', 'Show unpaid invoices for Proxy Muizen', "
+            "'How many active projects are in Belgium?', or 'Show sent PDF invoices'."
+        )
+
+    if answer_rows:
+        st.dataframe(pd.DataFrame(answer_rows), use_container_width=True, hide_index=True, height=420)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
