@@ -753,25 +753,18 @@ if page == "📊 Dashboard":
         paid_years = [i.year for i in f_inv if i.is_paid() and i.year]
         ref_year = max(paid_years) if paid_years else datetime.datetime.now().year
 
-    cur_month  = datetime.datetime.now().month
-    monthly_val = sum(
-        i.payment_amount for i in f_inv
-        if i.is_paid() and i.payment_date
-        and i.payment_date.year == ref_year and i.payment_date.month == cur_month
-    )
     yearly_val = sum(
         i.payment_amount for i in f_inv
         if i.is_paid() and i.year == ref_year
     )
 
-    c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
     with c1: card("Total Income",            f"€{total_income:,.0f}", "card-income")
     with c2: card("Total Paid",              f"€{total_paid:,.0f}",   "card-paid")
     with c3: card("Total Debt",              f"€{total_unpaid:,.0f}", "card-debt")
-    with c4: card(f"Monthly Income ({ref_year})", f"€{monthly_val:,.0f}", "card-monthly")
-    with c5: card(f"Yearly Income ({ref_year})",  f"€{yearly_val:,.0f}",  "card-yearly")
-    with c6: card("Active Projects",         str(active_count),       "card-projects")
-    with c7: card("Total Cameras",           str(total_cams),         "card-cameras")
+    with c4: card(f"Yearly Income ({ref_year})",  f"€{yearly_val:,.0f}",  "card-yearly")
+    with c5: card("Active Projects",         str(active_count),       "card-projects")
+    with c6: card("Total Cameras",           str(total_cams),         "card-cameras")
 
     st.markdown("---")
 

@@ -18,7 +18,7 @@ from PySide6.QtCore import QPointF, QDate, QTime, QDateTime
 from config.settings import MONTH_ORDER, normalize_month, OUTPUT_DIR
 from models.project import Project
 from models.invoice import Invoice, DebtSummary
-from services.excel_service import get_yearly_summary, get_monthly_summary
+from services.excel_service import get_yearly_summary
 
 logger = logging.getLogger(__name__)
 
@@ -171,14 +171,13 @@ class DashboardPage(QWidget):
         self._card_income    = SummaryCard("Total Income", "€0", "income")
         self._card_paid      = SummaryCard("Total Paid", "€0", "paid")
         self._card_debt      = SummaryCard("Total Debt", "€0", "debt")
-        self._card_monthly   = SummaryCard("Monthly Income", "€0", "monthly")
         self._card_yearly    = SummaryCard("Yearly Income", "€0", "yearly")
         self._card_projects  = SummaryCard("Active Projects", "0", "projects")
         self._card_cameras   = SummaryCard("Total Cameras", "0", "cameras")
 
         for card in [
             self._card_income, self._card_paid, self._card_debt,
-            self._card_monthly, self._card_yearly,
+            self._card_yearly,
             self._card_projects, self._card_cameras,
         ]:
             card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -329,7 +328,6 @@ class DashboardPage(QWidget):
         self._card_debt.update_value(f"€{total_unpaid:,.0f}")
 
         # Monthly/yearly from paid invoices
-        current_month = datetime.datetime.now().month
         if selected_year:
             ref_year = selected_year
         else:
@@ -337,16 +335,12 @@ class DashboardPage(QWidget):
             paid_years = [inv.year for inv in filtered_invoices if inv.is_paid() and inv.year]
             ref_year = max(paid_years) if paid_years else datetime.datetime.now().year
 
-        monthly = get_monthly_summary(filtered_invoices, year=ref_year)
-        monthly_val = monthly.get(current_month, 0.0)
         yearly_val = sum(
             inv.payment_amount for inv in filtered_invoices
             if inv.is_paid() and inv.year == ref_year
         )
 
-        self._card_monthly.update_title(f"Monthly Income ({ref_year})")
         self._card_yearly.update_title(f"Yearly Income ({ref_year})")
-        self._card_monthly.update_value(f"€{monthly_val:,.0f}")
         self._card_yearly.update_value(f"€{yearly_val:,.0f}")
 
         # Active projects
