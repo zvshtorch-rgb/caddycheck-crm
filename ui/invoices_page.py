@@ -448,7 +448,7 @@ class InvoicesPage(QWidget):
                 str(summary.invoice_number),
                 str(summary.year) if summary.year else "",
                 str(summary.project_count),
-                f"{summary.total_amount:,.2f}",
+                f"{summary.total_amount:,.0f}",
                 summary.status,
                 str(summary.paid_rows),
                 str(summary.unpaid_rows),
@@ -463,7 +463,7 @@ class InvoicesPage(QWidget):
                     item.setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
                 elif col == 3:
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                    item.setData(Qt.DisplayRole, round(summary.total_amount, 2))
+                    item.setData(Qt.DisplayRole, round(summary.total_amount, 0))
                 else:
                     item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
                 item.setFlags(item.flags() & ~Qt.ItemIsEditable)

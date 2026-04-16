@@ -1366,7 +1366,7 @@ elif page == "🧾 Invoice Details":
                 "Invoice #": str(summary.invoice_number),
                 "Year": _safe_str(summary.year or ""),
                 "Projects": summary.project_count,
-                "Total (€)": round(summary.total_amount, 2),
+                "Total (€)": f"{summary.total_amount:,.0f}",
                 "Status": summary.status,
                 "Paid Rows": summary.paid_rows,
                 "Unpaid Rows": summary.unpaid_rows,
