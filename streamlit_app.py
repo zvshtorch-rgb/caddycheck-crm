@@ -256,6 +256,38 @@ def _extract_question_invoice_number(question: str) -> Optional[int]:
     return int(standalone.group(1)) if standalone else None
 
 
+def _project_license_date(project) -> Optional[datetime.date]:
+    if not project.license_eop:
+        return None
+    if isinstance(project.license_eop, datetime.datetime):
+        return project.license_eop.date()
+    if isinstance(project.license_eop, datetime.date):
+        return project.license_eop
+    return None
+
+
+def _add_months(base_date: datetime.date, months: int) -> datetime.date:
+    month_index = base_date.month - 1 + months
+    year = base_date.year + month_index // 12
+    month = month_index % 12 + 1
+    day = min(base_date.day, calendar.monthrange(year, month)[1])
+    return datetime.date(year, month, day)
+
+
+def _license_status(project, today: Optional[datetime.date] = None) -> str:
+    today = today or datetime.date.today()
+    license_date = _project_license_date(project)
+    if license_date is None:
+        return "Missing"
+    if license_date < today:
+        return "Expired"
+    next_month = today.month % 12 + 1
+    next_month_year = today.year if today.month < 12 else today.year + 1
+    if license_date.month == next_month and license_date.year == next_month_year:
+        return "Update Next Month"
+    return "Active"
+
+
 def _extract_question_month(question: str) -> str:
     q = _normalize_query_text(question)
     for month in MONTH_ORDER:
@@ -661,7 +693,7 @@ st.sidebar.title("📊 CaddyCheck CRM")
 st.sidebar.markdown("---")
 page = st.sidebar.radio(
     "Navigation",
-    ["📊 Dashboard", "❓ Ask Data", "🏗️ Projects", "🧾 Invoice Details", "💸 Debt Report", "📅 Monthly Invoice", "🎫 Tickets", "🏦 Bank Payment", "⚙️ Settings"],
+    ["📊 Dashboard", "❓ Ask Data", "🏗️ Projects", "🔐 Licenses", "🧾 Invoice Details", "💸 Debt Report", "📅 Monthly Invoice", "🎫 Tickets", "🏦 Bank Payment", "⚙️ Settings"],
     label_visibility="collapsed",
 )
 st.sidebar.markdown("---")
@@ -1046,6 +1078,157 @@ elif page == "🏗️ Projects":
                 })
     if rev_rows:
         st.dataframe(pd.DataFrame(rev_rows), use_container_width=True, height=400)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: LICENSES
+# ══════════════════════════════════════════════════════════════════════════════
+elif page == "🔐 Licenses":
+    st.title("🔐 Licenses")
+    if page_flash_success:
+        st.success(page_flash_success)
+
+    today = datetime.date.today()
+    next_month = today.month % 12 + 1
+    next_month_year = today.year if today.month < 12 else today.year + 1
+
+    license_rows = []
+    for project in projects:
+        license_date = _project_license_date(project)
+        license_rows.append({
+            "Project": _safe_str(project.project_name),
+            "Country": _safe_str(project.country),
+            "Cameras": _safe_int(project.num_cams),
+            "Status": _safe_str(project.status),
+            "License EOP": license_date.strftime("%Y-%m-%d") if license_date else "",
+            "License Status": _license_status(project, today),
+        })
+
+    next_month_rows = [
+        row for row in license_rows
+        if row["License Status"] == "Update Next Month"
+    ]
+    active_license_count = sum(1 for row in license_rows if row["License Status"] == "Active")
+    missing_license_count = sum(1 for row in license_rows if row["License Status"] == "Missing")
+    expired_license_count = sum(1 for row in license_rows if row["License Status"] == "Expired")
+    update_next_month_count = sum(1 for row in license_rows if row["License Status"] == "Update Next Month")
+
+    lc1, lc2, lc3, lc4 = st.columns(4)
+    lc1.metric("Active licenses", active_license_count)
+    lc2.metric("Need update next month", update_next_month_count)
+    lc3.metric("Expired / missing", expired_license_count + missing_license_count)
+    lc4.metric("Total tracked projects", len(license_rows))
+
+    with st.expander("Filters", expanded=True):
+        lf1, lf2, lf3 = st.columns(3)
+        license_country = lf1.selectbox(
+            "Country",
+            ["All"] + sorted({row["Country"] for row in license_rows if row["Country"]}),
+            key="license_country",
+        )
+        license_status = lf2.selectbox(
+            "License Status",
+            ["All", "Active", "Update Next Month", "Expired", "Missing"],
+            key="license_status",
+        )
+        license_search = lf3.text_input("Search project", key="license_search")
+
+    filtered_license_rows = [
+        row for row in license_rows
+        if (license_country == "All" or row["Country"] == license_country)
+        and (license_status == "All" or row["License Status"] == license_status)
+        and (not license_search.strip() or license_search.lower() in row["Project"].lower())
+    ]
+
+    st.subheader(f"Projects Needing Update in {calendar.month_name[next_month]} {next_month_year}")
+    if next_month_rows:
+        st.dataframe(
+            pd.DataFrame(next_month_rows)[["Project", "Country", "Cameras", "License EOP", "Status"]],
+            use_container_width=True,
+            hide_index=True,
+            height=220,
+        )
+    else:
+        st.info(f"No projects currently expire in {calendar.month_name[next_month]} {next_month_year}.")
+
+    if CAN_EDIT and license_rows:
+        st.markdown("---")
+        st.subheader("Add or Extend License EOP")
+        project_names = sorted(row["Project"] for row in license_rows)
+        with st.form("license_update_form"):
+            lu1, lu2 = st.columns(2)
+            selected_project_name = lu1.selectbox("Project", project_names, key="license_project")
+            selected_project = next((project for project in projects if project.project_name == selected_project_name), None)
+            current_license_date = _project_license_date(selected_project) if selected_project else None
+            extend_action = lu2.selectbox(
+                "Action",
+                ["Set exact date", "Extend by 1 month", "Extend by 12 months"],
+                key="license_action",
+            )
+            base_license_date = current_license_date or today
+            new_license_date = st.date_input(
+                "New License EOP",
+                value=_add_months(base_license_date, 12),
+                key="license_new_date",
+            )
+            if current_license_date:
+                st.caption(f"Current License EOP: {current_license_date.strftime('%Y-%m-%d')}")
+            else:
+                st.caption("Current License EOP: not set")
+            submit_license = st.form_submit_button("Save License Update")
+
+        if submit_license and selected_project is not None:
+            if extend_action == "Set exact date":
+                target_license_date = new_license_date
+            elif extend_action == "Extend by 1 month":
+                target_license_date = _add_months(max(base_license_date, today), 1)
+            else:
+                target_license_date = _add_months(max(base_license_date, today), 12)
+
+            selected_project.license_eop = datetime.datetime.combine(target_license_date, datetime.time.min)
+            try:
+                _save_projects(projects, _data_path)
+                load_data.clear()
+                st.session_state["_flash_success"] = (
+                    f"License EOP updated for {selected_project.project_name}: {target_license_date.strftime('%Y-%m-%d')}"
+                )
+                st.session_state["_flash_success_page"] = "🔐 Licenses"
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Failed to save license update: {exc}")
+
+    st.markdown("---")
+    st.subheader("All Project Licenses")
+    license_table_df = pd.DataFrame([
+        {
+            "Project": row["Project"],
+            "Country": row["Country"],
+            "Cameras": row["Cameras"],
+            "Project Status": row["Status"],
+            "License EOP": row["License EOP"],
+            "License Status": row["License Status"],
+        }
+        for row in filtered_license_rows
+    ])
+
+    def color_license_status(value):
+        key = str(value).strip().lower()
+        if key == "active":
+            return "color: #27AE60; font-weight: bold"
+        if key == "update next month":
+            return "color: #F39C12; font-weight: bold"
+        if key == "expired":
+            return "color: #E74C3C; font-weight: bold"
+        if key == "missing":
+            return "color: #7F8C8D; font-weight: bold"
+        return ""
+
+    st.dataframe(
+        license_table_df.style.map(color_license_status, subset=["License Status"]),
+        use_container_width=True,
+        hide_index=True,
+        height=480,
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
