@@ -1761,79 +1761,6 @@ elif page == "💸 Debt Report":
         except Exception as e:
             st.warning(f"PDF export unavailable: {e}")
 
-    st.markdown("---")
-
-    # ── Licenses expiring next month ──────────────────────────────────────────
-    st.subheader("Licenses Expiring Next Month")
-    today = datetime.datetime.now()
-    next_month = today.month % 12 + 1
-    next_month_year = today.year if today.month < 12 else today.year + 1
-    expiring = [
-        p for p in projects
-        if p.license_eop
-        and p.license_eop.month == next_month
-        and p.license_eop.year == next_month_year
-    ]
-    if expiring:
-        exp_rows = [{
-            "Project Name": p.project_name,
-            "Country":      p.country,
-            "# Cams":       p.num_cams,
-            "License EOP":  p.license_eop.strftime("%Y-%m-%d"),
-            "Status":       p.status,
-        } for p in sorted(expiring, key=lambda p: p.license_eop)]
-        st.dataframe(pd.DataFrame(exp_rows), use_container_width=True, hide_index=True)
-
-        # PDF export for licenses
-        try:
-            from reportlab.lib.pagesizes import A4
-            from reportlab.lib.units import cm
-            from reportlab.lib.styles import getSampleStyleSheet
-            from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-            from reportlab.lib import colors as rl_colors
-            from io import BytesIO
-            lic_buf = BytesIO()
-            lic_doc = SimpleDocTemplate(lic_buf, pagesize=A4,
-                                        leftMargin=1.5*cm, rightMargin=1.5*cm,
-                                        topMargin=1.5*cm, bottomMargin=1.5*cm)
-            styles = getSampleStyleSheet()
-            month_name_str = calendar.month_name[next_month]
-            elems = []
-            elems.append(Paragraph(
-                f"<b>Licenses to Renew — {month_name_str} {next_month_year}</b>",
-                styles["Title"]))
-            elems.append(Paragraph(
-                f"Generated: {today.strftime('%Y-%m-%d')}  |  {len(expiring)} license(s) expiring",
-                styles["Normal"]))
-            elems.append(Spacer(1, 0.4*cm))
-            tbl_data = [["Project Name", "Country", "# Cams", "License EOP", "Status"]]
-            for r in exp_rows:
-                tbl_data.append([r["Project Name"], r["Country"], str(r["# Cams"]),
-                                  r["License EOP"], r["Status"]])
-            t = Table(tbl_data, repeatRows=1,
-                      colWidths=[7*cm, 2.5*cm, 2*cm, 3*cm, 3*cm])
-            t.setStyle(TableStyle([
-                ("BACKGROUND",     (0, 0), (-1, 0), rl_colors.HexColor("#1B3A6B")),
-                ("TEXTCOLOR",      (0, 0), (-1, 0), rl_colors.white),
-                ("FONTNAME",       (0, 0), (-1, 0), "Helvetica-Bold"),
-                ("FONTSIZE",       (0, 0), (-1, -1), 8),
-                ("ROWBACKGROUNDS", (0, 1), (-1, -1),
-                 [rl_colors.white, rl_colors.HexColor("#FFF9E6")]),
-                ("GRID",           (0, 0), (-1, -1), 0.4, rl_colors.HexColor("#BDC3C7")),
-                ("BOTTOMPADDING",  (0, 0), (-1, -1), 4),
-                ("TOPPADDING",     (0, 0), (-1, -1), 4),
-            ]))
-            elems.append(t)
-            lic_doc.build(elems)
-            st.download_button("⬇️ Download Licenses PDF", lic_buf.getvalue(),
-                               file_name=f"licenses_{month_name_str}_{next_month_year}.pdf",
-                               mime="application/pdf")
-        except Exception as e:
-            st.warning(f"PDF export unavailable: {e}")
-    else:
-        st.info(f"No licenses expiring in {calendar.month_name[next_month]} {next_month_year}.")
-
-
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE: MONTHLY INVOICE
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1923,9 +1850,6 @@ elif page == "📅 Monthly Invoice":
                     "Projects": summary.project_count,
                     "Total (€)": f"{summary.total_amount:,.0f}",
                     "Status": summary.status,
-                    "Paid Rows": summary.paid_rows,
-                    "Unpaid Rows": summary.unpaid_rows,
-                    "Cancelled Rows": summary.cancelled_rows,
                     "Last Payment": summary.last_payment_date.strftime("%Y-%m-%d") if summary.last_payment_date else "",
                     "Included Projects": ", ".join(summary.project_names),
                 }
@@ -1949,7 +1873,17 @@ elif page == "📅 Monthly Invoice":
                 use_container_width=True,
                 hide_index=True,
                 height=260,
+                column_config={
+                    "Included Projects": st.column_config.TextColumn(width="large"),
+                },
             )
+
+            with st.expander("Show Full Included Projects", expanded=False):
+                for summary in filtered_monthly_summaries:
+                    st.markdown(
+                        f"**Invoice #{summary.invoice_number}**  |  {summary.project_count} project(s)  |  {summary.status}"
+                    )
+                    st.write(", ".join(summary.project_names))
         else:
             st.info("No combined monthly invoices were found in the ledger yet.")
 
