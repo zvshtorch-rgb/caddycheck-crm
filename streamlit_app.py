@@ -1493,119 +1493,6 @@ elif page == "🧾 Invoice Details":
             height=550,
         )
 
-    st.markdown("---")
-    st.subheader("Monthly Invoice Status")
-    st.caption(
-        "Combined monthly invoices are inferred when the same invoice number appears on multiple projects, which matches the shared invoices introduced from Aug 2025 onward."
-    )
-
-    monthly_invoice_summaries = group_monthly_invoices(invoices)
-    if monthly_invoice_summaries:
-        monthly_years = sorted({summary.year for summary in monthly_invoice_summaries if summary.year}, reverse=True)
-        monthly_statuses = sorted({summary.status for summary in monthly_invoice_summaries})
-
-        mi1, mi2 = st.columns(2)
-        monthly_year_filter = mi1.selectbox(
-            "Monthly Invoice Year",
-            ["All"] + [str(year) for year in monthly_years],
-            key="monthly_invoice_status_year",
-        )
-        monthly_status_filter = mi2.selectbox(
-            "Monthly Invoice Status",
-            ["All"] + monthly_statuses,
-            key="monthly_invoice_status_filter",
-        )
-
-        filtered_monthly_summaries = [
-            summary for summary in monthly_invoice_summaries
-            if (monthly_year_filter == "All" or str(summary.year or "") == monthly_year_filter)
-            and (monthly_status_filter == "All" or summary.status == monthly_status_filter)
-        ]
-
-        mm1, mm2, mm3, mm4 = st.columns(4)
-        mm1.metric("Monthly invoices", len(filtered_monthly_summaries))
-        mm2.metric(
-            "Grouped amount",
-            f"€{sum(summary.total_amount for summary in filtered_monthly_summaries):,.0f}",
-        )
-        mm3.metric(
-            "Paid monthly invoices",
-            sum(1 for summary in filtered_monthly_summaries if summary.status == "Paid"),
-        )
-        mm4.metric(
-            "Open / mixed",
-            sum(1 for summary in filtered_monthly_summaries if summary.status != "Paid"),
-        )
-
-        monthly_status_df = pd.DataFrame([
-            {
-                "Invoice #": str(summary.invoice_number),
-                "Year": _safe_str(summary.year or ""),
-                "Projects": summary.project_count,
-                "Total (€)": f"{summary.total_amount:,.0f}",
-                "Status": summary.status,
-                "Paid Rows": summary.paid_rows,
-                "Unpaid Rows": summary.unpaid_rows,
-                "Cancelled Rows": summary.cancelled_rows,
-                "Last Payment": summary.last_payment_date.strftime("%Y-%m-%d") if summary.last_payment_date else "",
-                "Included Projects": ", ".join(summary.project_names),
-            }
-            for summary in filtered_monthly_summaries
-        ])
-
-        def color_monthly_status(val):
-            value = str(val).strip().lower()
-            if value == "paid":
-                return "color: #27AE60; font-weight: bold"
-            if value in {"partial", "mixed", "paid / cancelled"}:
-                return "color: #F39C12; font-weight: bold"
-            if value in {"unpaid", "unpaid / cancelled"}:
-                return "color: #E74C3C; font-weight: bold"
-            if value == "cancelled":
-                return "color: #7F8C8D; font-weight: bold"
-            return ""
-
-        st.dataframe(
-            monthly_status_df.style.map(color_monthly_status, subset=["Status"]),
-            use_container_width=True,
-            hide_index=True,
-            height=260,
-        )
-    else:
-        st.info("No combined monthly invoices were found in the ledger yet.")
-
-    # ── Debt Summary ──────────────────────────────────────────────────────────
-    st.markdown("---")
-    st.subheader("Debt Summary by Project")
-    debt_df = pd.DataFrame([{
-        "Project":        _safe_str(ds.project_name),
-        "Country":        _safe_str(ds.country),
-        "# Cams":         _safe_int(ds.num_cams),
-        "Status":         _safe_str(ds.status),
-        "Expected (€)":   f"€{ds.total_expected:,.0f}",
-        "Paid (€)":       f"€{ds.total_paid:,.0f}",
-        "Cancelled (€)":  f"€{ds.total_cancelled:,.0f}",
-        "Debt (€)":       f"€{ds.total_unpaid:,.0f}",
-    } for ds in debt_summaries])
-
-    if sel_country != "All":
-        country_proj = {p.project_name for p in projects if p.country == sel_country}
-        debt_df = debt_df[debt_df["Project"].isin(country_proj)]
-
-    def color_debt(val):
-        try:
-            v = float(str(val).replace("€", "").replace(",", ""))
-            if v > 0:   return "color: #E74C3C; font-weight: bold"
-            return "color: #27AE60"
-        except Exception:
-            return ""
-
-    st.dataframe(
-        debt_df.style.map(color_debt, subset=["Debt (€)"]),
-        use_container_width=True,
-        height=400,
-    )
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE: DEBT REPORT
@@ -1984,6 +1871,87 @@ elif page == "📅 Monthly Invoice":
         } for r in preview_rows])
         st.subheader("Invoice Preview")
         st.dataframe(preview_df, use_container_width=True, hide_index=True)
+
+        st.markdown("---")
+        st.subheader("Monthly Invoice Status")
+        st.caption(
+            "Combined monthly invoices are inferred when the same invoice number appears on multiple projects, which matches the shared invoices introduced from Aug 2025 onward."
+        )
+
+        monthly_invoice_summaries = group_monthly_invoices(invoices)
+        if monthly_invoice_summaries:
+            monthly_years = sorted({summary.year for summary in monthly_invoice_summaries if summary.year}, reverse=True)
+            monthly_statuses = sorted({summary.status for summary in monthly_invoice_summaries})
+
+            mi1, mi2 = st.columns(2)
+            monthly_year_filter = mi1.selectbox(
+                "Monthly Invoice Year",
+                ["All"] + [str(year) for year in monthly_years],
+                key="monthly_invoice_status_year",
+            )
+            monthly_status_filter = mi2.selectbox(
+                "Monthly Invoice Status",
+                ["All"] + monthly_statuses,
+                key="monthly_invoice_status_filter",
+            )
+
+            filtered_monthly_summaries = [
+                summary for summary in monthly_invoice_summaries
+                if (monthly_year_filter == "All" or str(summary.year or "") == monthly_year_filter)
+                and (monthly_status_filter == "All" or summary.status == monthly_status_filter)
+            ]
+
+            mm1, mm2, mm3, mm4 = st.columns(4)
+            mm1.metric("Monthly invoices", len(filtered_monthly_summaries))
+            mm2.metric(
+                "Grouped amount",
+                f"€{sum(summary.total_amount for summary in filtered_monthly_summaries):,.0f}",
+            )
+            mm3.metric(
+                "Paid monthly invoices",
+                sum(1 for summary in filtered_monthly_summaries if summary.status == "Paid"),
+            )
+            mm4.metric(
+                "Open / mixed",
+                sum(1 for summary in filtered_monthly_summaries if summary.status != "Paid"),
+            )
+
+            monthly_status_df = pd.DataFrame([
+                {
+                    "Invoice #": str(summary.invoice_number),
+                    "Year": _safe_str(summary.year or ""),
+                    "Projects": summary.project_count,
+                    "Total (€)": f"{summary.total_amount:,.0f}",
+                    "Status": summary.status,
+                    "Paid Rows": summary.paid_rows,
+                    "Unpaid Rows": summary.unpaid_rows,
+                    "Cancelled Rows": summary.cancelled_rows,
+                    "Last Payment": summary.last_payment_date.strftime("%Y-%m-%d") if summary.last_payment_date else "",
+                    "Included Projects": ", ".join(summary.project_names),
+                }
+                for summary in filtered_monthly_summaries
+            ])
+
+            def color_monthly_status(val):
+                value = str(val).strip().lower()
+                if value == "paid":
+                    return "color: #27AE60; font-weight: bold"
+                if value in {"partial", "mixed", "paid / cancelled"}:
+                    return "color: #F39C12; font-weight: bold"
+                if value in {"unpaid", "unpaid / cancelled"}:
+                    return "color: #E74C3C; font-weight: bold"
+                if value == "cancelled":
+                    return "color: #7F8C8D; font-weight: bold"
+                return ""
+
+            st.dataframe(
+                monthly_status_df.style.map(color_monthly_status, subset=["Status"]),
+                use_container_width=True,
+                hide_index=True,
+                height=260,
+            )
+        else:
+            st.info("No combined monthly invoices were found in the ledger yet.")
 
         if CAN_EDIT:
             st.markdown("---")
