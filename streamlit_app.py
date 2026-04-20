@@ -50,6 +50,40 @@ def _safe_str(v):
         pass
     return str(v)
 
+
+def _invoice_category_label(invoice) -> str:
+    return str(getattr(invoice, "maintenance_year", "")).strip().lower()
+
+
+def _is_paid_trial_category(invoice) -> bool:
+    checker = getattr(invoice, "is_paid_trial_category", None)
+    if callable(checker):
+        try:
+            return bool(checker())
+        except Exception:
+            pass
+    return "paid trial" in _invoice_category_label(invoice)
+
+
+def _is_new_installation_category(invoice) -> bool:
+    checker = getattr(invoice, "is_new_installation_category", None)
+    if callable(checker):
+        try:
+            return bool(checker())
+        except Exception:
+            pass
+    return _invoice_category_label(invoice) == "y1"
+
+
+def _is_maintenance_category(invoice) -> bool:
+    checker = getattr(invoice, "is_maintenance_category", None)
+    if callable(checker):
+        try:
+            return bool(checker())
+        except Exception:
+            pass
+    return not _is_new_installation_category(invoice) and not _is_paid_trial_category(invoice)
+
 from config.settings import (
     MONTH_ORDER,
     get_email_config,
@@ -460,11 +494,11 @@ def _answer_data_question(question: str, projects, invoices, debt_summaries) -> 
         if project_name:
             debt_rows = [inv for inv in debt_rows if inv.project_name == project_name]
         if "trial" in q:
-            debt_rows = [inv for inv in debt_rows if inv.is_paid_trial_category()]
+            debt_rows = [inv for inv in debt_rows if _is_paid_trial_category(inv)]
         elif "y1" in q or "first year" in q or "new installation" in q:
-            debt_rows = [inv for inv in debt_rows if inv.is_new_installation_category()]
+            debt_rows = [inv for inv in debt_rows if _is_new_installation_category(inv)]
         elif "y2+" in q or "maintenance" in q:
-            debt_rows = [inv for inv in debt_rows if inv.is_maintenance_category()]
+            debt_rows = [inv for inv in debt_rows if _is_maintenance_category(inv)]
         if not debt_rows:
             return "No unpaid invoice rows match that question.", None
         total_amount = sum(float(inv.payment_amount) for inv in debt_rows)
@@ -1563,11 +1597,11 @@ elif page == "💸 Debt Report":
     if dsel_search.strip():
         debt_inv = [i for i in debt_inv if dsel_search.lower() in i.project_name.lower()]
     if dsel_debt_type == "New Installation (Y1)":
-        debt_inv = [i for i in debt_inv if i.is_new_installation_category()]
+        debt_inv = [i for i in debt_inv if _is_new_installation_category(i)]
     elif dsel_debt_type == "Paid Trials":
-        debt_inv = [i for i in debt_inv if i.is_paid_trial_category()]
+        debt_inv = [i for i in debt_inv if _is_paid_trial_category(i)]
     elif dsel_debt_type == "Maintenance (Y2+)":
-        debt_inv = [i for i in debt_inv if i.is_maintenance_category()]
+        debt_inv = [i for i in debt_inv if _is_maintenance_category(i)]
 
     # ── Summary metrics ───────────────────────────────────────────────────────
     total_debt_amt  = sum(i.payment_amount for i in debt_inv)
@@ -1580,9 +1614,9 @@ elif page == "💸 Debt Report":
     if dsel_search.strip():
         all_unpaid = [i for i in all_unpaid if dsel_search.lower() in i.project_name.lower()]
 
-    y1_total_amt = sum(i.payment_amount for i in all_unpaid if i.is_new_installation_category())
-    paid_trial_total_amt = sum(i.payment_amount for i in all_unpaid if i.is_paid_trial_category())
-    y2_total_amt = sum(i.payment_amount for i in all_unpaid if i.is_maintenance_category())
+    y1_total_amt = sum(i.payment_amount for i in all_unpaid if _is_new_installation_category(i))
+    paid_trial_total_amt = sum(i.payment_amount for i in all_unpaid if _is_paid_trial_category(i))
+    y2_total_amt = sum(i.payment_amount for i in all_unpaid if _is_maintenance_category(i))
 
     mc1, mc2, mc3, mc4, mc5, mc6 = st.columns(6)
     mc1.metric("Unpaid Invoices",  len(debt_inv))
@@ -1691,9 +1725,9 @@ elif page == "💸 Debt Report":
             from io import BytesIO
 
             # Split unpaid invoices into Y1, paid trials, and Y2+
-            y1_inv  = [i for i in debt_inv if i.is_new_installation_category()]
-            trial_inv = [i for i in debt_inv if i.is_paid_trial_category()]
-            y2_inv  = [i for i in debt_inv if i.is_maintenance_category()]
+            y1_inv  = [i for i in debt_inv if _is_new_installation_category(i)]
+            trial_inv = [i for i in debt_inv if _is_paid_trial_category(i)]
+            y2_inv  = [i for i in debt_inv if _is_maintenance_category(i)]
 
             def _proj_debt_rows(inv_list):
                 pd_: dict = defaultdict(lambda: {"inv_nos": set(), "total": 0.0, "country": ""})
