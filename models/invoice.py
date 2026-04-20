@@ -33,6 +33,20 @@ class Invoice:
             return int(label[1:])
         return 0
 
+    def is_paid_trial_category(self) -> bool:
+        """Return True for paid-trial invoice rows."""
+        label = str(self.maintenance_year).strip().lower()
+        return "paid trial" in label
+
+    def is_new_installation_category(self) -> bool:
+        """Return True for first-year debt classification."""
+        label = str(self.maintenance_year).strip().lower()
+        return label == "y1"
+
+    def is_maintenance_category(self) -> bool:
+        """Return True for maintenance debt classification (everything not Y1/trial)."""
+        return not self.is_new_installation_category() and not self.is_paid_trial_category()
+
 
 @dataclass
 class DebtSummary:

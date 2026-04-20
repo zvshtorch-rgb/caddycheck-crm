@@ -459,10 +459,12 @@ def _answer_data_question(question: str, projects, invoices, debt_summaries) -> 
             debt_rows = [inv for inv in debt_rows if inv.project_name in project_names_in_country]
         if project_name:
             debt_rows = [inv for inv in debt_rows if inv.project_name == project_name]
-        if "y1" in q or "first year" in q or "new installation" in q:
-            debt_rows = [inv for inv in debt_rows if str(inv.maintenance_year).strip().upper() == "Y1"]
+        if "trial" in q:
+            debt_rows = [inv for inv in debt_rows if inv.is_paid_trial_category()]
+        elif "y1" in q or "first year" in q or "new installation" in q:
+            debt_rows = [inv for inv in debt_rows if inv.is_new_installation_category()]
         elif "y2+" in q or "maintenance" in q:
-            debt_rows = [inv for inv in debt_rows if str(inv.maintenance_year).strip().upper() != "Y1"]
+            debt_rows = [inv for inv in debt_rows if inv.is_maintenance_category()]
         if not debt_rows:
             return "No unpaid invoice rows match that question.", None
         total_amount = sum(float(inv.payment_amount) for inv in debt_rows)
@@ -1500,7 +1502,7 @@ elif page == "🧾 Invoice Details":
 elif page == "💸 Debt Report":
     st.title("💸 Debt Report")
 
-    debt_type_options = ["All", "New Installation (Y1)", "Maintenance (Y2+)"]
+    debt_type_options = ["All", "New Installation (Y1)", "Paid Trials", "Maintenance (Y2+)"]
     pending_debt_type = st.session_state.pop("_pending_dr_debt_type", None)
     if pending_debt_type in debt_type_options:
         st.session_state["dr_debt_type"] = pending_debt_type
@@ -1561,9 +1563,11 @@ elif page == "💸 Debt Report":
     if dsel_search.strip():
         debt_inv = [i for i in debt_inv if dsel_search.lower() in i.project_name.lower()]
     if dsel_debt_type == "New Installation (Y1)":
-        debt_inv = [i for i in debt_inv if str(i.maintenance_year).strip().upper() == "Y1"]
+        debt_inv = [i for i in debt_inv if i.is_new_installation_category()]
+    elif dsel_debt_type == "Paid Trials":
+        debt_inv = [i for i in debt_inv if i.is_paid_trial_category()]
     elif dsel_debt_type == "Maintenance (Y2+)":
-        debt_inv = [i for i in debt_inv if str(i.maintenance_year).strip().upper() != "Y1"]
+        debt_inv = [i for i in debt_inv if i.is_maintenance_category()]
 
     # ── Summary metrics ───────────────────────────────────────────────────────
     total_debt_amt  = sum(i.payment_amount for i in debt_inv)
@@ -1576,20 +1580,25 @@ elif page == "💸 Debt Report":
     if dsel_search.strip():
         all_unpaid = [i for i in all_unpaid if dsel_search.lower() in i.project_name.lower()]
 
-    y1_total_amt = sum(i.payment_amount for i in all_unpaid if str(i.maintenance_year).strip().upper() == "Y1")
-    y2_total_amt = sum(i.payment_amount for i in all_unpaid if str(i.maintenance_year).strip().upper() != "Y1")
+    y1_total_amt = sum(i.payment_amount for i in all_unpaid if i.is_new_installation_category())
+    paid_trial_total_amt = sum(i.payment_amount for i in all_unpaid if i.is_paid_trial_category())
+    y2_total_amt = sum(i.payment_amount for i in all_unpaid if i.is_maintenance_category())
 
-    mc1, mc2, mc3, mc4, mc5 = st.columns(5)
+    mc1, mc2, mc3, mc4, mc5, mc6 = st.columns(6)
     mc1.metric("Unpaid Invoices",  len(debt_inv))
     mc2.metric("Projects with Debt", proj_with_debt)
     mc3.metric("Total Debt",       f"€{total_debt_amt:,.0f}")
     mc4.metric("Y1 Debt",          f"€{y1_total_amt:,.0f}")
-    mc5.metric("Y2+ Debt",         f"€{y2_total_amt:,.0f}")
+    mc5.metric("Paid Trials",      f"€{paid_trial_total_amt:,.0f}")
+    mc6.metric("Y2+ Debt",         f"€{y2_total_amt:,.0f}")
 
     if mc4.button("Show Y1 Invoice List", key="dr_show_y1", use_container_width=True):
         st.session_state["_pending_dr_debt_type"] = "New Installation (Y1)"
         st.rerun()
-    if mc5.button("Show Y2+ Invoice List", key="dr_show_y2", use_container_width=True):
+    if mc5.button("Show Paid Trials", key="dr_show_trials", use_container_width=True):
+        st.session_state["_pending_dr_debt_type"] = "Paid Trials"
+        st.rerun()
+    if mc6.button("Show Y2+ Invoice List", key="dr_show_y2", use_container_width=True):
         st.session_state["_pending_dr_debt_type"] = "Maintenance (Y2+)"
         st.rerun()
 
@@ -1600,10 +1609,12 @@ elif page == "💸 Debt Report":
 
     if dsel_debt_type == "New Installation (Y1)":
         st.caption("Showing only first-year debt (Y1).")
+    elif dsel_debt_type == "Paid Trials":
+        st.caption("Showing only paid-trial debt.")
     elif dsel_debt_type == "Maintenance (Y2+)":
         st.caption("Showing only maintenance debt (Y2+).")
     else:
-        st.caption("Use the Debt Type filter to switch between all debt, Y1, and Y2+.")
+        st.caption("Use the Debt Type filter to switch between all debt, Y1, paid trials, and Y2+.")
 
     st.markdown("---")
 
@@ -1679,9 +1690,10 @@ elif page == "💸 Debt Report":
             from reportlab.lib import colors as rl_colors
             from io import BytesIO
 
-            # Split unpaid invoices into Y1 and Y2+
-            y1_inv  = [i for i in debt_inv if str(i.maintenance_year).strip().upper() == "Y1"]
-            y2_inv  = [i for i in debt_inv if str(i.maintenance_year).strip().upper() != "Y1"]
+            # Split unpaid invoices into Y1, paid trials, and Y2+
+            y1_inv  = [i for i in debt_inv if i.is_new_installation_category()]
+            trial_inv = [i for i in debt_inv if i.is_paid_trial_category()]
+            y2_inv  = [i for i in debt_inv if i.is_maintenance_category()]
 
             def _proj_debt_rows(inv_list):
                 pd_: dict = defaultdict(lambda: {"inv_nos": set(), "total": 0.0, "country": ""})
@@ -1744,10 +1756,22 @@ elif page == "💸 Debt Report":
                 elems.append(Paragraph("No Y1 unpaid invoices.", styles["Normal"]))
             elems.append(Spacer(1, 0.6*cm))
 
-            # Section B: Y2+
+            # Section B: Paid Trials
+            trial_total = sum(i.payment_amount for i in trial_inv)
+            elems.append(Paragraph(
+                f"B. Paid Trials  —  €{trial_total:,.0f}", sec_style))
+            elems.append(Spacer(1, 0.2*cm))
+            trial_rows = _proj_debt_rows(trial_inv)
+            if trial_rows:
+                elems.append(_make_section_table(trial_rows, rl_colors))
+            else:
+                elems.append(Paragraph("No unpaid paid-trial invoices.", styles["Normal"]))
+            elems.append(Spacer(1, 0.6*cm))
+
+            # Section C: Y2+
             y2_total = sum(i.payment_amount for i in y2_inv)
             elems.append(Paragraph(
-                f"B. Maintenance Debt (Y2+)  —  €{y2_total:,.0f}", sec_style))
+                f"C. Maintenance Debt (Y2+)  —  €{y2_total:,.0f}", sec_style))
             elems.append(Spacer(1, 0.2*cm))
             y2_rows = _proj_debt_rows(y2_inv)
             if y2_rows:
