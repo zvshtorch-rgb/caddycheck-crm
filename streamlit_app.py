@@ -1407,6 +1407,18 @@ elif page == "🧾 Invoice Details":
     if CAN_EDIT:
         st.info("✏️ Admin mode: you can edit cells directly. Click **Save Changes** when done.")
 
+        def _parse_invoice_date(value):
+            if value in (None, ""):
+                return None
+            if isinstance(value, datetime.datetime):
+                return value
+            if isinstance(value, datetime.date):
+                return datetime.datetime.combine(value, datetime.time.min)
+            try:
+                return datetime.datetime.strptime(str(value), "%Y-%m-%d")
+            except Exception:
+                return None
+
         with st.expander("📥 Import Invoice XLSX", expanded=False):
             if _is_excel_source(_data_path):
                 st.warning("XLSX import is only available when the app is connected to Supabase.")
@@ -1468,9 +1480,17 @@ elif page == "🧾 Invoice Details":
         if st.button("➕ Add New Invoice", key="btn_add_inv"):
             st.session_state["add_inv_row"] = st.session_state.get("add_inv_row", 0) + 1
 
+        invoice_project_options = [""] + sorted({p.project_name for p in projects if p.project_name})
+        invoice_paid_options = ["No", "Yes", "cancelled"]
+        invoice_year_options = [""] + [str(year) for year in range(datetime.date.today().year + 1, 2014, -1)]
+        invoice_maint_options = []
+        for label in maint_years + [f"Y{i}" for i in range(1, 11)] + ["Paid Trial-0.5Y"]:
+            if label and label not in invoice_maint_options:
+                invoice_maint_options.append(label)
+
         _empty_inv = {"_invoice_index": "", "Invoice #": "", "Project": "", "Maint. Year": "Y1",
                       "Amount (€)": 0.0, "Cameras": 0,
-                      "Payment Date": "", "Paid": "No", "Year": str(datetime.date.today().year)}
+                      "Payment Date": None, "Paid": "No", "Year": str(datetime.date.today().year)}
         n_new_inv = st.session_state.get("add_inv_row", 0)
         if n_new_inv:
             empty_rows = pd.DataFrame([_empty_inv] * n_new_inv)
@@ -1483,7 +1503,35 @@ elif page == "🧾 Invoice Details":
             use_container_width=True,
             height=550,
             num_rows="dynamic",
-            column_config={"_invoice_index": None},
+            column_config={
+                "_invoice_index": None,
+                "Invoice #": st.column_config.NumberColumn(
+                    "Invoice #",
+                    min_value=0,
+                    step=1,
+                    format="%d",
+                ),
+                "Project": st.column_config.SelectboxColumn(
+                    "Project",
+                    options=invoice_project_options,
+                ),
+                "Maint. Year": st.column_config.SelectboxColumn(
+                    "Maint. Year",
+                    options=invoice_maint_options,
+                ),
+                "Payment Date": st.column_config.DateColumn(
+                    "Payment Date",
+                    format="YYYY-MM-DD",
+                ),
+                "Paid": st.column_config.SelectboxColumn(
+                    "Paid",
+                    options=invoice_paid_options,
+                ),
+                "Year": st.column_config.SelectboxColumn(
+                    "Year",
+                    options=invoice_year_options,
+                ),
+            },
             key=f"inv_editor_{n_new_inv}",
         )
         if st.button("💾 Save Changes", key="save_invoices"):
@@ -1541,12 +1589,7 @@ elif page == "🧾 Invoice Details":
                     inv.payment_amount = _safe_float(row.get("Amount (€)", 0))
                     inv.cameras_number = _safe_int(row.get("Cameras", 0)) or None
                     inv.year           = _safe_int(row.get("Year")) or None
-                pd_str = _safe_str(row.get("Payment Date", "")).strip()
-                if pd_str:
-                    try:
-                        inv.payment_date = datetime.datetime.strptime(pd_str, "%Y-%m-%d")
-                    except Exception:
-                        pass
+                inv.payment_date = _parse_invoice_date(row.get("Payment Date"))
             try:
                 _save_invoices(invoices, _data_path)
                 load_data.clear()
