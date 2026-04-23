@@ -1383,12 +1383,12 @@ elif page == "🧾 Invoice Details":
         [
             {
                 "_invoice_index": invoice_index_map[id(i)],
-                "Invoice #": _safe_str(_safe_int(i.invoice_number) or ""),
+                "Invoice #": _safe_int(i.invoice_number) or None,
                 "Project": _safe_str(i.project_name),
                 "Maint. Year": _safe_str(i.maintenance_year),
                 "Amount (€)": _safe_float(i.payment_amount),
                 "Cameras": _safe_int(i.cameras_number),
-                "Payment Date": i.payment_date.strftime("%Y-%m-%d") if i.payment_date else "",
+                "Payment Date": i.payment_date.date() if i.payment_date else None,
                 "Paid": _safe_str(i.paid),
                 "Year": _safe_str(_safe_int(i.year) or ""),
             }
@@ -1488,7 +1488,7 @@ elif page == "🧾 Invoice Details":
             if label and label not in invoice_maint_options:
                 invoice_maint_options.append(label)
 
-        _empty_inv = {"_invoice_index": "", "Invoice #": "", "Project": "", "Maint. Year": "Y1",
+        _empty_inv = {"_invoice_index": None, "Invoice #": None, "Project": "", "Maint. Year": "Y1",
                       "Amount (€)": 0.0, "Cameras": 0,
                       "Payment Date": None, "Paid": "No", "Year": str(datetime.date.today().year)}
         n_new_inv = st.session_state.get("add_inv_row", 0)
