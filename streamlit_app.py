@@ -992,9 +992,23 @@ elif page == "🏗️ Projects":
     if page_flash_success:
         st.success(page_flash_success)
 
+    def _parse_project_date(value):
+        if value in (None, ""):
+            return None
+        if isinstance(value, datetime.datetime):
+            return value
+        if isinstance(value, datetime.date):
+            return datetime.datetime.combine(value, datetime.time.min)
+        try:
+            return datetime.datetime.strptime(str(value), "%Y-%m-%d")
+        except Exception:
+            return None
+
     # Filters
     col1, col2, col3 = st.columns(3)
     countries = sorted({p.country for p in projects if p.country})
+    project_statuses = sorted({p.status for p in projects if p.status})
+    install_year_options = [""] + [str(year) for year in range(datetime.date.today().year + 1, 2014, -1)]
     sel_country = col1.selectbox("Country", ["All"] + countries, key="proj_country")
     sel_status  = col2.selectbox("Status",  ["All", "Active", "Offline"], key="proj_status")
     search      = col3.text_input("Search project name", key="proj_search")
@@ -1019,9 +1033,9 @@ elif page == "🏗️ Projects":
         "# Cams":          _safe_int(p.num_cams),
         "Payment Month":   _safe_str(p.payment_month),
         "Install Year":    _safe_str(p.installation_year),
-        "Activation Date": p.activation_date.strftime("%Y-%m-%d") if p.activation_date else "",
+        "Activation Date": p.activation_date.date() if p.activation_date else None,
         "Status":          _safe_str(p.status),
-        "License EOP":     p.license_eop.strftime("%Y-%m-%d") if p.license_eop else "",
+        "License EOP":     p.license_eop.date() if p.license_eop else None,
     } for p in filtered])
 
     def color_status(val):
@@ -1037,7 +1051,7 @@ elif page == "🏗️ Projects":
 
         _empty_proj = {"Project Name": "", "Country": "", "# Cams": 0,
                        "Payment Month": "", "Install Year": "",
-                       "Activation Date": "", "Status": "Active", "License EOP": ""}
+                       "Activation Date": None, "Status": "Active", "License EOP": None}
         n_new = st.session_state.get("add_proj_row", 0)
         if n_new:
             empty_rows = pd.DataFrame([_empty_proj] * n_new)
@@ -1050,6 +1064,28 @@ elif page == "🏗️ Projects":
             use_container_width=True,
             height=600,
             num_rows="dynamic",
+            column_config={
+                "Country": st.column_config.SelectboxColumn(
+                    "Country",
+                    options=[""] + countries,
+                ),
+                "Install Year": st.column_config.SelectboxColumn(
+                    "Install Year",
+                    options=install_year_options,
+                ),
+                "Activation Date": st.column_config.DateColumn(
+                    "Activation Date",
+                    format="YYYY-MM-DD",
+                ),
+                "Status": st.column_config.SelectboxColumn(
+                    "Status",
+                    options=([""] + project_statuses) if project_statuses else ["", "Active", "Offline"],
+                ),
+                "License EOP": st.column_config.DateColumn(
+                    "License EOP",
+                    format="YYYY-MM-DD",
+                ),
+            },
             key=f"proj_editor_{n_new}",
         )
         if st.button("💾 Save Changes", key="save_projects"):
@@ -1072,14 +1108,8 @@ elif page == "🏗️ Projects":
                 p.payment_month     = _safe_str(row.get("Payment Month", ""))
                 p.installation_year = _safe_int(row.get("Install Year")) or None
                 p.status            = _safe_str(row.get("Status", ""))
-                eop = row.get("License EOP", "")
-                if eop:
-                    try:
-                        p.license_eop = datetime.datetime.strptime(str(eop), "%Y-%m-%d")
-                    except Exception:
-                        pass
-                else:
-                    p.license_eop = None
+                p.activation_date   = _parse_project_date(row.get("Activation Date"))
+                p.license_eop       = _parse_project_date(row.get("License EOP"))
             try:
                 _save_projects(projects, _data_path)
                 load_data.clear()
