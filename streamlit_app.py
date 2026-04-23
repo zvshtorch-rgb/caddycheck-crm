@@ -143,7 +143,7 @@ def _check_login(username: str, password: str):
     except Exception:
         passwords = {}
     # Fall back to hardcoded defaults if secrets not configured
-    defaults = {"admin": "admin123", "viewer": "view123"}
+    defaults = {"admin": "admin123", "viewer": "viewer123"}
     passwords = {**defaults, **passwords}
     if username in passwords and passwords[username] == password:
         return username  # role == username key
