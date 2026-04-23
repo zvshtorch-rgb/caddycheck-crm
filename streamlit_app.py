@@ -1009,6 +1009,7 @@ elif page == "🏗️ Projects":
     countries = sorted({p.country for p in projects if p.country})
     project_statuses = sorted({p.status for p in projects if p.status})
     install_year_options = [""] + [str(year) for year in range(datetime.date.today().year + 1, 2014, -1)]
+    payment_month_options = [""] + MONTH_ORDER
     sel_country = col1.selectbox("Country", ["All"] + countries, key="proj_country")
     sel_status  = col2.selectbox("Status",  ["All", "Active", "Offline"], key="proj_status")
     search      = col3.text_input("Search project name", key="proj_search")
@@ -1072,6 +1073,10 @@ elif page == "🏗️ Projects":
                 "Install Year": st.column_config.SelectboxColumn(
                     "Install Year",
                     options=install_year_options,
+                ),
+                "Payment Month": st.column_config.SelectboxColumn(
+                    "Payment Month",
+                    options=payment_month_options,
                 ),
                 "Activation Date": st.column_config.DateColumn(
                     "Activation Date",
