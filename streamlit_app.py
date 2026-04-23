@@ -937,7 +937,28 @@ if page == "📊 Dashboard":
         fig.update_traces(hovertemplate="<b>%{x|%b %Y}</b><br>" + y_label + ": %{y:,.0f}<extra></extra>")
         fig.update_layout(height=380)
 
-    st.plotly_chart(fig, use_container_width=True)
+    fig.update_layout(dragmode=False)
+    fig.update_xaxes(fixedrange=True)
+    fig.update_yaxes(fixedrange=True)
+
+    st.plotly_chart(
+        fig,
+        use_container_width=True,
+        config={
+            "scrollZoom": False,
+            "displaylogo": False,
+            "doubleClick": "reset",
+            "modeBarButtonsToRemove": [
+                "zoom2d",
+                "pan2d",
+                "select2d",
+                "lasso2d",
+                "zoomIn2d",
+                "zoomOut2d",
+                "autoScale2d",
+            ],
+        },
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
