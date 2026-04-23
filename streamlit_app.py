@@ -136,6 +136,8 @@ ROLES = {
     "viewer": {"label": "Viewer", "can_edit": False},
 }
 
+APP_BUILD = "viewer-open-2026-04-23-1"
+
 def _check_login(username: str, password: str):
     """Return role string if credentials match, else None."""
     normalized_username = str(username or "").strip().lower()
@@ -162,6 +164,7 @@ def _check_login(username: str, password: str):
 
 def _login_form():
     st.markdown("## 🔐 CaddyCheck CRM Login")
+    st.caption(f"Build: {APP_BUILD}")
     with st.form("login_form"):
         username = st.selectbox("Role", list(ROLES.keys()), format_func=lambda k: ROLES[k]["label"])
         password = st.text_input("Password", type="password")
