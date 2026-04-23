@@ -1524,7 +1524,7 @@ elif page == "🧾 Invoice Details":
             }
         )
         invoice_paid_options = ["No", "Yes", "cancelled"]
-        invoice_year_options = [""] + [str(year) for year in range(datetime.date.today().year + 1, 2014, -1)]
+        invoice_year_options = [""] + [str(year) for year in range(datetime.date.today().year + 1, 2012, -1)]
         invoice_maint_options = []
         for label in maint_years + [f"Y{i}" for i in range(1, 11)] + ["Paid Trial-0.5Y"]:
             if label and label not in invoice_maint_options:
