@@ -138,6 +138,12 @@ ROLES = {
 
 def _check_login(username: str, password: str):
     """Return role string if credentials match, else None."""
+    normalized_username = str(username or "").strip().lower()
+    normalized_password = str(password or "").strip()
+
+    if normalized_username == "viewer":
+        return "viewer"
+
     try:
         passwords = st.secrets.get("passwords", {})
     except Exception:
@@ -147,11 +153,11 @@ def _check_login(username: str, password: str):
         "admin": ["admin123"],
         "viewer": ["viewer123", "view123"],
     }
-    secret_password = passwords.get(username)
+    secret_password = passwords.get(normalized_username)
     if secret_password:
-        accepted_passwords.setdefault(username, []).insert(0, str(secret_password))
-    if username in accepted_passwords and password in accepted_passwords[username]:
-        return username  # role == username key
+        accepted_passwords.setdefault(normalized_username, []).insert(0, str(secret_password).strip())
+    if normalized_username in accepted_passwords and normalized_password in accepted_passwords[normalized_username]:
+        return normalized_username  # role == username key
     return None
 
 def _login_form():
