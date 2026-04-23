@@ -899,6 +899,14 @@ if page == "📊 Dashboard":
         )
         fig.update_traces(hovertemplate="<b>%{x}</b><br>" + y_label + ": %{y:,.0f}<extra></extra>")
         fig.update_layout(showlegend=False, height=380)
+        fig.update_xaxes(
+            type="category",
+            categoryorder="array",
+            categoryarray=labels,
+            tickmode="array",
+            tickvals=labels,
+            ticktext=labels,
+        )
 
     else:  # Monthly
         rows = []
