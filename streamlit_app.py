@@ -1511,7 +1511,18 @@ elif page == "🧾 Invoice Details":
         if st.button("➕ Add New Invoice", key="btn_add_inv"):
             st.session_state["add_inv_row"] = st.session_state.get("add_inv_row", 0) + 1
 
-        invoice_project_options = [""] + sorted({p.project_name for p in projects if p.project_name})
+        invoice_project_options = [""] + sorted(
+            {
+                _safe_str(p.project_name).strip()
+                for p in projects
+                if _safe_str(p.project_name).strip()
+            }
+            | {
+                _safe_str(inv.project_name).strip()
+                for inv in invoices
+                if _safe_str(inv.project_name).strip()
+            }
+        )
         invoice_paid_options = ["No", "Yes", "cancelled"]
         invoice_year_options = [""] + [str(year) for year in range(datetime.date.today().year + 1, 2014, -1)]
         invoice_maint_options = []
