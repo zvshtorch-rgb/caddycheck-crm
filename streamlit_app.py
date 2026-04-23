@@ -1419,6 +1419,34 @@ elif page == "🧾 Invoice Details":
             except Exception:
                 return None
 
+        def _invoice_row_has_values(row) -> bool:
+            return any([
+                row.get("Invoice #") not in (None, ""),
+                _safe_str(row.get("Maint. Year", "")).strip(),
+                _safe_float(row.get("Amount (€)", 0)) != 0,
+                _safe_int(row.get("Cameras", 0)) != 0,
+                row.get("Payment Date") not in (None, ""),
+                _safe_str(row.get("Paid", "")).strip() not in ("", "No"),
+                _safe_str(row.get("Year", "")).strip(),
+            ])
+
+        blank_project_invoices = [inv for inv in invoices if not _safe_str(inv.project_name).strip()]
+        if blank_project_invoices:
+            st.warning(
+                f"Found {len(blank_project_invoices)} invoice row(s) with an empty project name. "
+                "Remove them before saving other invoice changes."
+            )
+            if st.button("🧹 Remove Blank Project Invoice Rows", key="remove_blank_project_invoices"):
+                invoices[:] = [inv for inv in invoices if _safe_str(inv.project_name).strip()]
+                try:
+                    _save_invoices(invoices, _data_path)
+                    load_data.clear()
+                    st.session_state["_flash_success"] = "Blank-project invoice rows were removed."
+                    st.session_state["_flash_success_page"] = "🧾 Invoice Details"
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Failed to remove blank-project invoice rows: {exc}")
+
         with st.expander("📥 Import Invoice XLSX", expanded=False):
             if _is_excel_source(_data_path):
                 st.warning("XLSX import is only available when the app is connected to Supabase.")
@@ -1459,9 +1487,12 @@ elif page == "🧾 Invoice Details":
                         if preview_df.empty:
                             st.warning("No invoice rows were found in the uploaded XLSX.")
                         else:
+                            blank_import_rows = [row for row in import_rows if not _safe_str(row.get("project_name", "")).strip()]
                             project_counts = preview_df["Project"].value_counts()
                             duplicate_projects = project_counts[project_counts > 1]
-                            if not duplicate_projects.empty:
+                            if blank_import_rows:
+                                st.error("The uploaded file contains invoice rows with an empty project name. Import was blocked.")
+                            elif not duplicate_projects.empty:
                                 st.error(
                                     "The uploaded file contains duplicate project rows: "
                                     + ", ".join(duplicate_projects.index.tolist())
@@ -1535,6 +1566,19 @@ elif page == "🧾 Invoice Details":
             key=f"inv_editor_{n_new_inv}",
         )
         if st.button("💾 Save Changes", key="save_invoices"):
+            invalid_editor_rows = []
+            for row_idx, row in edited_inv.iterrows():
+                project = _safe_str(row.get("Project", "")).strip()
+                if not project and _invoice_row_has_values(row):
+                    invalid_editor_rows.append(row_idx + 1)
+
+            if invalid_editor_rows:
+                st.error(
+                    "Cannot save invoice rows with invoice data but no project name. "
+                    f"Fix or remove row(s): {', '.join(str(idx) for idx in invalid_editor_rows[:10])}"
+                )
+                st.stop()
+
             from models.invoice import Invoice as InvoiceModel
             inv_map = {(i.invoice_number, i.project_name.strip().lower()): i for i in invoices if i.invoice_number}
             # Secondary lookup for invoices without invoice numbers — match by (project, maint_year, year)
