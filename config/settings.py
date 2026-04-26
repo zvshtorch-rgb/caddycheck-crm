@@ -148,7 +148,9 @@ def get_email_config() -> dict:
     if EMAIL_CONFIG_FILE.exists():
         try:
             with open(EMAIL_CONFIG_FILE, "r", encoding="utf-8") as f:
-                defaults.update(json.load(f))
+                file_config = json.load(f)
+                file_config.pop("smtp_password", None)
+                defaults.update(file_config)
         except Exception:
             pass
     # 2. Override with st.secrets [email] section if available (Streamlit Cloud)
@@ -161,6 +163,9 @@ def get_email_config() -> dict:
                 if k in ("default_recipients", "default_cc") and isinstance(v, str):
                     v = [x.strip() for x in v.split(",") if x.strip()]
                 defaults[k] = v
+        session_password = st.session_state.get("_smtp_password_override", "")
+        if session_password:
+            defaults["smtp_password"] = session_password
     except Exception:
         pass
     return defaults
@@ -190,11 +195,13 @@ def save_project_overrides(overrides: dict) -> None:
 
 
 def save_email_config(config: dict) -> None:
-    """Persist email configuration to file."""
+    """Persist email configuration to file without storing SMTP passwords."""
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    safe_config = dict(config)
+    safe_config.pop("smtp_password", None)
     with open(EMAIL_CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(config, f, indent=2)
+        json.dump(safe_config, f, indent=2)
 
 
 def load_sent_invoices_log() -> list:

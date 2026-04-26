@@ -2,6 +2,7 @@
 import datetime
 import calendar
 import io
+import logging
 import re
 import sys
 from pathlib import Path
@@ -17,6 +18,8 @@ import openpyxl
 sys.path.insert(0, str(Path(__file__).parent))
 
 import math
+
+logger = logging.getLogger(__name__)
 
 def _safe_int(v, default=0):
     """Convert v to int safely, returning default for None/NaN/empty."""
@@ -143,28 +146,29 @@ def _check_login(username: str, password: str):
     normalized_username = str(username or "").strip().lower()
     normalized_password = str(password or "").strip()
 
-    if normalized_username == "viewer":
-        return "viewer"
-
     try:
         passwords = st.secrets.get("passwords", {})
     except Exception:
         passwords = {}
-    # Keep fallback credentials valid even when a stale cloud secret is still present.
+
     accepted_passwords = {
-        "admin": ["admin123"],
-        "viewer": ["viewer123", "view123"],
+        role: str(secret).strip()
+        for role, secret in passwords.items()
+        if str(secret).strip()
     }
-    secret_password = passwords.get(normalized_username)
-    if secret_password:
-        accepted_passwords.setdefault(normalized_username, []).insert(0, str(secret_password).strip())
-    if normalized_username in accepted_passwords and normalized_password in accepted_passwords[normalized_username]:
+    if normalized_username in accepted_passwords and normalized_password == accepted_passwords[normalized_username]:
         return normalized_username  # role == username key
     return None
 
 def _login_form():
     st.markdown("## 🔐 CaddyCheck CRM Login")
     st.caption(f"Build: {APP_BUILD}")
+    try:
+        password_roles = [role for role, value in st.secrets.get("passwords", {}).items() if str(value).strip()]
+    except Exception:
+        password_roles = []
+    if not password_roles:
+        st.warning("Login is not configured. Add [passwords] secrets for admin and viewer in Streamlit Cloud.")
     with st.form("login_form"):
         username = st.selectbox("Role", list(ROLES.keys()), format_func=lambda k: ROLES[k]["label"])
         password = st.text_input("Password", type="password")
@@ -196,9 +200,13 @@ if _renew_token:
     st.markdown("## 🔑 Subscription Renewal")
     with st.spinner("Validating renewal link…"):
         try:
-            _result = _process_token(_renew_token)
+            if not re.fullmatch(r"[A-Za-z0-9_-]{20,128}", _renew_token):
+                _result = {"success": False, "message": "Invalid renewal link."}
+            else:
+                _result = _process_token(_renew_token)
         except Exception as _e:
-            _result = {"success": False, "message": str(_e)}
+            logger.exception("Failed to process renewal token")
+            _result = {"success": False, "message": "Unable to validate this renewal link right now."}
     if _result["success"]:
         st.success(f"✅ {_result['message']}")
         st.markdown(
@@ -2353,8 +2361,9 @@ elif page == "⚙️ Settings":
                 "default_body_template": body_tpl,
             }
             try:
+                st.session_state["_smtp_password_override"] = smtp_pass
                 save_email_config(new_cfg)
-                st.success("Settings saved!")
+                st.success("Settings saved. SMTP password is kept only for this session unless configured in Streamlit secrets.")
             except Exception as e:
                 st.error(f"Save failed: {e}")
 
