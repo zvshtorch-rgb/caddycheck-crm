@@ -2021,7 +2021,10 @@ elif page == "📅 Monthly Invoice":
         invoice_number = st.number_input("Invoice Number",
                                          min_value=1, value=next_inv_no, step=1)
 
-    month_projects = get_projects_for_month(projects, sel_month)
+    month_projects = [
+        p for p in get_projects_for_month(projects, sel_month)
+        if p.is_active()
+    ]
     st.markdown(f"**{len(month_projects)} project(s)** billed in **{sel_month}**")
 
     if not month_projects:

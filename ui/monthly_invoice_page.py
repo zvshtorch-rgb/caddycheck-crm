@@ -260,7 +260,10 @@ class MonthlyInvoicePage(QWidget):
         month = self._month_cb.currentText()
         year = self._year_spin.value()
 
-        self._filtered_projects = get_projects_for_month(self._projects, month)
+        self._filtered_projects = [
+            p for p in get_projects_for_month(self._projects, month)
+            if p.is_active()
+        ]
         preview_rows = get_invoice_preview_data(self._filtered_projects, month, year)
 
         self._title_label.setText(
