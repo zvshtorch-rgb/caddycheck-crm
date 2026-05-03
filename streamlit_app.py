@@ -1112,6 +1112,7 @@ elif page == "🏗️ Projects":
     st.caption(f"Showing {len(filtered)} of {len(projects)} projects")
 
     df = pd.DataFrame([{
+        "_original_project_name": _safe_str(p.project_name),
         "Project Name":    _safe_str(p.project_name),
         "Country":         _safe_str(p.country),
         "# Cams":          _safe_int(p.num_cams),
@@ -1133,7 +1134,7 @@ elif page == "🏗️ Projects":
         if st.button("➕ Add New Project", key="btn_add_proj"):
             st.session_state["add_proj_row"] = st.session_state.get("add_proj_row", 0) + 1
 
-        _empty_proj = {"Project Name": "", "Country": "", "# Cams": 0,
+        _empty_proj = {"_original_project_name": "", "Project Name": "", "Country": "", "# Cams": 0,
                        "Payment Month": "", "Install Year": "",
                        "Activation Date": None, "Status": "Active", "License EOP": None}
         n_new = st.session_state.get("add_proj_row", 0)
@@ -1149,6 +1150,7 @@ elif page == "🏗️ Projects":
             height=600,
             num_rows="dynamic",
             column_config={
+                "_original_project_name": None,
                 "Country": st.column_config.SelectboxColumn(
                     "Country",
                     options=[""] + countries,
@@ -1178,29 +1180,34 @@ elif page == "🏗️ Projects":
         )
         if st.button("💾 Save Changes", key="save_projects"):
             from models.project import Project as ProjectModel
-            original_projects = list(projects)
-            renamed_original_names = []
+            original_project_map = {
+                _safe_str(p.project_name).strip(): p
+                for p in projects
+                if _safe_str(p.project_name).strip()
+            }
+            visible_original_names = {
+                _safe_str(p.project_name).strip()
+                for p in filtered
+                if _safe_str(p.project_name).strip()
+            }
+            preserved_original_names = set()
+            projects_to_save = []
+            delete_project_names = []
             new_count = 0
-            for row_idx, row in edited_df.iterrows():
+            for _, row in edited_df.iterrows():
                 name = _safe_str(row.get("Project Name", "")).strip()
                 if not name:
                     continue
-                if row_idx < n_new:
-                    p = ProjectModel(project_name=name)
-                    projects.append(p)
-                    new_count += 1
+                original_name = _safe_str(row.get("_original_project_name", "")).strip()
+                if original_name:
+                    preserved_original_names.add(original_name)
+                if original_name and original_name in original_project_map:
+                    p = original_project_map[original_name]
                 else:
-                    original_index = row_idx - n_new
-                    if original_index < len(original_projects):
-                        p = original_projects[original_index]
-                    else:
-                        p = ProjectModel(project_name=name)
-                        projects.append(p)
-                        new_count += 1
-                    old_name = _safe_str(p.project_name).strip()
-                    p.project_name = name
-                    if old_name and old_name != name:
-                        renamed_original_names.append(old_name)
+                    p = ProjectModel(project_name=name)
+                    new_count += 1
+                old_name = _safe_str(p.project_name).strip()
+                p.project_name = name
                 p.country           = _safe_str(row.get("Country", ""))
                 p.num_cams          = _safe_int(row.get("# Cams", 0))
                 p.payment_month     = _safe_str(row.get("Payment Month", ""))
@@ -1208,9 +1215,21 @@ elif page == "🏗️ Projects":
                 p.status            = _safe_str(row.get("Status", ""))
                 p.activation_date   = _parse_project_date(row.get("Activation Date"))
                 p.license_eop       = _parse_project_date(row.get("License EOP"))
+                projects_to_save.append(p)
+                if original_name and old_name and old_name != name:
+                    delete_project_names.append(old_name)
+
+            removed_visible_names = visible_original_names - preserved_original_names
+            delete_project_names.extend(sorted(name for name in removed_visible_names if name))
+
+            remaining_projects = [
+                p for p in projects
+                if _safe_str(p.project_name).strip() not in visible_original_names
+            ]
+            projects[:] = remaining_projects + projects_to_save
             try:
                 _save_projects(projects, _data_path)
-                _delete_projects(renamed_original_names, _data_path)
+                _delete_projects(sorted({name for name in delete_project_names if name}), _data_path)
                 load_data.clear()
                 st.session_state.pop("add_proj_row", None)
                 msg = f"Saved! {new_count} new project(s) added." if new_count else "Projects saved successfully!"

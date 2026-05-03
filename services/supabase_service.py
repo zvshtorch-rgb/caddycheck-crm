@@ -80,10 +80,13 @@ def load_projects() -> list:
 
 def upsert_projects(projects: list) -> None:
     client = _get_client()
-    rows = []
+    rows_by_name: Dict[str, Dict[str, Any]] = {}
     for p in projects:
+        project_name = str(p.project_name or "").strip()
+        if not project_name:
+            continue
         row: Dict[str, Any] = {
-            "project_name": p.project_name,
+            "project_name": project_name,
             "country": p.country or None,
             "num_cameras": p.num_cams or None,
             "payment_month": p.payment_month or None,
@@ -104,13 +107,15 @@ def upsert_projects(projects: list) -> None:
                 str(int(p.maintenance_invoice_numbers[i]))
                 if i in p.maintenance_invoice_numbers else None
             )
-        rows.append(row)
+        rows_by_name[project_name.lower()] = row
+
+    rows = list(rows_by_name.values())
 
     batch_size = 50
     for i in range(0, len(rows), batch_size):
         client.table("projects").upsert(rows[i:i+batch_size], on_conflict="project_name").execute()
 
-    logger.info("Upserted %d projects to Supabase", len(projects))
+    logger.info("Upserted %d projects to Supabase", len(rows))
 
 
 def delete_projects(project_names: list[str]) -> int:
