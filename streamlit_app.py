@@ -1273,6 +1273,56 @@ elif page == "🏗️ Projects":
                     st.rerun()
                 except Exception as e:
                     st.error(f"Delete failed: {e}")
+
+        st.markdown("---")
+        st.subheader("Merge / Rename Project")
+        project_merge_options = sorted({_safe_str(p.project_name).strip() for p in projects if _safe_str(p.project_name).strip()})
+        if project_merge_options:
+            with st.form("merge_project_form"):
+                merge_source_name = st.selectbox(
+                    "Old project name",
+                    project_merge_options,
+                    key="project_merge_source",
+                )
+                merge_target_name = st.text_input(
+                    "New / target project name",
+                    key="project_merge_target",
+                    placeholder="Proxy Kluisbergen",
+                )
+                merge_project_btn = st.form_submit_button("Rename Across Projects + Invoices", type="primary")
+
+            if merge_project_btn:
+                target_name = _safe_str(merge_target_name).strip()
+                if not target_name:
+                    st.error("Enter the new / target project name.")
+                elif target_name == merge_source_name:
+                    st.error("Choose a different target name.")
+                else:
+                    try:
+                        source_project = next(
+                            (project for project in projects if _safe_str(project.project_name).strip() == merge_source_name),
+                            None,
+                        )
+                        if source_project is None:
+                            st.error(f"Project {merge_source_name} was not found.")
+                        else:
+                            target_exists = any(
+                                _safe_str(project.project_name).strip() == target_name
+                                for project in projects
+                            )
+                            if not target_exists:
+                                source_project.project_name = target_name
+                                _save_projects(projects, _data_path)
+                            _rename_invoice_project_names({merge_source_name: target_name}, _data_path)
+                            _delete_projects([merge_source_name], _data_path)
+                            load_data.clear()
+                            st.session_state["_flash_success"] = (
+                                f"Renamed {merge_source_name} to {target_name} across projects and invoices."
+                            )
+                            st.session_state["_flash_success_page"] = "🏗️ Projects"
+                            st.rerun()
+                    except Exception as e:
+                        st.error(f"Merge/rename failed: {e}")
     else:
         st.dataframe(
             df.style.map(color_status, subset=["Status"]) if "Status" in df.columns and len(df) > 0 else df,
