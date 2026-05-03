@@ -1219,6 +1219,30 @@ elif page == "🏗️ Projects":
                 st.rerun()
             except Exception as e:
                 st.error(f"Save failed: {e}")
+
+        st.markdown("---")
+        st.subheader("Delete Project")
+        project_delete_options = sorted({_safe_str(p.project_name).strip() for p in projects if _safe_str(p.project_name).strip()})
+        if project_delete_options:
+            with st.form("delete_project_form"):
+                selected_project_to_delete = st.selectbox(
+                    "Project to delete",
+                    project_delete_options,
+                    key="project_delete_name",
+                )
+                delete_project_btn = st.form_submit_button("🗑️ Delete Project", type="secondary")
+
+            if delete_project_btn:
+                try:
+                    deleted = _delete_projects([selected_project_to_delete], _data_path)
+                    load_data.clear()
+                    st.session_state["_flash_success"] = (
+                        f"Deleted {deleted} project row(s) for {selected_project_to_delete}."
+                    )
+                    st.session_state["_flash_success_page"] = "🏗️ Projects"
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Delete failed: {e}")
     else:
         st.dataframe(
             df.style.map(color_status, subset=["Status"]) if "Status" in df.columns and len(df) > 0 else df,
