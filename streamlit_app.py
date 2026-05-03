@@ -1170,19 +1170,25 @@ elif page == "🏗️ Projects":
         )
         if st.button("💾 Save Changes", key="save_projects"):
             from models.project import Project as ProjectModel
-            proj_map = {p.project_name: p for p in projects}
+            original_projects = list(projects)
             new_count = 0
-            for _, row in edited_df.iterrows():
+            for row_idx, row in edited_df.iterrows():
                 name = _safe_str(row.get("Project Name", "")).strip()
                 if not name:
                     continue
-                p = proj_map.get(name)
-                if p is None:
-                    # New project row
+                if row_idx < n_new:
                     p = ProjectModel(project_name=name)
                     projects.append(p)
-                    proj_map[name] = p
                     new_count += 1
+                else:
+                    original_index = row_idx - n_new
+                    if original_index < len(original_projects):
+                        p = original_projects[original_index]
+                    else:
+                        p = ProjectModel(project_name=name)
+                        projects.append(p)
+                        new_count += 1
+                    p.project_name = name
                 p.country           = _safe_str(row.get("Country", ""))
                 p.num_cams          = _safe_int(row.get("# Cams", 0))
                 p.payment_month     = _safe_str(row.get("Payment Month", ""))
