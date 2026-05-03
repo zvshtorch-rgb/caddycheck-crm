@@ -18,7 +18,7 @@ from PySide6.QtGui import QColor, QFont
 
 from config.settings import MONTH_ORDER, normalize_month, OUTPUT_DIR
 from models.project import Project
-from services.excel_service import get_projects_for_month
+from services.excel_service import get_monthly_invoice_projects
 from services.invoice_service import generate_monthly_invoice, get_invoice_preview_data
 
 logger = logging.getLogger(__name__)
@@ -260,10 +260,7 @@ class MonthlyInvoicePage(QWidget):
         month = self._month_cb.currentText()
         year = self._year_spin.value()
 
-        self._filtered_projects = [
-            p for p in get_projects_for_month(self._projects, month)
-            if p.is_active()
-        ]
+        self._filtered_projects = get_monthly_invoice_projects(self._projects, month, year)
         preview_rows = get_invoice_preview_data(self._filtered_projects, month, year)
 
         self._title_label.setText(

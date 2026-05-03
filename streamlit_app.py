@@ -106,7 +106,7 @@ from services.supabase_service import (
 from services.excel_service import (
     compute_debt_summaries,
     get_yearly_summary,
-    get_projects_for_month,
+    get_monthly_invoice_projects,
     load_projects as load_projects_excel,
     load_invoices as load_invoices_excel,
     save_projects_to_excel,
@@ -2021,10 +2021,7 @@ elif page == "📅 Monthly Invoice":
         invoice_number = st.number_input("Invoice Number",
                                          min_value=1, value=next_inv_no, step=1)
 
-    month_projects = [
-        p for p in get_projects_for_month(projects, sel_month)
-        if p.is_active()
-    ]
+    month_projects = get_monthly_invoice_projects(projects, sel_month, int(sel_year))
     st.markdown(f"**{len(month_projects)} project(s)** billed in **{sel_month}**")
 
     if not month_projects:

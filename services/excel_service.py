@@ -250,6 +250,16 @@ def get_projects_for_month(
     ]
 
 
+def get_monthly_invoice_projects(
+    projects: List[Project],
+    month_name: str,
+    year: int,
+) -> List[Project]:
+    """Return projects eligible for a monthly invoice in the given month/year."""
+    month_projects = get_projects_for_month(projects, month_name)
+    return [p for p in month_projects if p.get_maintenance_year(year) > 1]
+
+
 # ── Column indices (1-based, openpyxl) for Projects overview ──────────────────
 _PROJ_COL = {
     "Project Name":    1,
