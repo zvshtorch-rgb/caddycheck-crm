@@ -100,6 +100,7 @@ from services.supabase_service import (
     upsert_projects,
     upsert_invoices,
     delete_projects as delete_projects_supabase,
+    rename_invoice_project_names as rename_invoice_project_names_supabase,
     replace_invoice_rows,
     get_next_invoice_number as _supa_next_inv_no,
     append_invoice_rows as _supa_append_invoice,
@@ -112,6 +113,7 @@ from services.excel_service import (
     load_invoices as load_invoices_excel,
     save_projects_to_excel,
     delete_projects_from_excel,
+    rename_invoice_project_names_in_excel,
     save_invoices_to_excel,
     get_next_invoice_number as _excel_next_inv_no,
     append_monthly_invoice_rows as _excel_append_invoice,
@@ -288,6 +290,12 @@ def _delete_projects(project_names, source_name: str) -> int:
     if _is_excel_source(source_name):
         return delete_projects_from_excel(project_names)
     return delete_projects_supabase(project_names)
+
+
+def _rename_invoice_project_names(rename_map, source_name: str) -> int:
+    if _is_excel_source(source_name):
+        return rename_invoice_project_names_in_excel(rename_map)
+    return rename_invoice_project_names_supabase(rename_map)
 
 
 def _save_invoices(invoices, source_name: str) -> None:
@@ -1193,6 +1201,7 @@ elif page == "🏗️ Projects":
             preserved_original_names = set()
             projects_to_save = []
             delete_project_names = []
+            renamed_projects = {}
             new_count = 0
             for _, row in edited_df.iterrows():
                 name = _safe_str(row.get("Project Name", "")).strip()
@@ -1218,6 +1227,7 @@ elif page == "🏗️ Projects":
                 projects_to_save.append(p)
                 if original_name and old_name and old_name != name:
                     delete_project_names.append(old_name)
+                    renamed_projects[old_name] = name
 
             removed_visible_names = visible_original_names - preserved_original_names
             delete_project_names.extend(sorted(name for name in removed_visible_names if name))
@@ -1229,6 +1239,7 @@ elif page == "🏗️ Projects":
             projects[:] = remaining_projects + projects_to_save
             try:
                 _save_projects(projects, _data_path)
+                _rename_invoice_project_names(renamed_projects, _data_path)
                 _delete_projects(sorted({name for name in delete_project_names if name}), _data_path)
                 load_data.clear()
                 st.session_state.pop("add_proj_row", None)

@@ -134,6 +134,26 @@ def delete_projects(project_names: list[str]) -> int:
     return deleted
 
 
+def rename_invoice_project_names(rename_map: Dict[str, str]) -> int:
+    """Rename invoice project names in Supabase and return the number of updated rows."""
+    cleaned = {
+        str(old_name).strip(): str(new_name).strip()
+        for old_name, new_name in rename_map.items()
+        if str(old_name).strip() and str(new_name).strip() and str(old_name).strip() != str(new_name).strip()
+    }
+    if not cleaned:
+        return 0
+
+    client = _get_client()
+    updated = 0
+    for old_name, new_name in cleaned.items():
+        resp = client.table("invoices").update({"project_name": new_name}).eq("project_name", old_name).execute()
+        updated += len(resp.data or [])
+
+    logger.info("Renamed %d invoice row(s) in Supabase", updated)
+    return updated
+
+
 # ── Invoices ──────────────────────────────────────────────────────────────────
 
 # Cache lookups for matching in-memory invoices back to DB rows.

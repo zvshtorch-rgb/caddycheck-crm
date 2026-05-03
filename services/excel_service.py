@@ -381,6 +381,37 @@ def delete_projects_from_excel(
     return deleted
 
 
+def rename_invoice_project_names_in_excel(
+    rename_map: dict[str, str],
+    filepath: Path = None,
+) -> int:
+    """Rename invoice project names in the Invoice details sheet and return count updated."""
+    if filepath is None:
+        filepath = get_data_paths()["projects_file"]
+    cleaned = {
+        str(old_name).strip(): str(new_name).strip()
+        for old_name, new_name in rename_map.items()
+        if str(old_name).strip() and str(new_name).strip() and str(old_name).strip() != str(new_name).strip()
+    }
+    if not cleaned:
+        return 0
+
+    wb = openpyxl.load_workbook(filepath)
+    ws = wb[SHEET_INVOICE_DETAILS]
+    renamed = 0
+    for row_idx in range(2, ws.max_row + 1):
+        cell = ws.cell(row=row_idx, column=_INV_COL["Project name"])
+        current_name = _safe_str(cell.value)
+        if current_name in cleaned:
+            cell.value = cleaned[current_name]
+            renamed += 1
+
+    if renamed:
+        wb.save(filepath)
+        logger.info("Renamed %d invoice row(s) in Excel", renamed)
+    return renamed
+
+
 def save_invoices_to_excel(
     invoices: List[Invoice],
     filepath: Path = None,
