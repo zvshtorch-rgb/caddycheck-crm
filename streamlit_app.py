@@ -99,6 +99,7 @@ from services.supabase_service import (
     load_invoices,
     upsert_projects,
     upsert_invoices,
+    delete_projects as delete_projects_supabase,
     replace_invoice_rows,
     get_next_invoice_number as _supa_next_inv_no,
     append_invoice_rows as _supa_append_invoice,
@@ -110,6 +111,7 @@ from services.excel_service import (
     load_projects as load_projects_excel,
     load_invoices as load_invoices_excel,
     save_projects_to_excel,
+    delete_projects_from_excel,
     save_invoices_to_excel,
     get_next_invoice_number as _excel_next_inv_no,
     append_monthly_invoice_rows as _excel_append_invoice,
@@ -280,6 +282,12 @@ def _save_projects(projects, source_name: str) -> None:
         save_projects_to_excel(projects)
         return
     upsert_projects(projects)
+
+
+def _delete_projects(project_names, source_name: str) -> int:
+    if _is_excel_source(source_name):
+        return delete_projects_from_excel(project_names)
+    return delete_projects_supabase(project_names)
 
 
 def _save_invoices(invoices, source_name: str) -> None:
@@ -1171,6 +1179,7 @@ elif page == "🏗️ Projects":
         if st.button("💾 Save Changes", key="save_projects"):
             from models.project import Project as ProjectModel
             original_projects = list(projects)
+            renamed_original_names = []
             new_count = 0
             for row_idx, row in edited_df.iterrows():
                 name = _safe_str(row.get("Project Name", "")).strip()
@@ -1188,7 +1197,10 @@ elif page == "🏗️ Projects":
                         p = ProjectModel(project_name=name)
                         projects.append(p)
                         new_count += 1
+                    old_name = _safe_str(p.project_name).strip()
                     p.project_name = name
+                    if old_name and old_name != name:
+                        renamed_original_names.append(old_name)
                 p.country           = _safe_str(row.get("Country", ""))
                 p.num_cams          = _safe_int(row.get("# Cams", 0))
                 p.payment_month     = _safe_str(row.get("Payment Month", ""))
@@ -1198,6 +1210,7 @@ elif page == "🏗️ Projects":
                 p.license_eop       = _parse_project_date(row.get("License EOP"))
             try:
                 _save_projects(projects, _data_path)
+                _delete_projects(renamed_original_names, _data_path)
                 load_data.clear()
                 st.session_state.pop("add_proj_row", None)
                 msg = f"Saved! {new_count} new project(s) added." if new_count else "Projects saved successfully!"

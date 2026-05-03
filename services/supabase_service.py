@@ -113,6 +113,22 @@ def upsert_projects(projects: list) -> None:
     logger.info("Upserted %d projects to Supabase", len(projects))
 
 
+def delete_projects(project_names: list[str]) -> int:
+    """Delete project rows by exact project name and return the number removed."""
+    cleaned = [str(name).strip() for name in project_names if str(name).strip()]
+    if not cleaned:
+        return 0
+
+    client = _get_client()
+    deleted = 0
+    for name in cleaned:
+        client.table("projects").delete().eq("project_name", name).execute()
+        deleted += 1
+
+    logger.info("Deleted %d project row(s) from Supabase", deleted)
+    return deleted
+
+
 # ── Invoices ──────────────────────────────────────────────────────────────────
 
 # Cache lookups for matching in-memory invoices back to DB rows.
