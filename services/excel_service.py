@@ -242,9 +242,12 @@ def get_projects_for_month(
     projects: List[Project],
     month_name: str,
 ) -> List[Project]:
-    """Return projects whose payment_month matches the given month name."""
+    """Return active projects whose payment_month matches the given month name."""
     normalized = normalize_month(month_name)
-    return [p for p in projects if p.payment_month == normalized]
+    return [
+        p for p in projects
+        if p.payment_month == normalized and p.is_active()
+    ]
 
 
 # ── Column indices (1-based, openpyxl) for Projects overview ──────────────────
