@@ -235,21 +235,9 @@ def upsert_invoices(invoices: list) -> None:
 
 
 def append_invoice_rows(invoice_number: int, projects: list, year: int) -> int:
-    """Append invoice rows for a monthly batch. Returns count appended."""
-    client = _get_client()
-    resp = (
-        client.table("invoices")
-        .select("project_name")
-        .eq("invoice_number", str(invoice_number))
-        .execute()
-    )
-    existing = {row["project_name"].lower().strip() for row in resp.data}
-
     rows_to_insert = []
     for proj in sorted(projects, key=lambda p: p.project_name):
         if proj.num_cams <= 0:
-            continue
-        if proj.project_name.lower().strip() in existing:
             continue
         rows_to_insert.append({
             "invoice_number": str(invoice_number),
@@ -261,10 +249,9 @@ def append_invoice_rows(invoice_number: int, projects: list, year: int) -> int:
             "year": year,
         })
 
-    if rows_to_insert:
-        client.table("invoices").insert(rows_to_insert).execute()
+    replace_invoice_rows(invoice_number, rows_to_insert)
 
-    logger.info("Appended %d invoice rows for invoice #%d", len(rows_to_insert), invoice_number)
+    logger.info("Replaced invoice #%d with %d row(s)", invoice_number, len(rows_to_insert))
     return len(rows_to_insert)
 
 

@@ -487,32 +487,31 @@ def append_monthly_invoice_rows(
     filepath: Path = None,
 ) -> int:
     """
-    Append new rows to 'Invoice details' for each project in a monthly invoice.
-    Skips any project already present with this invoice_number (safe to re-run).
-    Returns number of rows appended.
+    Replace the rows for a monthly invoice batch and then write the current projects.
+
+    This keeps invoice edits in place when a project name changes or when the same
+    invoice number is saved again.
     """
     if filepath is None:
         filepath = get_data_paths()["projects_file"]
     wb = openpyxl.load_workbook(filepath)
     ws = wb[SHEET_INVOICE_DETAILS]
 
-    # Collect existing (invoice_number, project_name_lower) to avoid duplicates
-    existing = set()
-    for row in ws.iter_rows(min_row=2, values_only=True):
-        inv_no = row[_INV_COL["Invoice Number"] - 1]
-        proj_name = row[_INV_COL["Project name"] - 1]
-        if inv_no and proj_name:
-            try:
-                existing.add((float(inv_no), str(proj_name).strip().lower()))
-            except (ValueError, TypeError):
-                pass
+    rows_to_delete = []
+    for row_idx in range(2, ws.max_row + 1):
+        inv_no_cell = ws.cell(row=row_idx, column=_INV_COL["Invoice Number"])
+        try:
+            if inv_no_cell.value and int(float(inv_no_cell.value)) == int(invoice_number):
+                rows_to_delete.append(row_idx)
+        except (ValueError, TypeError):
+            continue
+
+    for row_idx in reversed(rows_to_delete):
+        ws.delete_rows(row_idx, 1)
 
     appended = 0
     for proj in sorted(projects, key=lambda p: p.project_name):
         if proj.num_cams <= 0:
-            continue
-        key = (float(invoice_number), proj.project_name.strip().lower())
-        if key in existing:
             continue
 
         maint_label = proj.get_maintenance_year_label(year)
@@ -528,11 +527,10 @@ def append_monthly_invoice_rows(
         row_data[_INV_COL["Year"] - 1]              = year
 
         ws.append(row_data)
-        existing.add(key)
         appended += 1
 
-    if appended > 0:
+    if appended > 0 or rows_to_delete:
         wb.save(filepath)
-        logger.info("Appended %d invoice rows for invoice #%d", appended, invoice_number)
+        logger.info("Replaced invoice #%d with %d row(s)", invoice_number, appended)
 
     return appended

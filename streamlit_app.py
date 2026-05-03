@@ -295,6 +295,30 @@ def _get_next_invoice_number(invoices, source_name: str) -> int:
     return _supa_next_inv_no()
 
 
+def _suggest_month_invoice_number(month_projects, invoices, year: int, source_name: str) -> int:
+    """Prefer an existing invoice number for the selected month/year when possible."""
+    month_project_keys = {
+        _safe_str(project.project_name).strip().lower()
+        for project in month_projects
+        if _safe_str(project.project_name).strip()
+    }
+    candidates: dict[int, int] = {}
+    for inv in invoices:
+        if inv.year != year:
+            continue
+        project_key = _safe_str(inv.project_name).strip().lower()
+        if project_key not in month_project_keys:
+            continue
+        invoice_number = _safe_int(inv.invoice_number, default=0)
+        if invoice_number <= 0:
+            continue
+        candidates[invoice_number] = candidates.get(invoice_number, 0) + 1
+
+    if candidates:
+        return max(candidates.items(), key=lambda item: (item[1], item[0]))[0]
+    return _get_next_invoice_number(invoices, source_name)
+
+
 def _normalize_query_text(value: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9+ ]", " ", _safe_str(value).lower())).strip()
 
@@ -2009,8 +2033,6 @@ elif page == "💸 Debt Report":
 elif page == "📅 Monthly Invoice":
     st.title("📅 Monthly Invoice")
 
-    next_inv_no = _get_next_invoice_number(invoices, _data_path)
-
     col1, col2, col3 = st.columns([2, 1, 2])
     with col1:
         sel_month = st.selectbox("Month", MONTH_ORDER, index=datetime.date.today().month - 1)
@@ -2018,10 +2040,11 @@ elif page == "📅 Monthly Invoice":
         sel_year = st.number_input("Year", min_value=2015, max_value=2035,
                                    value=datetime.date.today().year, step=1)
     with col3:
+        month_projects = get_monthly_invoice_projects(projects, sel_month, int(sel_year))
+        suggested_inv_no = _suggest_month_invoice_number(month_projects, invoices, int(sel_year), _data_path)
         invoice_number = st.number_input("Invoice Number",
-                                         min_value=1, value=next_inv_no, step=1)
+                                         min_value=1, value=suggested_inv_no, step=1)
 
-    month_projects = get_monthly_invoice_projects(projects, sel_month, int(sel_year))
     st.markdown(f"**{len(month_projects)} project(s)** billed in **{sel_month}**")
 
     if not month_projects:
@@ -2192,7 +2215,7 @@ elif page == "📅 Monthly Invoice":
             # ── Save to Ledger ─────────────────────────────────────────────
             st.markdown("---")
             st.subheader("Save to Invoice Ledger")
-            st.caption(f"Appends invoice #{inv_no} rows for all {len(month_projects)} project(s) to Invoice Details.")
+            st.caption(f"Saves invoice #{inv_no} rows for all {len(month_projects)} project(s) to Invoice Details. If invoice #{inv_no} already exists, its rows are replaced.")
             if st.button("💾 Save Invoice to Ledger", type="primary"):
                 try:
                     n = _append_invoice_rows(invoice_number=inv_no, projects=month_projects, year=int(sel_year), source_name=_data_path)
