@@ -1593,7 +1593,12 @@ elif page == "🧾 Invoice Details":
             for i in filtered_inv
         ],
         columns=["_invoice_index", *_invoice_columns],
-    ).sort_values(["Invoice #", "Project"], ignore_index=True)
+    ).sort_values(
+        ["Year", "Invoice #", "Project"],
+        ascending=[False, False, True],
+        na_position="last",
+        ignore_index=True,
+    )
 
     def color_paid(val):
         v = str(val).strip().lower()
