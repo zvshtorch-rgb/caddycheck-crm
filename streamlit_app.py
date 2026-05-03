@@ -93,6 +93,7 @@ from config.settings import (
     save_email_config,
     load_sent_invoices_log,
     append_sent_invoice_log,
+    save_sent_invoices_log,
 )
 from services.supabase_service import (
     load_projects,
@@ -2180,7 +2181,9 @@ elif page == "📅 Monthly Invoice":
     else:
         preview_rows = get_invoice_preview_data(month_projects, sel_month, int(sel_year))
         preview_total_amount = sum(
-            float(r["line_total"]) for r in preview_rows if isinstance(r.get("line_total"), (int, float))
+            float(r["line_total"])
+            for r in preview_rows
+            if isinstance(r.get("line_total"), (int, float)) and r.get("rate") != "TOTAL"
         )
         preview_df = pd.DataFrame([{
             "Project": _safe_str(r["project_name"]),
@@ -2436,6 +2439,42 @@ elif page == "📅 Monthly Invoice":
             st.subheader("Sent PDF Invoices")
             sent_invoice_rows = load_sent_invoices_log()
             if sent_invoice_rows:
+                matching_sent_entry = next(
+                    (
+                        row for row in reversed(sent_invoice_rows)
+                        if _safe_int(row.get("invoice_number"), default=0) == inv_no
+                        and _safe_str(row.get("month", "")).strip().lower() == sel_month.strip().lower()
+                        and _safe_int(row.get("year"), default=0) == int(sel_year)
+                    ),
+                    None,
+                )
+                logged_total_amount = _safe_float(
+                    matching_sent_entry.get("total_amount", 0.0) if matching_sent_entry else 0.0,
+                    0.0,
+                )
+                if matching_sent_entry and abs(logged_total_amount - preview_total_amount) >= 0.5:
+                    st.warning(
+                        f"Logged sent amount for invoice #{inv_no} is €{logged_total_amount:,.0f}, "
+                        f"but the current preview total is €{preview_total_amount:,.0f}."
+                    )
+                    if st.button("Repair Logged Sent Amount", key="repair_sent_invoice_total"):
+                        repaired = False
+                        for row in reversed(sent_invoice_rows):
+                            if (
+                                _safe_int(row.get("invoice_number"), default=0) == inv_no
+                                and _safe_str(row.get("month", "")).strip().lower() == sel_month.strip().lower()
+                                and _safe_int(row.get("year"), default=0) == int(sel_year)
+                            ):
+                                row["total_amount"] = preview_total_amount
+                                repaired = True
+                                break
+                        if repaired:
+                            save_sent_invoices_log(sent_invoice_rows)
+                            st.success(
+                                f"Repaired sent-log total for invoice #{inv_no} to €{preview_total_amount:,.0f}."
+                            )
+                            st.rerun()
+
                 sent_invoice_df = pd.DataFrame([
                     {
                         "Sent At": _safe_str(row.get("sent_at", "")).replace("T", " ")[:19],

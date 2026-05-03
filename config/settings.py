@@ -223,3 +223,10 @@ def append_sent_invoice_log(entry: dict) -> None:
     entries.append(entry)
     with open(SENT_INVOICES_LOG_FILE, "w", encoding="utf-8") as f:
         json.dump(entries, f, indent=2)
+
+
+def save_sent_invoices_log(entries: list) -> None:
+    """Replace the sent invoice email history file."""
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    with open(SENT_INVOICES_LOG_FILE, "w", encoding="utf-8") as f:
+        json.dump(entries, f, indent=2)
