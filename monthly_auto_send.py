@@ -12,7 +12,7 @@ from services.excel_service import get_monthly_invoice_projects, get_next_invoic
 from services.excel_service import load_invoices as load_invoices_excel
 from services.excel_service import load_projects as load_projects_excel
 from services.excel_service import append_monthly_invoice_rows as append_excel_invoice_rows
-from services.invoice_service import generate_monthly_invoice_pdf
+from services.invoice_service import archive_sent_invoice_pdf, generate_monthly_invoice_pdf
 from services.supabase_service import append_invoice_rows as append_supabase_invoice_rows
 from services.supabase_service import get_next_invoice_number as get_supabase_next_invoice_number
 from services.supabase_service import load_invoices as load_invoices_supabase
@@ -214,6 +214,7 @@ def main() -> int:
             invoice_number=invoice_number,
             output_dir=Path(tmp_dir),
         )
+        archived_pdf_path = archive_sent_invoice_pdf(out_path)
         send_invoice_email(
             attachment_path=out_path,
             recipients=recipients,
@@ -229,6 +230,7 @@ def main() -> int:
         "month": month_name,
         "year": year,
         "pdf_filename": f"CC_M-inv_{invoice_number}_{month_name[:3]}_{year}.pdf",
+        "pdf_archive_path": str(archived_pdf_path),
         "recipients": recipients,
         "cc": cc_list,
         "subject": subject,

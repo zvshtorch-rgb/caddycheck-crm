@@ -2381,7 +2381,7 @@ elif page == "📅 Monthly Invoice":
                     st.error("SMTP not configured. Go to ⚙️ Settings to set up email.")
                 else:
                     from services.email_service import send_invoice_email
-                    from services.invoice_service import generate_monthly_invoice_pdf
+                    from services.invoice_service import archive_sent_invoice_pdf, generate_monthly_invoice_pdf
                     import tempfile
                     with tempfile.TemporaryDirectory() as tmp_dir:
                         try:
@@ -2400,6 +2400,7 @@ elif page == "📅 Monthly Invoice":
                                 invoice_number=inv_no,
                                 output_dir=Path(tmp_dir),
                             )
+                            archived_pdf_path = archive_sent_invoice_pdf(out_path)
                             recipients = [r.strip() for r in to_addrs.split(",") if r.strip()]
                             cc_list = [c.strip() for c in cc_addrs.split(",") if c.strip()]
                             send_invoice_email(
@@ -2416,6 +2417,7 @@ elif page == "📅 Monthly Invoice":
                                 "month": sel_month,
                                 "year": int(sel_year),
                                 "pdf_filename": out_path.name,
+                                "pdf_archive_path": str(archived_pdf_path),
                                 "recipients": recipients,
                                 "cc": cc_list,
                                 "subject": subject,
@@ -2439,6 +2441,10 @@ elif page == "📅 Monthly Invoice":
             st.subheader("Sent PDF Invoices")
             sent_invoice_rows = load_sent_invoices_log()
             if sent_invoice_rows:
+                from config.settings import get_data_paths
+                from services.invoice_service import archive_sent_invoice_pdf, generate_monthly_invoice_pdf
+                import tempfile
+
                 matching_sent_entry = next(
                     (
                         row for row in reversed(sent_invoice_rows)
@@ -2474,6 +2480,60 @@ elif page == "📅 Monthly Invoice":
                                 f"Repaired sent-log total for invoice #{inv_no} to €{preview_total_amount:,.0f}."
                             )
                             st.rerun()
+
+                sent_download_options = {
+                    f"#{_safe_int(row.get('invoice_number'), default=0)} | {_safe_str(row.get('month', ''))} {_safe_int(row.get('year'), default=0)} | {_safe_str(row.get('pdf_filename', ''))}": row
+                    for row in reversed(sent_invoice_rows)
+                }
+                if sent_download_options:
+                    selected_sent_label = st.selectbox(
+                        "Sent PDF entry",
+                        list(sent_download_options.keys()),
+                        key="sent_pdf_entry",
+                    )
+                    selected_sent_row = sent_download_options[selected_sent_label]
+                    archive_path_text = _safe_str(selected_sent_row.get("pdf_archive_path", "")).strip()
+                    archive_path = Path(archive_path_text) if archive_path_text else None
+                    if archive_path is None or not archive_path.exists():
+                        pdf_filename = _safe_str(selected_sent_row.get("pdf_filename", "")).strip()
+                        if pdf_filename:
+                            fallback_archive_path = get_data_paths()["output_dir"] / "sent_invoices" / pdf_filename
+                            if fallback_archive_path.exists():
+                                archive_path = fallback_archive_path
+
+                    if archive_path and archive_path.exists():
+                        with open(archive_path, "rb") as pdf_file:
+                            st.download_button(
+                                "Download Sent PDF",
+                                data=pdf_file.read(),
+                                file_name=archive_path.name,
+                                mime="application/pdf",
+                                key="download_sent_pdf",
+                            )
+                    else:
+                        st.info("No archived PDF is stored for this sent entry yet.")
+                        sent_month = _safe_str(selected_sent_row.get("month", "")).strip()
+                        sent_year = _safe_int(selected_sent_row.get("year"), default=0)
+                        sent_inv_no = _safe_int(selected_sent_row.get("invoice_number"), default=0)
+                        if sent_month and sent_year and sent_inv_no:
+                            if st.button("Create Downloadable PDF For This Entry", key="rebuild_sent_pdf"):
+                                sent_month_projects = get_monthly_invoice_projects(projects, sent_month, sent_year)
+                                with tempfile.TemporaryDirectory() as tmp_dir:
+                                    rebuilt_pdf_path = generate_monthly_invoice_pdf(
+                                        projects=sent_month_projects,
+                                        month_name=sent_month,
+                                        year=sent_year,
+                                        invoice_number=sent_inv_no,
+                                        output_dir=Path(tmp_dir),
+                                    )
+                                    archived_pdf_path = archive_sent_invoice_pdf(rebuilt_pdf_path)
+                                for row in reversed(sent_invoice_rows):
+                                    if row is selected_sent_row:
+                                        row["pdf_archive_path"] = str(archived_pdf_path)
+                                        break
+                                save_sent_invoices_log(sent_invoice_rows)
+                                st.success(f"Archived PDF created for invoice #{sent_inv_no}.")
+                                st.rerun()
 
                 sent_invoice_df = pd.DataFrame([
                     {

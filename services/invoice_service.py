@@ -430,6 +430,25 @@ def generate_monthly_invoice_pdf(
     return output_path
 
 
+def archive_sent_invoice_pdf(
+    pdf_path: Path,
+    archive_name: Optional[str] = None,
+    archive_dir: Path = None,
+) -> Path:
+    """Copy a sent PDF into a persistent archive folder and return the archived path."""
+    from config.settings import get_data_paths
+
+    paths = get_data_paths()
+    if archive_dir is None:
+        archive_dir = paths["output_dir"] / "sent_invoices"
+    archive_dir.mkdir(parents=True, exist_ok=True)
+
+    target_path = archive_dir / (archive_name or pdf_path.name)
+    shutil.copy2(pdf_path, target_path)
+    logger.info("Archived sent PDF to %s", target_path)
+    return target_path
+
+
 def get_invoice_preview_data(
     projects: List[Project],
     month_name: str,
