@@ -2178,6 +2178,7 @@ elif page == "📅 Monthly Invoice":
         suggested_inv_no = _suggest_month_invoice_number(month_projects, invoices, int(sel_year), _data_path)
         invoice_number = st.number_input("Invoice Number",
                                          min_value=1, value=suggested_inv_no, step=1)
+    inv_no = int(invoice_number)
 
     st.markdown(f"**{len(month_projects)} project(s)** billed in **{sel_month}**")
 
@@ -2310,7 +2311,6 @@ elif page == "📅 Monthly Invoice":
             from config.settings import get_data_paths
             from services.pdf_service import generate_invoice_pdf
             paths = get_data_paths()
-            inv_no = int(invoice_number)
             month_abbr = sel_month[:3]
             pdf_filename = f"CC_M-inv_{inv_no}_{month_abbr}_{int(sel_year)}.pdf"
             xlsx_filename = f"CC_M-inv_{inv_no}_{month_abbr}_{int(sel_year)}.xlsx"
