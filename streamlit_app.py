@@ -119,7 +119,12 @@ from services.excel_service import (
     get_next_invoice_number as _excel_next_inv_no,
     append_monthly_invoice_rows as _excel_append_invoice,
 )
-from services.invoice_service import generate_monthly_invoice, get_invoice_preview_data
+from services.invoice_service import (
+    archive_sent_invoice_pdf,
+    generate_monthly_invoice,
+    generate_monthly_invoice_pdf,
+    get_invoice_preview_data,
+)
 from models.invoice import group_monthly_invoices
 
 # ── Page config ───────────────────────────────────────────────────────────────
@@ -2381,7 +2386,6 @@ elif page == "📅 Monthly Invoice":
                     st.error("SMTP not configured. Go to ⚙️ Settings to set up email.")
                 else:
                     from services.email_service import send_invoice_email
-                    from services.invoice_service import archive_sent_invoice_pdf, generate_monthly_invoice_pdf
                     import tempfile
                     with tempfile.TemporaryDirectory() as tmp_dir:
                         try:
@@ -2442,7 +2446,6 @@ elif page == "📅 Monthly Invoice":
             sent_invoice_rows = load_sent_invoices_log()
             if sent_invoice_rows:
                 from config.settings import get_data_paths
-                from services.invoice_service import archive_sent_invoice_pdf, generate_monthly_invoice_pdf
                 import tempfile
 
                 matching_sent_entry = next(
