@@ -2208,6 +2208,21 @@ elif page == "📅 Monthly Invoice":
 
         monthly_invoice_summaries = group_monthly_invoices(invoices)
         if monthly_invoice_summaries:
+            selected_monthly_summary = next(
+                (summary for summary in monthly_invoice_summaries if summary.invoice_number == inv_no),
+                None,
+            )
+            if selected_monthly_summary and (
+                round(selected_monthly_summary.total_amount, 2) != round(preview_total_amount, 2)
+                or selected_monthly_summary.project_count != len(month_projects)
+            ):
+                st.warning(
+                    f"Saved ledger rows for invoice #{inv_no} still total €{selected_monthly_summary.total_amount:,.0f} "
+                    f"across {selected_monthly_summary.project_count} project(s), while the current preview totals "
+                    f"€{preview_total_amount:,.0f} across {len(month_projects)} project(s). "
+                    "Use Save to Invoice Ledger to replace the saved batch."
+                )
+
             monthly_years = sorted({summary.year for summary in monthly_invoice_summaries if summary.year}, reverse=True)
             monthly_statuses = sorted({summary.status for summary in monthly_invoice_summaries})
 
