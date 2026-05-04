@@ -2355,11 +2355,12 @@ elif page == "📅 Monthly Invoice":
             if st.button("💾 Save Invoice to Ledger", type="primary"):
                 try:
                     n = _append_invoice_rows(invoice_number=inv_no, projects=month_projects, year=int(sel_year), source_name=_data_path)
-                    if n == 0:
-                        st.info(f"Invoice #{inv_no} already fully recorded — no new rows added.")
-                    else:
-                        st.success(f"Added {n} row(s) for invoice #{inv_no} to Invoice Details.")
-                        st.cache_data.clear()
+                    st.cache_data.clear()
+                    st.session_state["_flash_success"] = (
+                        f"Saved invoice #{inv_no} with {n} row(s) to Invoice Details."
+                    )
+                    st.session_state["_flash_success_page"] = "📅 Monthly Invoice"
+                    st.rerun()
                 except Exception as e:
                     st.error(f"Failed to save: {e}")
 
@@ -2433,11 +2434,15 @@ elif page == "📅 Monthly Invoice":
                             if save_to_ledger_on_send:
                                 st.cache_data.clear()
                             if save_to_ledger_on_send and ledger_rows_added is not None:
-                                st.success(
-                                    f"Email sent with PDF attachment: {out_path.name}. Ledger rows added: {ledger_rows_added}."
+                                st.session_state["_flash_success"] = (
+                                    f"Email sent with PDF attachment: {out_path.name}. Ledger rows saved: {ledger_rows_added}."
                                 )
                             else:
-                                st.success(f"Email sent with PDF attachment: {out_path.name}")
+                                st.session_state["_flash_success"] = (
+                                    f"Email sent with PDF attachment: {out_path.name}."
+                                )
+                            st.session_state["_flash_success_page"] = "📅 Monthly Invoice"
+                            st.rerun()
                         except Exception as e:
                             st.error(f"Email failed: {e}")
 
