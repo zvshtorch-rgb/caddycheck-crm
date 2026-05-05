@@ -932,18 +932,46 @@ if page == "📊 Dashboard":
     # ── Trend Chart ───────────────────────────────────────────────────────────
     st.subheader("Trends")
     cc1, cc2, cc3, cc4 = st.columns([2, 2, 1, 1])
-    metric     = cc1.selectbox("Show",       ["Income (Paid)", "Income (All)", "Active Projects", "Cameras"], key="ch_metric")
+    if st.session_state.get("ch_metric") == "Cameras":
+        st.session_state["ch_metric"] = "Total Cameras"
+    metric     = cc1.selectbox(
+        "Show",
+        ["Income (Paid)", "Income (All)", "Active Projects", "Total Cameras", "Added Cameras"],
+        key="ch_metric",
+    )
     resolution = cc2.selectbox("Resolution", ["Yearly", "Monthly"], key="ch_res")
     all_years  = sorted({inv.year for inv in invoices if inv.year})
     if not all_years:
         all_years = [datetime.datetime.now().year]
-    from_yr = cc3.selectbox("From Year", [int(y) for y in all_years], index=0, key="ch_from")
-    to_yr   = cc4.selectbox("To Year",   [int(y) for y in all_years], index=len(all_years)-1, key="ch_to")
-    if from_yr > to_yr:
-        from_yr, to_yr = to_yr, from_yr
+    if resolution == "Yearly":
+        from_yr = cc3.selectbox("From Year", [int(y) for y in all_years], index=0, key="ch_from")
+        to_yr   = cc4.selectbox("To Year",   [int(y) for y in all_years], index=len(all_years)-1, key="ch_to")
+        if from_yr > to_yr:
+            from_yr, to_yr = to_yr, from_yr
+        monthly_year = None
+    else:
+        default_monthly_year = int(sel_year) if sel_year != "All" and int(sel_year) in all_years else all_years[-1]
+        monthly_year = cc3.selectbox(
+            "Year",
+            [int(y) for y in all_years],
+            index=[int(y) for y in all_years].index(default_monthly_year),
+            key="ch_monthly_year",
+        )
+        cc4.empty()
+        from_yr = monthly_year
+        to_yr = monthly_year
 
     is_income = metric.startswith("Income")
     y_label   = "EUR (€)" if is_income else "Count"
+
+    def _project_start_date(project):
+        if project.activation_date:
+            if isinstance(project.activation_date, datetime.datetime):
+                return project.activation_date.date()
+            return project.activation_date
+        if project.installation_year:
+            return datetime.date(int(project.installation_year), 1, 1)
+        return None
 
     if resolution == "Yearly":
         labels, values = [], []
@@ -955,8 +983,18 @@ if page == "📊 Dashboard":
                 v = sum(i.payment_amount for i in invoices if i.year == yr)
             elif metric == "Active Projects":
                 v = sum(1 for p in projects if p.installation_year and p.installation_year <= yr and p.is_active())
+            elif metric == "Added Cameras":
+                v = sum(
+                    p.num_cams
+                    for p in projects
+                    if p.is_active() and _project_start_date(p) and _project_start_date(p).year == yr
+                )
             else:
-                v = sum(p.num_cams for p in projects if p.installation_year and p.installation_year <= yr and p.is_active())
+                v = sum(
+                    p.num_cams
+                    for p in projects
+                    if p.is_active() and _project_start_date(p) and _project_start_date(p).year <= yr
+                )
             values.append(float(v))
 
         fig = px.bar(
@@ -978,27 +1016,40 @@ if page == "📊 Dashboard":
 
     else:  # Monthly
         rows = []
-        for yr in range(from_yr, to_yr + 1):
-            for mo in range(1, 13):
-                if metric == "Income (Paid)":
-                    v = sum(i.payment_amount for i in invoices
-                            if i.is_paid() and i.payment_date
-                            and i.payment_date.year == yr and i.payment_date.month == mo)
-                elif metric == "Income (All)":
-                    v = sum(i.payment_amount for i in invoices
-                            if i.payment_date
-                            and i.payment_date.year == yr and i.payment_date.month == mo)
-                elif metric == "Active Projects":
-                    v = sum(1 for p in projects if p.installation_year and p.installation_year <= yr and p.is_active())
-                else:
-                    v = sum(p.num_cams for p in projects if p.installation_year and p.installation_year <= yr and p.is_active())
-                rows.append({"date": datetime.date(yr, mo, 1), "value": float(v)})
+        for mo in range(1, 13):
+            month_end = datetime.date(monthly_year, mo, calendar.monthrange(monthly_year, mo)[1])
+            if metric == "Income (Paid)":
+                v = sum(i.payment_amount for i in invoices
+                        if i.is_paid() and i.payment_date
+                        and i.payment_date.year == monthly_year and i.payment_date.month == mo)
+            elif metric == "Income (All)":
+                v = sum(i.payment_amount for i in invoices
+                        if i.payment_date
+                        and i.payment_date.year == monthly_year and i.payment_date.month == mo)
+            elif metric == "Active Projects":
+                v = sum(1 for p in projects if p.installation_year and p.installation_year <= monthly_year and p.is_active())
+            elif metric == "Added Cameras":
+                v = sum(
+                    p.num_cams
+                    for p in projects
+                    if p.is_active()
+                    and _project_start_date(p)
+                    and _project_start_date(p).year == monthly_year
+                    and _project_start_date(p).month == mo
+                )
+            else:
+                v = sum(
+                    p.num_cams
+                    for p in projects
+                    if p.is_active() and _project_start_date(p) and _project_start_date(p) <= month_end
+                )
+            rows.append({"date": datetime.date(monthly_year, mo, 1), "value": float(v)})
 
         df_line = pd.DataFrame(rows)
         fig = px.line(
             df_line, x="date", y="value",
             labels={"date": "Month", "value": y_label},
-            title=f"{metric} — Monthly ({from_yr}–{to_yr})",
+            title=f"{metric} — Monthly ({monthly_year})",
             color_discrete_sequence=["#2980B9"],
             markers=True,
         )
