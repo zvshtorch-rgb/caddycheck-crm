@@ -2952,7 +2952,7 @@ elif page == "🏦 Bank Payment":
         confirm_date = st.date_input(
             "Payment date to record",
             value=pay_date,
-            key=f"{key_prefix}_date",
+            key=f"{key_prefix}_confirm_date",
         )
 
         sel_df = df[df["Project"].isin(selected)][["Project", "Amount (€)", "Cameras"]].copy()
