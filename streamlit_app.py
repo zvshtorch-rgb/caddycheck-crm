@@ -683,6 +683,127 @@ def _extract_invoice_title_and_year(worksheet) -> tuple[str, Optional[int]]:
     return title, int(year_match.group(1)) if year_match else None
 
 
+_PROJECT_ORDER_HEADER_ALIASES = {
+    "project_name": {
+        "project", "project name", "store", "store name", "site", "site name", "customer", "supermarket",
+    },
+    "country": {"country", "market"},
+    "num_cams": {"cams", "cameras", "camera", "units", "qty", "quantity", "number of cameras", "# cams", "# cameras"},
+    "payment_month": {"payment month", "billing month", "invoice month", "charge month"},
+    "installation_year": {"install year", "installation year", "installed year", "year installed"},
+    "activation_date": {"activation date", "activation", "go live", "go live date", "start date"},
+    "status": {"status", "project status"},
+    "license_eop": {"license eop", "license expiry", "license end", "valid until", "valid to"},
+}
+
+
+def _normalize_upload_header(value) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", _safe_str(value).strip().lower()).strip()
+
+
+def _find_project_order_header_row(df: pd.DataFrame) -> Optional[tuple[int, dict[str, int]]]:
+    max_rows = min(len(df), 40)
+    max_cols = min(len(df.columns), 30)
+    for row_idx in range(max_rows):
+        labels: dict[str, int] = {}
+        for col_idx in range(max_cols):
+            normalized = _normalize_upload_header(df.iat[row_idx, col_idx])
+            if not normalized:
+                continue
+            for field, aliases in _PROJECT_ORDER_HEADER_ALIASES.items():
+                if normalized in aliases:
+                    labels.setdefault(field, col_idx)
+        if "project_name" in labels:
+            return row_idx, labels
+    return None
+
+
+def _load_project_order_pdf_as_dataframe(file_bytes: bytes) -> pd.DataFrame:
+    try:
+        import pdfplumber
+    except Exception as exc:
+        raise RuntimeError(f"PDF import requires pdfplumber: {exc}")
+
+    extracted_rows: list[list[str]] = []
+    with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+        for page in pdf.pages:
+            tables = page.extract_tables() or []
+            for table in tables:
+                for row in table or []:
+                    normalized_row = [_safe_str(cell) for cell in (row or [])]
+                    if any(cell.strip() for cell in normalized_row):
+                        extracted_rows.append(normalized_row)
+
+    if not extracted_rows:
+        raise ValueError("Could not find any table rows in the uploaded PDF order")
+
+    max_cols = max(len(row) for row in extracted_rows)
+    padded_rows = [row + [""] * (max_cols - len(row)) for row in extracted_rows]
+    return pd.DataFrame(padded_rows)
+
+
+def _parse_optional_datetime(value) -> Optional[datetime.datetime]:
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime.datetime):
+        return value
+    if isinstance(value, datetime.date):
+        return datetime.datetime.combine(value, datetime.time.min)
+    try:
+        return pd.to_datetime(value).to_pydatetime()
+    except Exception:
+        return None
+
+
+def _parse_uploaded_project_order(file_bytes: bytes, filename: str) -> tuple[dict, list[dict]]:
+    suffix = Path(filename).suffix.lower()
+    if suffix == ".csv":
+        raw_df = pd.read_csv(io.BytesIO(file_bytes), header=None)
+    elif suffix == ".pdf":
+        raw_df = _load_project_order_pdf_as_dataframe(file_bytes)
+    elif suffix in {".xlsx", ".xlsm", ".xls"}:
+        raw_df = pd.read_excel(io.BytesIO(file_bytes), header=None)
+    else:
+        raise ValueError("Only PDF, XLSX, XLSM, XLS, and CSV order files are supported")
+
+    header_info = _find_project_order_header_row(raw_df)
+    if header_info is None:
+        raise ValueError("Could not find a project-name column in the uploaded order file")
+
+    header_row_idx, columns = header_info
+    rows: list[dict] = []
+    for row_idx in range(header_row_idx + 1, len(raw_df.index)):
+        project_name = _safe_str(raw_df.iat[row_idx, columns["project_name"]]).strip()
+        if not project_name:
+            continue
+
+        activation_date = _parse_optional_datetime(raw_df.iat[row_idx, columns["activation_date"]]) if "activation_date" in columns else None
+        install_year = _safe_int(raw_df.iat[row_idx, columns["installation_year"]], default=0) or None
+        if install_year is None and activation_date is not None:
+            install_year = activation_date.year
+
+        payment_month = normalize_month(_safe_str(raw_df.iat[row_idx, columns["payment_month"]]).strip()) if "payment_month" in columns else ""
+        status = _safe_str(raw_df.iat[row_idx, columns["status"]]).strip() if "status" in columns else "Active"
+
+        rows.append({
+            "project_name": project_name,
+            "country": _safe_str(raw_df.iat[row_idx, columns["country"]]).strip() if "country" in columns else "",
+            "num_cams": _safe_int(raw_df.iat[row_idx, columns["num_cams"]], default=0),
+            "payment_month": payment_month,
+            "installation_year": install_year,
+            "activation_date": activation_date,
+            "status": status or "Active",
+            "license_eop": _parse_optional_datetime(raw_df.iat[row_idx, columns["license_eop"]]) if "license_eop" in columns else None,
+        })
+
+    metadata = {
+        "filename": filename,
+        "row_count": len(rows),
+        "columns_found": sorted(columns.keys()),
+    }
+    return metadata, rows
+
+
 def _parse_uploaded_invoice_xlsx(file_bytes: bytes) -> tuple[dict, list[dict]]:
     workbook = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
     worksheet = workbook.worksheets[0]
@@ -1195,6 +1316,97 @@ elif page == "🏗️ Projects":
 
     if CAN_EDIT:
         st.info("✏️ Admin mode: you can edit cells directly. Click **Save Changes** when done.")
+
+        with st.expander("📥 Import Project Order", expanded=False):
+            uploaded_project_order = st.file_uploader(
+                "Upload project order (PDF, XLSX, or CSV)",
+                type=["pdf", "xlsx", "xlsm", "xls", "csv"],
+                key="project_order_upload",
+                help="Upload a text-based order PDF or spreadsheet to add new projects into the Projects list.",
+            )
+            if uploaded_project_order is not None:
+                try:
+                    import_meta, import_rows = _parse_uploaded_project_order(
+                        uploaded_project_order.getvalue(),
+                        uploaded_project_order.name,
+                    )
+                    preview_df = pd.DataFrame([
+                        {
+                            "Project Name": row["project_name"],
+                            "Country": row["country"],
+                            "# Cams": row["num_cams"],
+                            "Payment Month": row["payment_month"],
+                            "Install Year": row["installation_year"] or "",
+                            "Activation Date": row["activation_date"].date().isoformat() if row["activation_date"] else "",
+                            "Status": row["status"],
+                        }
+                        for row in import_rows
+                    ])
+                    st.caption(
+                        f"Parsed {import_meta['row_count']} row(s) from {import_meta['filename']}. "
+                        f"Detected columns: {', '.join(import_meta['columns_found']) or 'project name only'}."
+                    )
+                    if preview_df.empty:
+                        st.warning("No project rows were found in the uploaded order file.")
+                    else:
+                        st.dataframe(preview_df, use_container_width=True, hide_index=True, height=260)
+
+                        normalized_import_names = [row["project_name"].strip().lower() for row in import_rows]
+                        duplicate_import_names = sorted({
+                            row["project_name"]
+                            for row in import_rows
+                            if normalized_import_names.count(row["project_name"].strip().lower()) > 1
+                        })
+                        existing_project_names = {
+                            _safe_str(project.project_name).strip().lower()
+                            for project in projects
+                            if _safe_str(project.project_name).strip()
+                        }
+                        new_project_rows = [
+                            row for row in import_rows
+                            if row["project_name"].strip().lower() not in existing_project_names
+                        ]
+                        skipped_existing = len(import_rows) - len(new_project_rows)
+
+                        if duplicate_import_names:
+                            st.error(
+                                "The uploaded order contains duplicate project names: "
+                                + ", ".join(duplicate_import_names)
+                            )
+                        elif not new_project_rows:
+                            st.info("All uploaded projects already exist in the Projects list.")
+                        else:
+                            if skipped_existing:
+                                st.info(f"{skipped_existing} existing project row(s) will be skipped.")
+                            if st.button("Add New Projects From Order", key="import_project_order_btn", type="primary"):
+                                from models.project import Project as ProjectModel
+
+                                added_count = 0
+                                for row in new_project_rows:
+                                    projects.append(ProjectModel(
+                                        project_name=row["project_name"],
+                                        country=row["country"],
+                                        num_cams=row["num_cams"],
+                                        payment_month=row["payment_month"],
+                                        installation_year=row["installation_year"],
+                                        activation_date=row["activation_date"],
+                                        status=row["status"],
+                                        license_eop=row["license_eop"],
+                                    ))
+                                    added_count += 1
+                                try:
+                                    _save_projects(projects, _data_path)
+                                    load_data.clear()
+                                    st.session_state["_flash_success"] = (
+                                        f"Imported {added_count} new project(s) from the uploaded order."
+                                        + (f" Skipped {skipped_existing} existing row(s)." if skipped_existing else "")
+                                    )
+                                    st.session_state["_flash_success_page"] = "🏗️ Projects"
+                                    st.rerun()
+                                except Exception as exc:
+                                    st.error(f"Import failed: {exc}")
+                except Exception as exc:
+                    st.error(f"Failed to parse uploaded project order: {exc}")
 
         if st.button("➕ Add New Project", key="btn_add_proj"):
             st.session_state["add_proj_row"] = st.session_state.get("add_proj_row", 0) + 1
