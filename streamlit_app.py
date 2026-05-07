@@ -94,6 +94,8 @@ from config.settings import (
     load_sent_invoices_log,
     append_sent_invoice_log,
     save_sent_invoices_log,
+    load_orders_records,
+    save_orders_records,
 )
 from services.supabase_service import (
     load_projects,
@@ -105,7 +107,20 @@ from services.supabase_service import (
     replace_invoice_rows,
     get_next_invoice_number as _supa_next_inv_no,
     append_invoice_rows as _supa_append_invoice,
+    load_orders as load_orders_supabase,
+    create_orders as create_orders_supabase,
+    update_order as update_order_supabase,
+    delete_order as delete_order_supabase,
 )
+
+ORDER_STATUS_OPTIONS = [
+    "New",
+    "Ordered",
+    "In Progress",
+    "Installed",
+    "Active",
+    "Cancelled",
+]
 from services.excel_service import (
     compute_debt_summaries,
     get_yearly_summary,
@@ -804,6 +819,29 @@ def _parse_uploaded_project_order(file_bytes: bytes, filename: str) -> tuple[dic
     return metadata, rows
 
 
+def _default_order_reference(filename: str) -> str:
+    stem = _safe_str(Path(filename).stem).strip()
+    if not stem:
+        return ""
+    match = re.search(r"(?:order|po|oc)[-_ ]*([a-z0-9]+)", stem, re.IGNORECASE)
+    if match:
+        return match.group(1).upper()
+    return stem
+
+
+def _archive_uploaded_order_file(file_bytes: bytes, filename: str) -> Path:
+    from config.settings import get_data_paths
+
+    safe_stem = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(filename).stem).strip("_") or "order"
+    safe_suffix = Path(filename).suffix or ".bin"
+    stamp = datetime.datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+    archive_dir = get_data_paths()["output_dir"] / "orders"
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    archive_path = archive_dir / f"{stamp}-{safe_stem}{safe_suffix}"
+    archive_path.write_bytes(file_bytes)
+    return archive_path
+
+
 def _parse_uploaded_invoice_xlsx(file_bytes: bytes) -> tuple[dict, list[dict]]:
     workbook = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
     worksheet = workbook.worksheets[0]
@@ -867,6 +905,121 @@ def _is_missing_supabase_table_error(exc: Exception, table_name: str) -> bool:
     )
 
 
+def _normalize_order_status(value: str) -> str:
+    cleaned = _safe_str(value).strip()
+    if not cleaned:
+        return "New"
+    for option in ORDER_STATUS_OPTIONS:
+        if option.lower() == cleaned.lower():
+            return option
+    return cleaned
+
+
+def _parse_order_date(value) -> Optional[datetime.date]:
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime.datetime):
+        return value.date()
+    if isinstance(value, datetime.date):
+        return value
+    try:
+        return pd.to_datetime(value).date()
+    except Exception:
+        return None
+
+
+def _serialize_order_value(value):
+    if isinstance(value, datetime.datetime):
+        return value.date().isoformat()
+    if isinstance(value, datetime.date):
+        return value.isoformat()
+    return value
+
+
+def _project_status_from_order_status(order_status: str) -> str:
+    normalized = _normalize_order_status(order_status)
+    if normalized in {"Active", "Installed"}:
+        return "Active"
+    return "Offline"
+
+
+@st.cache_data(ttl=300)
+def load_orders_data(source_name: str) -> tuple[list[dict], str]:
+    if _is_excel_source(source_name):
+        return load_orders_records(), "Local JSON"
+    try:
+        return load_orders_supabase(), "Supabase"
+    except RuntimeError as exc:
+        if "Supabase credentials not configured" not in str(exc):
+            raise
+        return load_orders_records(), "Local JSON"
+    except Exception as exc:
+        if _is_missing_supabase_table_error(exc, "orders"):
+            return load_orders_records(), "Local JSON fallback (orders table missing)"
+        raise
+
+
+def _is_local_orders_source(orders_source_name: str) -> bool:
+    return not orders_source_name.startswith("Supabase")
+
+
+def _next_local_order_id(order_rows: list[dict]) -> int:
+    return max((_safe_int(row.get("id"), default=0) for row in order_rows), default=0) + 1
+
+
+def _create_orders(rows: list[dict], orders_source_name: str) -> int:
+    cleaned_rows = [row for row in rows if _safe_str(row.get("project_name")).strip()]
+    if not cleaned_rows:
+        return 0
+    if not _is_local_orders_source(orders_source_name):
+        return create_orders_supabase(cleaned_rows)
+
+    entries = load_orders_records()
+    next_id = _next_local_order_id(entries)
+    timestamp = datetime.datetime.utcnow().isoformat()
+    for row in cleaned_rows:
+        local_row = {key: _serialize_order_value(value) for key, value in row.items()}
+        local_row["id"] = next_id
+        local_row["status"] = _normalize_order_status(local_row.get("status", "New"))
+        local_row["created_at"] = timestamp
+        local_row["updated_at"] = timestamp
+        entries.append(local_row)
+        next_id += 1
+    save_orders_records(entries)
+    return len(cleaned_rows)
+
+
+def _update_order(order_id: int, orders_source_name: str, **fields) -> None:
+    if not _is_local_orders_source(orders_source_name):
+        update_order_supabase(order_id, **fields)
+        return
+
+    entries = load_orders_records()
+    updated = False
+    for row in entries:
+        if _safe_int(row.get("id"), default=0) != int(order_id):
+            continue
+        for key, value in fields.items():
+            row[key] = _serialize_order_value(value)
+        row["status"] = _normalize_order_status(row.get("status", "New"))
+        row["updated_at"] = datetime.datetime.utcnow().isoformat()
+        updated = True
+        break
+    if not updated:
+        raise ValueError(f"Order id={order_id} was not found.")
+    save_orders_records(entries)
+
+
+def _delete_order(order_id: int, orders_source_name: str) -> None:
+    if not _is_local_orders_source(orders_source_name):
+        delete_order_supabase(order_id)
+        return
+
+    entries = load_orders_records()
+    remaining = [row for row in entries if _safe_int(row.get("id"), default=0) != int(order_id)]
+    save_orders_records(remaining)
+
+
 def _append_invoice_rows(invoice_number: int, projects, year: int, source_name: str) -> int:
     if _is_excel_source(source_name):
         return _excel_append_invoice(invoice_number=invoice_number, projects=projects, year=year)
@@ -918,7 +1071,7 @@ st.sidebar.title("📊 CaddyCheck CRM")
 st.sidebar.markdown("---")
 page = st.sidebar.radio(
     "Navigation",
-    ["📊 Dashboard", "❓ Ask Data", "🏗️ Projects", "🔐 Licenses", "🧾 Invoice Details", "💸 Debt Report", "📅 Monthly Invoice", "🎫 Tickets", "🏦 Bank Payment", "⚙️ Settings"],
+    ["📊 Dashboard", "❓ Ask Data", "🏗️ Projects", "📦 Orders", "🔐 Licenses", "🧾 Invoice Details", "💸 Debt Report", "📅 Monthly Invoice", "🎫 Tickets", "🏦 Bank Payment", "⚙️ Settings"],
     label_visibility="collapsed",
 )
 st.sidebar.markdown("---")
@@ -1616,6 +1769,436 @@ elif page == "🏗️ Projects":
                 })
     if rev_rows:
         st.dataframe(pd.DataFrame(rev_rows), use_container_width=True, height=400)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: ORDERS
+# ══════════════════════════════════════════════════════════════════════════════
+elif page == "📦 Orders":
+    st.title("📦 Orders")
+    if page_flash_success:
+        st.success(page_flash_success)
+
+    try:
+        orders, orders_source_name = load_orders_data(_data_path)
+    except Exception as exc:
+        st.error(f"Failed to load orders: {exc}")
+        st.stop()
+
+    if orders_source_name != "Supabase":
+        st.info(
+            "Orders are currently stored in local JSON fallback mode. "
+            "Run the SQL in migrations/create_orders.sql to store orders centrally in Supabase."
+        )
+
+    project_name_keys = {
+        _safe_str(project.project_name).strip().lower()
+        for project in projects
+        if _safe_str(project.project_name).strip()
+    }
+    install_year_options = [""] + [str(year) for year in range(datetime.date.today().year + 1, 2014, -1)]
+
+    total_orders = len(orders)
+    open_orders = sum(
+        1 for order in orders
+        if _normalize_order_status(order.get("status", "")) in {"New", "Ordered", "In Progress"}
+    )
+    missing_project_orders = [
+        order for order in orders
+        if _safe_str(order.get("project_name")).strip().lower() not in project_name_keys
+    ]
+    total_ordered_cameras = sum(_safe_int(order.get("ordered_cameras"), default=0) for order in orders)
+
+    mc1, mc2, mc3, mc4 = st.columns(4)
+    mc1.metric("Total Orders", total_orders)
+    mc2.metric("Open Orders", open_orders)
+    mc3.metric("Missing Projects", len(missing_project_orders))
+    mc4.metric("Ordered Cameras", total_ordered_cameras)
+
+    if CAN_EDIT:
+        with st.expander("📥 Import Orders", expanded=False):
+            uploaded_order_file = st.file_uploader(
+                "Upload order file (PDF, XLSX, or CSV)",
+                type=["pdf", "xlsx", "xlsm", "xls", "csv"],
+                key="orders_upload",
+                help="Each parsed row becomes a tracked order record.",
+            )
+            if uploaded_order_file is not None:
+                default_order_ref = _default_order_reference(uploaded_order_file.name)
+                ic1, ic2, ic3 = st.columns(3)
+                import_order_ref = ic1.text_input("Order reference", value=default_order_ref, key="orders_import_ref")
+                import_order_date = ic2.date_input("Order date", value=datetime.date.today(), key="orders_import_date")
+                import_order_status = ic3.selectbox(
+                    "Imported status",
+                    ORDER_STATUS_OPTIONS,
+                    index=ORDER_STATUS_OPTIONS.index("Ordered"),
+                    key="orders_import_status",
+                )
+                try:
+                    import_meta, import_rows = _parse_uploaded_project_order(
+                        uploaded_order_file.getvalue(),
+                        uploaded_order_file.name,
+                    )
+                    preview_df = pd.DataFrame([
+                        {
+                            "Project": row["project_name"],
+                            "Country": row["country"],
+                            "Ordered Cams": row["num_cams"],
+                            "Payment Month": row["payment_month"],
+                            "Install Year": row["installation_year"] or "",
+                            "Requested Activation": row["activation_date"].date().isoformat() if row["activation_date"] else "",
+                        }
+                        for row in import_rows
+                    ])
+                    st.caption(
+                        f"Parsed {import_meta['row_count']} row(s) from {import_meta['filename']}. "
+                        f"Detected columns: {', '.join(import_meta['columns_found']) or 'project name only'}."
+                    )
+                    if preview_df.empty:
+                        st.warning("No order rows were found in the uploaded file.")
+                    else:
+                        st.dataframe(preview_df, use_container_width=True, hide_index=True, height=260)
+                        if not _safe_str(import_order_ref).strip():
+                            st.error("Order reference is required before import.")
+                        else:
+                            existing_order_keys = {
+                                (
+                                    _safe_str(order.get("order_number")).strip().lower(),
+                                    _safe_str(order.get("project_name")).strip().lower(),
+                                )
+                                for order in orders
+                                if _safe_str(order.get("project_name")).strip()
+                            }
+                            import_rows_to_create = []
+                            skipped_existing = 0
+                            order_ref_key = _safe_str(import_order_ref).strip().lower()
+                            for row in import_rows:
+                                project_key = row["project_name"].strip().lower()
+                                record_key = (order_ref_key, project_key)
+                                if record_key in existing_order_keys:
+                                    skipped_existing += 1
+                                    continue
+                                existing_order_keys.add(record_key)
+                                import_rows_to_create.append({
+                                    "order_number": _safe_str(import_order_ref).strip(),
+                                    "project_name": row["project_name"],
+                                    "country": row["country"],
+                                    "ordered_cameras": row["num_cams"],
+                                    "payment_month": row["payment_month"],
+                                    "installation_year": row["installation_year"],
+                                    "order_date": import_order_date,
+                                    "requested_activation_date": row["activation_date"],
+                                    "status": import_order_status,
+                                    "notes": f"Imported from {uploaded_order_file.name}",
+                                    "source_filename": uploaded_order_file.name,
+                                })
+
+                            if not import_rows_to_create:
+                                st.info("All parsed order rows already exist for this order reference.")
+                            else:
+                                if skipped_existing:
+                                    st.info(f"{skipped_existing} existing order row(s) will be skipped.")
+                                if st.button("Import Order Rows", type="primary", key="import_orders_btn"):
+                                    try:
+                                        archive_path = _archive_uploaded_order_file(
+                                            uploaded_order_file.getvalue(),
+                                            uploaded_order_file.name,
+                                        )
+                                        for row in import_rows_to_create:
+                                            row["source_archive_path"] = str(archive_path)
+                                        created_count = _create_orders(import_rows_to_create, orders_source_name)
+                                        load_orders_data.clear()
+                                        st.session_state["_flash_success"] = (
+                                            f"Imported {created_count} order row(s) from {uploaded_order_file.name}."
+                                            + (f" Skipped {skipped_existing} existing row(s)." if skipped_existing else "")
+                                        )
+                                        st.session_state["_flash_success_page"] = "📦 Orders"
+                                        st.rerun()
+                                    except Exception as exc:
+                                        st.error(f"Import failed: {exc}")
+                except Exception as exc:
+                    st.error(f"Failed to parse uploaded order file: {exc}")
+
+        with st.expander("➕ New Order", expanded=False):
+            with st.form("new_order_form"):
+                nc1, nc2, nc3 = st.columns(3)
+                new_order_number = nc1.text_input("Order reference", key="new_order_number")
+                new_project_name = nc2.text_input("Project name", key="new_order_project")
+                new_country = nc3.text_input("Country", key="new_order_country")
+
+                nc4, nc5, nc6 = st.columns(3)
+                new_ordered_cameras = nc4.number_input("Ordered cameras", min_value=0, step=1, key="new_order_cameras")
+                new_payment_month = nc5.selectbox("Payment month", [""] + MONTH_ORDER, key="new_order_payment_month")
+                new_installation_year = nc6.selectbox("Install year", install_year_options, key="new_order_install_year")
+
+                nc7, nc8, nc9 = st.columns(3)
+                new_order_date = nc7.date_input("Order date", value=datetime.date.today(), key="new_order_date")
+                new_has_activation = nc8.checkbox("Set requested activation", value=False, key="new_order_has_activation")
+                new_requested_activation = nc9.date_input(
+                    "Requested activation date",
+                    value=datetime.date.today(),
+                    disabled=not new_has_activation,
+                    key="new_order_activation",
+                )
+
+                new_status = st.selectbox("Status", ORDER_STATUS_OPTIONS, index=ORDER_STATUS_OPTIONS.index("Ordered"), key="new_order_status")
+                new_notes = st.text_area("Notes", key="new_order_notes", height=90)
+                create_order_btn = st.form_submit_button("Create Order", type="primary")
+
+            if create_order_btn:
+                if not _safe_str(new_project_name).strip():
+                    st.error("Project name is required.")
+                else:
+                    try:
+                        created_count = _create_orders([
+                            {
+                                "order_number": _safe_str(new_order_number).strip(),
+                                "project_name": _safe_str(new_project_name).strip(),
+                                "country": _safe_str(new_country).strip(),
+                                "ordered_cameras": int(new_ordered_cameras),
+                                "payment_month": _safe_str(new_payment_month).strip(),
+                                "installation_year": _safe_int(new_installation_year) or None,
+                                "order_date": new_order_date,
+                                "requested_activation_date": new_requested_activation if new_has_activation else None,
+                                "status": new_status,
+                                "notes": _safe_str(new_notes),
+                                "source_filename": "",
+                                "source_archive_path": "",
+                            }
+                        ], orders_source_name)
+                        load_orders_data.clear()
+                        st.session_state["_flash_success"] = f"Created {created_count} order row(s)."
+                        st.session_state["_flash_success_page"] = "📦 Orders"
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"Create failed: {exc}")
+
+    st.markdown("---")
+    with st.expander("🔍 Filters", expanded=True):
+        fc1, fc2, fc3, fc4 = st.columns(4)
+        status_options = ["All"] + sorted({_normalize_order_status(order.get("status", "")) for order in orders if _safe_str(order.get("status"))})
+        country_options = ["All"] + sorted({_safe_str(order.get("country")).strip() for order in orders if _safe_str(order.get("country")).strip()})
+        order_status_filter = fc1.selectbox("Status", status_options, key="orders_filter_status")
+        order_country_filter = fc2.selectbox("Country", country_options, key="orders_filter_country")
+        order_search = fc3.text_input("Search project / order", key="orders_filter_search")
+        missing_only = fc4.checkbox("Only missing projects", key="orders_filter_missing")
+
+    filtered_orders = orders
+    if order_status_filter != "All":
+        filtered_orders = [order for order in filtered_orders if _normalize_order_status(order.get("status", "")) == order_status_filter]
+    if order_country_filter != "All":
+        filtered_orders = [order for order in filtered_orders if _safe_str(order.get("country")).strip() == order_country_filter]
+    if order_search.strip():
+        order_search_lower = order_search.lower().strip()
+        filtered_orders = [
+            order for order in filtered_orders
+            if order_search_lower in _safe_str(order.get("project_name")).lower()
+            or order_search_lower in _safe_str(order.get("order_number")).lower()
+        ]
+    if missing_only:
+        filtered_orders = [
+            order for order in filtered_orders
+            if _safe_str(order.get("project_name")).strip().lower() not in project_name_keys
+        ]
+
+    st.caption(f"Showing {len(filtered_orders)} of {len(orders)} order row(s)")
+    if filtered_orders:
+        orders_df = pd.DataFrame([
+            {
+                "ID": _safe_int(order.get("id"), default=0),
+                "Order": _safe_str(order.get("order_number")),
+                "Project": _safe_str(order.get("project_name")),
+                "Country": _safe_str(order.get("country")),
+                "Ordered Cams": _safe_int(order.get("ordered_cameras"), default=0),
+                "Payment Month": _safe_str(order.get("payment_month")),
+                "Install Year": _safe_int(order.get("installation_year"), default=0) or "",
+                "Order Date": (_parse_order_date(order.get("order_date")) or ""),
+                "Requested Activation": (_parse_order_date(order.get("requested_activation_date")) or ""),
+                "Status": _normalize_order_status(order.get("status", "")),
+                "Project Exists": "Yes" if _safe_str(order.get("project_name")).strip().lower() in project_name_keys else "No",
+            }
+            for order in filtered_orders
+        ])
+        st.dataframe(orders_df, use_container_width=True, hide_index=True, height=340)
+    else:
+        st.info("No orders match the current filters.")
+
+    if CAN_EDIT and filtered_orders:
+        st.markdown("---")
+        st.subheader("Create Missing Projects")
+        missing_order_options = {
+            f"#{_safe_int(order.get('id'), default=0)} | {_safe_str(order.get('order_number')) or 'No Ref'} | {_safe_str(order.get('project_name'))}": order
+            for order in filtered_orders
+            if _safe_str(order.get("project_name")).strip().lower() not in project_name_keys
+        }
+        if missing_order_options:
+            selected_missing_orders = st.multiselect(
+                "Order rows to create as projects",
+                list(missing_order_options.keys()),
+                key="orders_create_projects",
+            )
+            if st.button("Create Missing Projects From Selected Orders", type="primary", key="orders_create_projects_btn"):
+                if not selected_missing_orders:
+                    st.error("Select at least one order row.")
+                else:
+                    from models.project import Project as ProjectModel
+
+                    existing_project_keys = {
+                        _safe_str(project.project_name).strip().lower()
+                        for project in projects
+                        if _safe_str(project.project_name).strip()
+                    }
+                    added_projects = 0
+                    for label in selected_missing_orders:
+                        order = missing_order_options[label]
+                        project_name = _safe_str(order.get("project_name")).strip()
+                        if not project_name or project_name.lower() in existing_project_keys:
+                            continue
+                        activation_date = _parse_order_date(order.get("requested_activation_date"))
+                        projects.append(ProjectModel(
+                            project_name=project_name,
+                            country=_safe_str(order.get("country")).strip(),
+                            num_cams=_safe_int(order.get("ordered_cameras"), default=0),
+                            payment_month=_safe_str(order.get("payment_month")).strip(),
+                            installation_year=_safe_int(order.get("installation_year")) or None,
+                            activation_date=(
+                                datetime.datetime.combine(activation_date, datetime.time.min)
+                                if activation_date else None
+                            ),
+                            status=_project_status_from_order_status(order.get("status", "")),
+                        ))
+                        existing_project_keys.add(project_name.lower())
+                        added_projects += 1
+
+                    try:
+                        _save_projects(projects, _data_path)
+                        load_data.clear()
+                        st.session_state["_flash_success"] = f"Created {added_projects} missing project(s) from orders."
+                        st.session_state["_flash_success_page"] = "📦 Orders"
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"Project creation failed: {exc}")
+        else:
+            st.info("All filtered orders are already linked to projects.")
+
+        st.markdown("---")
+        st.subheader("Update Order")
+        order_options = {
+            f"#{_safe_int(order.get('id'), default=0)} | {_safe_str(order.get('order_number')) or 'No Ref'} | {_safe_str(order.get('project_name'))}": order
+            for order in filtered_orders
+        }
+        selected_order_label = st.selectbox("Select order row", list(order_options.keys()), key="orders_selected_row")
+        selected_order = order_options[selected_order_label]
+
+        current_order_date = _parse_order_date(selected_order.get("order_date")) or datetime.date.today()
+        current_activation_date = _parse_order_date(selected_order.get("requested_activation_date"))
+        current_payment_month = _safe_str(selected_order.get("payment_month")).strip()
+        current_installation_year = _safe_str(selected_order.get("installation_year")).strip()
+        current_status = _normalize_order_status(selected_order.get("status", ""))
+        if current_status not in ORDER_STATUS_OPTIONS:
+            current_status = ORDER_STATUS_OPTIONS[0]
+
+        with st.form("update_order_form"):
+            uc1, uc2, uc3 = st.columns(3)
+            upd_order_number = uc1.text_input("Order reference", value=_safe_str(selected_order.get("order_number")), key="upd_order_number")
+            upd_project_name = uc2.text_input("Project name", value=_safe_str(selected_order.get("project_name")), key="upd_order_project")
+            upd_country = uc3.text_input("Country", value=_safe_str(selected_order.get("country")), key="upd_order_country")
+
+            uc4, uc5, uc6 = st.columns(3)
+            upd_ordered_cameras = uc4.number_input(
+                "Ordered cameras",
+                min_value=0,
+                step=1,
+                value=max(0, _safe_int(selected_order.get("ordered_cameras"), default=0)),
+                key="upd_order_cameras",
+            )
+            upd_payment_month = uc5.selectbox(
+                "Payment month",
+                [""] + MONTH_ORDER,
+                index=([""] + MONTH_ORDER).index(current_payment_month) if current_payment_month in MONTH_ORDER else 0,
+                key="upd_order_payment_month",
+            )
+            upd_installation_year = uc6.selectbox(
+                "Install year",
+                install_year_options,
+                index=install_year_options.index(current_installation_year) if current_installation_year in install_year_options else 0,
+                key="upd_order_install_year",
+            )
+
+            uc7, uc8, uc9 = st.columns(3)
+            upd_order_date = uc7.date_input("Order date", value=current_order_date, key="upd_order_date")
+            upd_has_activation = uc8.checkbox(
+                "Set requested activation",
+                value=current_activation_date is not None,
+                key="upd_order_has_activation",
+            )
+            upd_requested_activation = uc9.date_input(
+                "Requested activation date",
+                value=current_activation_date or datetime.date.today(),
+                disabled=not upd_has_activation,
+                key="upd_order_activation",
+            )
+
+            upd_status = st.selectbox(
+                "Status",
+                ORDER_STATUS_OPTIONS,
+                index=ORDER_STATUS_OPTIONS.index(current_status),
+                key="upd_order_status",
+            )
+            upd_notes = st.text_area("Notes", value=_safe_str(selected_order.get("notes")), height=100, key="upd_order_notes")
+            form_col1, form_col2 = st.columns([3, 1])
+            update_order_btn = form_col1.form_submit_button("💾 Update Order", type="primary")
+            delete_order_btn = form_col2.form_submit_button("🗑️ Delete", type="secondary")
+
+        if update_order_btn:
+            if not _safe_str(upd_project_name).strip():
+                st.error("Project name is required.")
+            else:
+                try:
+                    _update_order(
+                        _safe_int(selected_order.get("id"), default=0),
+                        orders_source_name,
+                        order_number=_safe_str(upd_order_number).strip(),
+                        project_name=_safe_str(upd_project_name).strip(),
+                        country=_safe_str(upd_country).strip(),
+                        ordered_cameras=int(upd_ordered_cameras),
+                        payment_month=_safe_str(upd_payment_month).strip(),
+                        installation_year=_safe_int(upd_installation_year) or None,
+                        order_date=upd_order_date,
+                        requested_activation_date=upd_requested_activation if upd_has_activation else None,
+                        status=upd_status,
+                        notes=_safe_str(upd_notes),
+                    )
+                    load_orders_data.clear()
+                    st.session_state["_flash_success"] = "Order updated successfully."
+                    st.session_state["_flash_success_page"] = "📦 Orders"
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Update failed: {exc}")
+
+        if delete_order_btn:
+            try:
+                _delete_order(_safe_int(selected_order.get("id"), default=0), orders_source_name)
+                load_orders_data.clear()
+                st.session_state["_flash_success"] = "Order deleted successfully."
+                st.session_state["_flash_success_page"] = "📦 Orders"
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Delete failed: {exc}")
+
+        archive_path_text = _safe_str(selected_order.get("source_archive_path")).strip()
+        archive_path = Path(archive_path_text) if archive_path_text else None
+        if archive_path and archive_path.exists():
+            with open(archive_path, "rb") as archived_order_file:
+                st.download_button(
+                    "Download Source Order File",
+                    data=archived_order_file.read(),
+                    file_name=archive_path.name,
+                    mime="application/octet-stream",
+                    key="download_order_source",
+                )
+        elif _safe_str(selected_order.get("source_filename")).strip():
+            st.caption(f"Source file: {_safe_str(selected_order.get('source_filename')).strip()}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════

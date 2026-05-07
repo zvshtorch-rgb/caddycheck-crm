@@ -18,6 +18,7 @@ EMAIL_CONFIG_FILE = CONFIG_DIR / "email_config.json"
 OVERRIDES_FILE = CONFIG_DIR / "project_overrides.json"
 DATA_PATHS_FILE = CONFIG_DIR / "data_paths.json"
 SENT_INVOICES_LOG_FILE = CONFIG_DIR / "sent_invoices_log.json"
+ORDERS_FILE = CONFIG_DIR / "orders.json"
 
 # Sheet names
 SHEET_PROJECTS_OVERVIEW = "Projects overview"
@@ -229,4 +230,23 @@ def save_sent_invoices_log(entries: list) -> None:
     """Replace the sent invoice email history file."""
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     with open(SENT_INVOICES_LOG_FILE, "w", encoding="utf-8") as f:
+        json.dump(entries, f, indent=2)
+
+
+def load_orders_records() -> list:
+    """Load locally stored order records."""
+    if ORDERS_FILE.exists():
+        try:
+            with open(ORDERS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data if isinstance(data, list) else []
+        except Exception:
+            pass
+    return []
+
+
+def save_orders_records(entries: list) -> None:
+    """Replace the local order records file."""
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    with open(ORDERS_FILE, "w", encoding="utf-8") as f:
         json.dump(entries, f, indent=2)

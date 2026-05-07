@@ -416,6 +416,54 @@ def delete_ticket(ticket_id: int) -> None:
     client.table("tickets").delete().eq("id", ticket_id).execute()
 
 
+# ── Orders ───────────────────────────────────────────────────────────────────
+
+def load_orders() -> List[dict]:
+    client = _get_client()
+    resp = client.table("orders").select("*").order("created_at", desc=True).execute()
+    return resp.data or []
+
+
+def _normalize_order_fields(fields: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = dict(fields)
+    for date_field in ("order_date", "requested_activation_date"):
+        value = normalized.get(date_field)
+        if isinstance(value, datetime.datetime):
+            normalized[date_field] = value.date().isoformat()
+        elif isinstance(value, datetime.date):
+            normalized[date_field] = value.isoformat()
+    return normalized
+
+
+def create_order(**fields) -> dict:
+    client = _get_client()
+    row = _normalize_order_fields(fields)
+    resp = client.table("orders").insert(row).execute()
+    return resp.data[0] if resp.data else {}
+
+
+def create_orders(rows: List[Dict[str, Any]]) -> int:
+    normalized_rows = [_normalize_order_fields(row) for row in rows if row.get("project_name")]
+    if not normalized_rows:
+        return 0
+    client = _get_client()
+    client.table("orders").insert(normalized_rows).execute()
+    return len(normalized_rows)
+
+
+def update_order(order_id: int, **fields) -> dict:
+    client = _get_client()
+    normalized = _normalize_order_fields(fields)
+    normalized["updated_at"] = datetime.datetime.utcnow().isoformat()
+    resp = client.table("orders").update(normalized).eq("id", order_id).execute()
+    return resp.data[0] if resp.data else {}
+
+
+def delete_order(order_id: int) -> None:
+    client = _get_client()
+    client.table("orders").delete().eq("id", order_id).execute()
+
+
 # ── Subscriptions ──────────────────────────────────────────────────────────────
 
 def get_subscription(project_name: str) -> Optional[dict]:
