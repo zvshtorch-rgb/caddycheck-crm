@@ -757,6 +757,74 @@ def _load_project_order_pdf_as_dataframe(file_bytes: bytes) -> pd.DataFrame:
     return pd.DataFrame(padded_rows)
 
 
+def _extract_project_order_pdf_text(file_bytes: bytes) -> str:
+    try:
+        import pdfplumber
+    except Exception as exc:
+        raise RuntimeError(f"PDF import requires pdfplumber: {exc}")
+
+    with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+        pages = [page.extract_text() or "" for page in pdf.pages]
+    return "\n".join(pages)
+
+
+def _guess_project_name_from_order_filename(filename: str) -> str:
+    stem = _safe_str(Path(filename).stem).strip()
+    stem = stem.replace("_", " ")
+    stem = re.sub(r"^\d{4}-\d{2}-\d{2,3}\s+", "", stem)
+    stem = re.sub(r"^\d{4}-\d{2}-\d+\s+", "", stem)
+    stem = re.sub(r"\b(?:revised?|rev|extra(?:\s+pshout)?|pushout)\b.*$", "", stem, flags=re.IGNORECASE)
+    stem = re.sub(r"\s+", " ", stem).strip(" -_")
+    return stem
+
+
+def _parse_single_project_order_pdf(file_bytes: bytes, filename: str) -> list[dict]:
+    text = _extract_project_order_pdf_text(file_bytes)
+    project_name = _guess_project_name_from_order_filename(filename)
+    if not project_name:
+        raise ValueError("Could not infer a project name from this PDF filename")
+
+    num_cams = 0
+    camera_patterns = [
+        r"(?:number of cameras?|cameras?|cams?|qty|quantity|units?)\s*[:\-]?\s*(\d{1,4})\b",
+        r"\b(\d{1,4})\s*(?:cameras?|cams?)\b",
+    ]
+    for pattern in camera_patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            num_cams = _safe_int(match.group(1), default=0)
+            if num_cams > 0:
+                break
+
+    country = ""
+    country_match = re.search(r"(?:country|market)\s*[:\-]?\s*([A-Za-z][A-Za-z\s-]{2,40})", text, re.IGNORECASE)
+    if country_match:
+        country = _safe_str(country_match.group(1)).strip()
+
+    activation_date = None
+    activation_patterns = [
+        r"(?:activation|go\s*live|start date)\s*[:\-]?\s*(\d{4}-\d{2}-\d{2})",
+        r"(?:activation|go\s*live|start date)\s*[:\-]?\s*(\d{2}[/-]\d{2}[/-]\d{4})",
+    ]
+    for pattern in activation_patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            activation_date = _parse_optional_datetime(match.group(1))
+            if activation_date is not None:
+                break
+
+    return [{
+        "project_name": project_name,
+        "country": country,
+        "num_cams": num_cams,
+        "payment_month": "",
+        "installation_year": activation_date.year if activation_date else None,
+        "activation_date": activation_date,
+        "status": "Active",
+        "license_eop": None,
+    }]
+
+
 def _parse_optional_datetime(value) -> Optional[datetime.datetime]:
     if value in (None, ""):
         return None
@@ -783,6 +851,14 @@ def _parse_uploaded_project_order(file_bytes: bytes, filename: str) -> tuple[dic
 
     header_info = _find_project_order_header_row(raw_df)
     if header_info is None:
+        if suffix == ".pdf":
+            rows = _parse_single_project_order_pdf(file_bytes, filename)
+            metadata = {
+                "filename": filename,
+                "row_count": len(rows),
+                "columns_found": ["project_name"],
+            }
+            return metadata, rows
         raise ValueError("Could not find a project-name column in the uploaded order file")
 
     header_row_idx, columns = header_info
