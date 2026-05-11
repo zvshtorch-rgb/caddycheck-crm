@@ -5,6 +5,7 @@ import io
 import logging
 import re
 import sys
+import zipfile
 from pathlib import Path
 from typing import Optional
 
@@ -121,6 +122,8 @@ ORDER_STATUS_OPTIONS = [
     "Active",
     "Cancelled",
 ]
+
+SUPPORTED_ORDER_FILE_SUFFIXES = {".pdf", ".xlsx", ".xlsm", ".xls", ".csv"}
 from services.excel_service import (
     compute_debt_summaries,
     get_yearly_summary,
@@ -916,6 +919,48 @@ def _archive_uploaded_order_file(file_bytes: bytes, filename: str) -> Path:
     archive_path = archive_dir / f"{stamp}-{safe_stem}{safe_suffix}"
     archive_path.write_bytes(file_bytes)
     return archive_path
+
+
+def _expand_uploaded_order_sources(uploaded_order_files) -> list[dict]:
+    expanded_sources: list[dict] = []
+    for uploaded_file in uploaded_order_files:
+        source_name = _safe_str(getattr(uploaded_file, "name", "")).strip()
+        if not source_name:
+            continue
+        source_bytes = uploaded_file.getvalue()
+        source_suffix = Path(source_name).suffix.lower()
+
+        if source_suffix == ".zip":
+            try:
+                with zipfile.ZipFile(io.BytesIO(source_bytes)) as archive:
+                    for member in archive.infolist():
+                        if member.is_dir():
+                            continue
+                        member_name = Path(member.filename).name
+                        member_suffix = Path(member_name).suffix.lower()
+                        if member_suffix not in SUPPORTED_ORDER_FILE_SUFFIXES:
+                            continue
+                        expanded_sources.append({
+                            "source_name": member_name,
+                            "source_path": member.filename,
+                            "file_bytes": archive.read(member),
+                            "container_name": source_name,
+                        })
+            except Exception as exc:
+                raise ValueError(f"Could not read ZIP file {source_name}: {exc}")
+            continue
+
+        if source_suffix not in SUPPORTED_ORDER_FILE_SUFFIXES:
+            raise ValueError(f"Unsupported order file type: {source_name}")
+
+        expanded_sources.append({
+            "source_name": source_name,
+            "source_path": source_name,
+            "file_bytes": source_bytes,
+            "container_name": source_name,
+        })
+
+    return expanded_sources
 
 
 def _parse_uploaded_invoice_xlsx(file_bytes: bytes) -> tuple[dict, list[dict]]:
@@ -1894,18 +1939,27 @@ elif page == "📦 Orders":
     if CAN_EDIT:
         with st.expander("📥 Import Orders", expanded=False):
             uploaded_order_files = st.file_uploader(
-                "Upload order file(s) (PDF, XLSX, or CSV)",
-                type=["pdf", "xlsx", "xlsm", "xls", "csv"],
+                "Upload order file(s) (PDF, XLSX, CSV, or ZIP)",
+                type=["pdf", "xlsx", "xlsm", "xls", "csv", "zip"],
                 key="orders_upload",
                 accept_multiple_files=True,
-                help="Upload one or more order files. Each parsed row becomes a tracked order record.",
+                help="Upload one or more order files or ZIP archives. Each parsed row becomes a tracked order record.",
             )
             if uploaded_order_files:
-                multi_file_upload = len(uploaded_order_files) > 1
-                default_order_ref = _default_order_reference(uploaded_order_files[0].name) if len(uploaded_order_files) == 1 else ""
+                try:
+                    expanded_order_sources = _expand_uploaded_order_sources(uploaded_order_files)
+                except Exception as exc:
+                    st.error(f"Could not read uploaded order files: {exc}")
+                    expanded_order_sources = []
+
+                multi_source_import = len(expanded_order_sources) > 1
+                default_order_ref = (
+                    _default_order_reference(expanded_order_sources[0]["source_name"])
+                    if len(expanded_order_sources) == 1 else ""
+                )
                 ic1, ic2, ic3 = st.columns(3)
-                if multi_file_upload:
-                    ic1.caption("Order reference is taken from each filename for batch imports.")
+                if multi_source_import:
+                    ic1.caption("Review and edit the Order Ref column below before importing.")
                     import_order_ref = ""
                 else:
                     import_order_ref = ic1.text_input("Order reference", value=default_order_ref, key="orders_import_ref")
@@ -1916,25 +1970,38 @@ elif page == "📦 Orders":
                     index=ORDER_STATUS_OPTIONS.index("Ordered"),
                     key="orders_import_status",
                 )
-                parsed_files = []
+
+                parsed_sources = []
                 parse_errors = []
                 preview_rows = []
-                for uploaded_order_file in uploaded_order_files:
+                for source_index, order_source in enumerate(expanded_order_sources):
                     try:
                         import_meta, import_rows = _parse_uploaded_project_order(
-                            uploaded_order_file.getvalue(),
-                            uploaded_order_file.name,
+                            order_source["file_bytes"],
+                            order_source["source_name"],
                         )
-                        order_reference = _default_order_reference(uploaded_order_file.name) if multi_file_upload else _safe_str(import_order_ref).strip()
-                        parsed_files.append({
-                            "file": uploaded_order_file,
+                        order_reference = (
+                            _default_order_reference(order_source["source_name"])
+                            if multi_source_import else _safe_str(import_order_ref).strip()
+                        )
+                        source_key = f"{order_source['container_name']}::{order_source['source_path']}"
+                        archive_name = re.sub(r"[\\/]+", "_", _safe_str(order_source["source_path"]).strip()) or order_source["source_name"]
+                        parsed_sources.append({
+                            "source_key": source_key,
+                            "source_name": order_source["source_name"],
+                            "source_path": order_source["source_path"],
+                            "container_name": order_source["container_name"],
+                            "archive_name": archive_name,
+                            "file_bytes": order_source["file_bytes"],
                             "meta": import_meta,
                             "rows": import_rows,
-                            "order_reference": order_reference,
+                            "default_order_reference": order_reference,
                         })
-                        for row in import_rows:
+                        for row_index, row in enumerate(import_rows):
                             preview_rows.append({
-                                "File": uploaded_order_file.name,
+                                "_preview_id": f"{source_key}::{row_index}",
+                                "_source_key": source_key,
+                                "File": order_source["source_path"],
                                 "Order Ref": order_reference,
                                 "Project": row["project_name"],
                                 "Country": row["country"],
@@ -1944,17 +2011,17 @@ elif page == "📦 Orders":
                                 "Requested Activation": row["activation_date"].date().isoformat() if row["activation_date"] else "",
                             })
                     except Exception as exc:
-                        parse_errors.append(f"{uploaded_order_file.name}: {exc}")
+                        parse_errors.append(f"{order_source['source_path']}: {exc}")
 
                 if parse_errors:
                     st.warning("Some files could not be parsed:\n" + "\n".join(parse_errors))
 
-                if parsed_files:
-                    parsed_file_count = len(parsed_files)
-                    parsed_row_count = sum(file_info["meta"]["row_count"] for file_info in parsed_files)
+                if parsed_sources:
+                    parsed_file_count = len(parsed_sources)
+                    parsed_row_count = sum(file_info["meta"]["row_count"] for file_info in parsed_sources)
                     detected_columns = sorted({
                         column_name
-                        for file_info in parsed_files
+                        for file_info in parsed_sources
                         for column_name in file_info["meta"]["columns_found"]
                     })
                     st.caption(
@@ -1965,9 +2032,28 @@ elif page == "📦 Orders":
                     if preview_df.empty:
                         st.warning("No order rows were found in the uploaded files.")
                     else:
-                        st.dataframe(preview_df, use_container_width=True, hide_index=True, height=260)
-                        if not multi_file_upload and not _safe_str(import_order_ref).strip():
-                            st.error("Order reference is required before import.")
+                        reviewed_preview_df = st.data_editor(
+                            preview_df,
+                            use_container_width=True,
+                            hide_index=True,
+                            height=260,
+                            column_config={
+                                "_preview_id": None,
+                                "_source_key": None,
+                            },
+                            disabled=[
+                                "File",
+                                "Project",
+                                "Country",
+                                "Ordered Cams",
+                                "Payment Month",
+                                "Install Year",
+                                "Requested Activation",
+                            ],
+                            key="orders_import_review",
+                        )
+                        if reviewed_preview_df["Order Ref"].astype(str).str.strip().eq("").any():
+                            st.error("Every imported row needs an Order Ref before import.")
                         else:
                             existing_order_keys = {
                                 (
@@ -1977,16 +2063,25 @@ elif page == "📦 Orders":
                                 for order in orders
                                 if _safe_str(order.get("project_name")).strip()
                             }
+                            source_lookup = {
+                                file_info["source_key"]: file_info
+                                for file_info in parsed_sources
+                            }
+                            reviewed_rows_by_id = {
+                                _safe_str(row.get("_preview_id")).strip(): row
+                                for row in reviewed_preview_df.to_dict(orient="records")
+                            }
                             import_rows_to_create = []
                             skipped_existing = 0
-                            for file_info in parsed_files:
-                                order_ref_value = _safe_str(file_info["order_reference"]).strip()
-                                if not order_ref_value:
-                                    continue
-                                order_ref_key = order_ref_value.lower()
-                                for row in file_info["rows"]:
+                            for file_info in parsed_sources:
+                                for row_index, row in enumerate(file_info["rows"]):
+                                    preview_id = f"{file_info['source_key']}::{row_index}"
+                                    reviewed_row = reviewed_rows_by_id.get(preview_id, {})
+                                    order_ref_value = _safe_str(reviewed_row.get("Order Ref", file_info["default_order_reference"])) .strip()
+                                    if not order_ref_value:
+                                        continue
                                     project_key = row["project_name"].strip().lower()
-                                    record_key = (order_ref_key, project_key)
+                                    record_key = (order_ref_value.lower(), project_key)
                                     if record_key in existing_order_keys:
                                         skipped_existing += 1
                                         continue
@@ -2001,8 +2096,10 @@ elif page == "📦 Orders":
                                         "order_date": import_order_date,
                                         "requested_activation_date": row["activation_date"],
                                         "status": import_order_status,
-                                        "notes": f"Imported from {file_info['file'].name}",
-                                        "source_filename": file_info["file"].name,
+                                        "notes": f"Imported from {file_info['source_path']}",
+                                        "source_filename": file_info["source_path"],
+                                        "_archive_name": file_info["archive_name"],
+                                        "_source_key": file_info["source_key"],
                                     })
 
                             if not import_rows_to_create:
@@ -2010,18 +2107,19 @@ elif page == "📦 Orders":
                             else:
                                 if skipped_existing:
                                     st.info(f"{skipped_existing} existing order row(s) will be skipped.")
-                                if multi_file_upload:
-                                    st.info("Batch import uses an order reference derived from each filename.")
+                                if multi_source_import:
+                                    st.info("You can edit the Order Ref values in the review table before importing.")
                                 if st.button("Import Order Rows", type="primary", key="import_orders_btn"):
                                     try:
                                         archive_paths = {}
-                                        for file_info in parsed_files:
-                                            archive_paths[file_info["file"].name] = _archive_uploaded_order_file(
-                                                file_info["file"].getvalue(),
-                                                file_info["file"].name,
+                                        for file_info in parsed_sources:
+                                            archive_paths[file_info["source_key"]] = _archive_uploaded_order_file(
+                                                file_info["file_bytes"],
+                                                file_info["archive_name"],
                                             )
                                         for row in import_rows_to_create:
-                                            row["source_archive_path"] = str(archive_paths[row["source_filename"]])
+                                            row["source_archive_path"] = str(archive_paths[row.pop("_source_key")])
+                                            row.pop("_archive_name", None)
                                         created_count = _create_orders(import_rows_to_create, orders_source_name)
                                         load_orders_data.clear()
                                         st.session_state["_flash_success"] = (
