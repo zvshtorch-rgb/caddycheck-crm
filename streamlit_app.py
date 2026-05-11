@@ -801,6 +801,7 @@ def _parse_order_amount_token(value: str) -> Optional[float]:
 def _extract_purchase_order_metrics(raw_df: pd.DataFrame, text: str) -> tuple[int, float]:
     ordered_cameras = 0
     payment_amount = 0.0
+    seen_line_signatures: set[tuple[str, int, float]] = set()
 
     for row_idx in range(len(raw_df.index)):
         row_values = [_safe_str(raw_df.iat[row_idx, col_idx]).strip() for col_idx in range(len(raw_df.columns))]
@@ -821,8 +822,15 @@ def _extract_purchase_order_metrics(raw_df: pd.DataFrame, text: str) -> tuple[in
             if amount is not None and amount > 0
         ]
         if qty_candidates and amount_candidates:
-            ordered_cameras = max(ordered_cameras, max(qty_candidates))
-            payment_amount += max(amount_candidates)
+            line_qty = max(qty_candidates)
+            line_amount = max(amount_candidates)
+            normalized_row_text = re.sub(r"\s+", " ", row_text).strip()
+            line_signature = (normalized_row_text, line_qty, line_amount)
+            if line_signature in seen_line_signatures:
+                continue
+            seen_line_signatures.add(line_signature)
+            ordered_cameras = max(ordered_cameras, line_qty)
+            payment_amount += line_amount
 
     if ordered_cameras <= 0:
         patterns = [
