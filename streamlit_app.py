@@ -2169,6 +2169,14 @@ elif page == "📦 Orders":
                     if preview_df.empty:
                         st.warning("No order rows were found in the uploaded files.")
                     else:
+                        existing_project_names = sorted({
+                            _safe_str(p.project_name).strip()
+                            for p in projects
+                            if _safe_str(p.project_name).strip()
+                        })
+                        if existing_project_names:
+                            with st.expander("Existing project names (for reference)"):
+                                st.write(", ".join(existing_project_names))
                         reviewed_preview_df = st.data_editor(
                             preview_df,
                             use_container_width=True,
@@ -2177,12 +2185,12 @@ elif page == "📦 Orders":
                             column_config={
                                 "_preview_id": None,
                                 "_source_key": None,
+                                "Project": st.column_config.TextColumn("Project", required=True),
                                 "Ordered Cams": st.column_config.NumberColumn("Ordered Cams", min_value=0, step=1),
                                 "Payment Amount": st.column_config.NumberColumn("Payment Amount", min_value=0.0, step=1.0, format="€ %.2f"),
                             },
                             disabled=[
                                 "File",
-                                "Project",
                             ],
                             key="orders_import_review",
                         )
@@ -2214,7 +2222,8 @@ elif page == "📦 Orders":
                                     order_ref_value = _safe_str(reviewed_row.get("Order Ref", file_info["default_order_reference"])) .strip()
                                     if not order_ref_value:
                                         continue
-                                    project_key = row["project_name"].strip().lower()
+                                    edited_project_name = _safe_str(reviewed_row.get("Project", row["project_name"])).strip() or row["project_name"]
+                                    project_key = edited_project_name.strip().lower()
                                     record_key = (order_ref_value.lower(), project_key)
                                     if record_key in existing_order_keys:
                                         skipped_existing += 1
@@ -2222,7 +2231,7 @@ elif page == "📦 Orders":
                                     existing_order_keys.add(record_key)
                                     import_rows_to_create.append({
                                         "order_number": order_ref_value,
-                                        "project_name": row["project_name"],
+                                        "project_name": edited_project_name,
                                         "country": _safe_str(reviewed_row.get("Country", row["country"])).strip(),
                                         "ordered_cameras": _safe_int(reviewed_row.get("Ordered Cams", row["num_cams"]), default=0),
                                         "payment_amount": _safe_float(reviewed_row.get("Payment Amount", row.get("payment_amount", 0.0)), default=0.0),
