@@ -800,8 +800,14 @@ def _parse_order_amount_token(value: str) -> Optional[float]:
 
 def _extract_purchase_order_metrics(raw_df: pd.DataFrame, text: str) -> tuple[int, float]:
     ordered_cameras = 0
-    payment_amount = 0.0
-    seen_line_signatures: set[tuple[int, float]] = set()
+    line_totals: list[tuple[int, float]] = []  # (qty, amount) per detected line item
+    seen_amounts: set[float] = set()
+
+    summary_keywords = re.compile(
+        r"\b(total|subtotal|sub-total|grand\s*total|amount\s*due|balance\s*due|vat|tax|btw|tva|sum|net\s*amount|gross|due)\b",
+        re.IGNORECASE,
+    )
+    header_keywords = re.compile(r"\b(article|description|qty|quantity|unit\s*price|item)\b", re.IGNORECASE)
 
     def _infer_qty_from_amounts(amounts: list[float]) -> int:
         for total_amount in sorted(amounts, reverse=True):
@@ -818,8 +824,11 @@ def _extract_purchase_order_metrics(raw_df: pd.DataFrame, text: str) -> tuple[in
         row_values = [_safe_str(raw_df.iat[row_idx, col_idx]).strip() for col_idx in range(len(raw_df.columns))]
         if not any(row_values):
             continue
-        row_text = " ".join(row_values).lower()
-        if "article" in row_text and "total" in row_text:
+        row_text = " ".join(row_values)
+        # Skip header rows and any totals/subtotals/tax rows
+        if header_keywords.search(row_text) and not re.search(r"€|\beur\b", row_text, re.IGNORECASE):
+            continue
+        if summary_keywords.search(row_text):
             continue
 
         qty_candidates = [
@@ -832,16 +841,22 @@ def _extract_purchase_order_metrics(raw_df: pd.DataFrame, text: str) -> tuple[in
             for amount in (_parse_order_amount_token(cell) for cell in row_values)
             if amount is not None and amount > 0
         ]
-        inferred_qty = _infer_qty_from_amounts(amount_candidates) if amount_candidates else 0
-        if (qty_candidates or inferred_qty) and amount_candidates:
-            line_qty = max(qty_candidates) if qty_candidates else inferred_qty
-            line_amount = max(amount_candidates)
-            line_signature = (line_qty, round(line_amount, 2))
-            if line_signature in seen_line_signatures:
-                continue
-            seen_line_signatures.add(line_signature)
-            ordered_cameras = max(ordered_cameras, line_qty)
-            payment_amount += line_amount
+        if not amount_candidates:
+            continue
+        inferred_qty = _infer_qty_from_amounts(amount_candidates) if len(amount_candidates) >= 2 else 0
+        if not qty_candidates and not inferred_qty:
+            continue
+
+        line_qty = max(qty_candidates) if qty_candidates else inferred_qty
+        line_amount = round(max(amount_candidates), 2)
+        # Dedupe by amount alone — different line items rarely share the exact same total
+        if line_amount in seen_amounts:
+            continue
+        seen_amounts.add(line_amount)
+        line_totals.append((line_qty, line_amount))
+        ordered_cameras = max(ordered_cameras, line_qty)
+
+    payment_amount = sum(amount for _, amount in line_totals)
 
     if ordered_cameras <= 0:
         patterns = [
@@ -861,9 +876,8 @@ def _extract_purchase_order_metrics(raw_df: pd.DataFrame, text: str) -> tuple[in
             if amount is not None and amount > 0
         ]
         unique_amount_tokens = sorted({round(amount, 2) for amount in amount_tokens}, reverse=True)
-        if len(unique_amount_tokens) >= 2:
-            payment_amount = sum(unique_amount_tokens[:2])
-        elif unique_amount_tokens:
+        if unique_amount_tokens:
+            # Prefer the largest amount as the order total (typically the grand total)
             payment_amount = unique_amount_tokens[0]
 
     return ordered_cameras, round(payment_amount, 2)
