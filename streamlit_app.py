@@ -801,7 +801,7 @@ def _parse_order_amount_token(value: str) -> Optional[float]:
 def _extract_purchase_order_metrics(raw_df: pd.DataFrame, text: str) -> tuple[int, float]:
     ordered_cameras = 0
     payment_amount = 0.0
-    seen_line_signatures: set[tuple[str, int, float]] = set()
+    seen_line_signatures: set[tuple[int, float]] = set()
 
     def _infer_qty_from_amounts(amounts: list[float]) -> int:
         for total_amount in sorted(amounts, reverse=True):
@@ -836,8 +836,7 @@ def _extract_purchase_order_metrics(raw_df: pd.DataFrame, text: str) -> tuple[in
         if (qty_candidates or inferred_qty) and amount_candidates:
             line_qty = max(qty_candidates) if qty_candidates else inferred_qty
             line_amount = max(amount_candidates)
-            normalized_row_text = re.sub(r"\s+", " ", row_text).strip()
-            line_signature = (normalized_row_text, line_qty, line_amount)
+            line_signature = (line_qty, round(line_amount, 2))
             if line_signature in seen_line_signatures:
                 continue
             seen_line_signatures.add(line_signature)
@@ -861,10 +860,11 @@ def _extract_purchase_order_metrics(raw_df: pd.DataFrame, text: str) -> tuple[in
             for amount in (_parse_order_amount_token(match.group(1)) for match in re.finditer(r"(?:€|EUR)\s*([\d.,]+)", text, re.IGNORECASE))
             if amount is not None and amount > 0
         ]
-        if len(amount_tokens) >= 2:
-            payment_amount = sum(sorted(amount_tokens, reverse=True)[:2])
-        elif amount_tokens:
-            payment_amount = max(amount_tokens)
+        unique_amount_tokens = sorted({round(amount, 2) for amount in amount_tokens}, reverse=True)
+        if len(unique_amount_tokens) >= 2:
+            payment_amount = sum(unique_amount_tokens[:2])
+        elif unique_amount_tokens:
+            payment_amount = unique_amount_tokens[0]
 
     return ordered_cameras, round(payment_amount, 2)
 
