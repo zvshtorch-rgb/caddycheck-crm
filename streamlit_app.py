@@ -803,11 +803,13 @@ def _extract_purchase_order_metrics(raw_df: pd.DataFrame, text: str) -> tuple[in
     line_totals: list[tuple[int, float]] = []  # (qty, amount) per detected line item
     seen_amounts: set[float] = set()
 
-    summary_keywords = re.compile(
-        r"\b(total|subtotal|sub-total|grand\s*total|amount\s*due|balance\s*due|vat|tax|btw|tva|sum|net\s*amount|gross|due)\b",
+    summary_label_re = re.compile(
+        r"^(total|subtotal|sub[-\s]*total|grand\s*total|amount\s*due|balance\s*due|"
+        r"vat|tax|btw|tva|sum|net\s*amount|gross|due|excl\.?\s*vat|incl\.?\s*vat|"
+        r"shipping|delivery|discount|payable)\s*[:\-]?\s*$",
         re.IGNORECASE,
     )
-    header_keywords = re.compile(r"\b(article|description|qty|quantity|unit\s*price|item)\b", re.IGNORECASE)
+    header_only_re = re.compile(r"^(article|description|qty|quantity|unit\s*price|item|price|amount|total)$", re.IGNORECASE)
 
     def _infer_qty_from_amounts(amounts: list[float]) -> int:
         for total_amount in sorted(amounts, reverse=True):
@@ -824,12 +826,15 @@ def _extract_purchase_order_metrics(raw_df: pd.DataFrame, text: str) -> tuple[in
         row_values = [_safe_str(raw_df.iat[row_idx, col_idx]).strip() for col_idx in range(len(raw_df.columns))]
         if not any(row_values):
             continue
-        row_text = " ".join(row_values)
-        # Skip header rows and any totals/subtotals/tax rows
-        if header_keywords.search(row_text) and not re.search(r"€|\beur\b", row_text, re.IGNORECASE):
+
+        # Identify summary rows: rows where the only text content is a summary label
+        # (e.g., "Total", "Subtotal", "VAT") plus one amount, and no qty / description.
+        non_empty = [v for v in row_values if v]
+        text_cells = [v for v in non_empty if _parse_order_amount_token(v) is None and not re.fullmatch(r"\d{1,4}", v)]
+        is_header_row = bool(text_cells) and all(header_only_re.match(t) for t in text_cells)
+        if is_header_row:
             continue
-        if summary_keywords.search(row_text):
-            continue
+        is_summary_row = bool(text_cells) and all(summary_label_re.match(t) for t in text_cells)
 
         qty_candidates = [
             _safe_int(cell, default=0)
@@ -842,6 +847,9 @@ def _extract_purchase_order_metrics(raw_df: pd.DataFrame, text: str) -> tuple[in
             if amount is not None and amount > 0
         ]
         if not amount_candidates:
+            continue
+        if is_summary_row:
+            # Skip: this is a totals/VAT/subtotal row, not a line item
             continue
         inferred_qty = _infer_qty_from_amounts(amount_candidates) if len(amount_candidates) >= 2 else 0
         if not qty_candidates and not inferred_qty:
