@@ -803,6 +803,17 @@ def _extract_purchase_order_metrics(raw_df: pd.DataFrame, text: str) -> tuple[in
     payment_amount = 0.0
     seen_line_signatures: set[tuple[str, int, float]] = set()
 
+    def _infer_qty_from_amounts(amounts: list[float]) -> int:
+        for total_amount in sorted(amounts, reverse=True):
+            for unit_amount in sorted(amounts):
+                if unit_amount <= 0 or total_amount <= unit_amount:
+                    continue
+                ratio = total_amount / unit_amount
+                rounded_ratio = round(ratio)
+                if rounded_ratio >= 1 and abs(ratio - rounded_ratio) <= 0.05:
+                    return int(rounded_ratio)
+        return 0
+
     for row_idx in range(len(raw_df.index)):
         row_values = [_safe_str(raw_df.iat[row_idx, col_idx]).strip() for col_idx in range(len(raw_df.columns))]
         if not any(row_values):
@@ -821,8 +832,9 @@ def _extract_purchase_order_metrics(raw_df: pd.DataFrame, text: str) -> tuple[in
             for amount in (_parse_order_amount_token(cell) for cell in row_values)
             if amount is not None and amount > 0
         ]
-        if qty_candidates and amount_candidates:
-            line_qty = max(qty_candidates)
+        inferred_qty = _infer_qty_from_amounts(amount_candidates) if amount_candidates else 0
+        if (qty_candidates or inferred_qty) and amount_candidates:
+            line_qty = max(qty_candidates) if qty_candidates else inferred_qty
             line_amount = max(amount_candidates)
             normalized_row_text = re.sub(r"\s+", " ", row_text).strip()
             line_signature = (normalized_row_text, line_qty, line_amount)
@@ -836,6 +848,7 @@ def _extract_purchase_order_metrics(raw_df: pd.DataFrame, text: str) -> tuple[in
         patterns = [
             r"(?:installation type|qty|quantity|cameras?|cams?)\s*[:\-]?\s*(\d{1,4})\b",
             r"\b(\d{1,4})\s*(?:checkouts?|cameras?|cams?)\b",
+            r"\b(\d{1,4})\s*checkouts?\s*[-+]",
         ]
         for pattern in patterns:
             match = re.search(pattern, text, re.IGNORECASE)
