@@ -707,6 +707,7 @@ _PROJECT_ORDER_HEADER_ALIASES = {
     },
     "country": {"country", "market"},
     "num_cams": {"cams", "cameras", "camera", "units", "qty", "quantity", "number of cameras", "# cams", "# cameras"},
+    "payment_amount": {"amount", "payment amount", "total amount", "order total", "total", "value"},
     "payment_month": {"payment month", "billing month", "invoice month", "charge month"},
     "installation_year": {"install year", "installation year", "installed year", "year installed"},
     "activation_date": {"activation date", "activation", "go live", "go live date", "start date"},
@@ -771,6 +772,103 @@ def _extract_project_order_pdf_text(file_bytes: bytes) -> str:
     return "\n".join(pages)
 
 
+def _parse_order_amount_token(value: str) -> Optional[float]:
+    token = _safe_str(value).replace("EUR", "").replace("€", "").strip()
+    if not token:
+        return None
+    token = re.sub(r"\s+", "", token)
+    if not re.search(r"\d", token):
+        return None
+    if "," in token and "." in token:
+        if token.rfind(",") > token.rfind("."):
+            token = token.replace(".", "").replace(",", ".")
+        else:
+            token = token.replace(",", "")
+    elif token.count(",") == 1:
+        fractional = token.split(",", 1)[1]
+        if len(fractional) == 2:
+            token = token.replace(",", ".")
+        else:
+            token = token.replace(",", "")
+    elif token.count(".") > 1:
+        token = token.replace(".", "")
+    try:
+        return float(token)
+    except ValueError:
+        return None
+
+
+def _extract_purchase_order_metrics(raw_df: pd.DataFrame, text: str) -> tuple[int, float]:
+    ordered_cameras = 0
+    payment_amount = 0.0
+
+    for row_idx in range(len(raw_df.index)):
+        row_values = [_safe_str(raw_df.iat[row_idx, col_idx]).strip() for col_idx in range(len(raw_df.columns))]
+        if not any(row_values):
+            continue
+        row_text = " ".join(row_values).lower()
+        if "article" in row_text and "total" in row_text:
+            continue
+
+        qty_candidates = [
+            _safe_int(cell, default=0)
+            for cell in row_values
+            if re.fullmatch(r"\d{1,4}", _safe_str(cell).strip())
+        ]
+        amount_candidates = [
+            amount
+            for amount in (_parse_order_amount_token(cell) for cell in row_values)
+            if amount is not None and amount > 0
+        ]
+        if qty_candidates and amount_candidates:
+            ordered_cameras = max(ordered_cameras, max(qty_candidates))
+            payment_amount += max(amount_candidates)
+
+    if ordered_cameras <= 0:
+        patterns = [
+            r"(?:installation type|qty|quantity|cameras?|cams?)\s*[:\-]?\s*(\d{1,4})\b",
+            r"\b(\d{1,4})\s*(?:checkouts?|cameras?|cams?)\b",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                ordered_cameras = max(ordered_cameras, _safe_int(match.group(1), default=0))
+
+    if payment_amount <= 0:
+        amount_tokens = [
+            amount
+            for amount in (_parse_order_amount_token(match.group(1)) for match in re.finditer(r"(?:€|EUR)\s*([\d.,]+)", text, re.IGNORECASE))
+            if amount is not None and amount > 0
+        ]
+        if len(amount_tokens) >= 2:
+            payment_amount = sum(sorted(amount_tokens, reverse=True)[:2])
+        elif amount_tokens:
+            payment_amount = max(amount_tokens)
+
+    return ordered_cameras, round(payment_amount, 2)
+
+
+def _extract_order_date_from_text(text: str) -> Optional[datetime.datetime]:
+    patterns = [
+        r"(?:delivery date|date)\s*[:\-]?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})",
+        r"(?:delivery date|date)\s*[:\-]?\s*(\d{4}-\d{2}-\d{2})",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            parsed = _parse_optional_datetime(match.group(1))
+            if parsed is not None:
+                return parsed
+    return None
+
+
+def _guess_order_country(project_name: str) -> str:
+    normalized_name = _safe_str(project_name).lower()
+    if "delhaize" in normalized_name:
+        return "Belgium"
+    return ""
+
+
 def _guess_project_name_from_order_filename(filename: str) -> str:
     stem = _safe_str(Path(filename).stem).strip()
     stem = stem.replace("_", " ")
@@ -781,45 +879,29 @@ def _guess_project_name_from_order_filename(filename: str) -> str:
     return stem
 
 
-def _parse_single_project_order_pdf(file_bytes: bytes, filename: str) -> list[dict]:
+def _parse_single_project_order_pdf(file_bytes: bytes, filename: str, raw_df: Optional[pd.DataFrame] = None) -> list[dict]:
     text = _extract_project_order_pdf_text(file_bytes)
     project_name = _guess_project_name_from_order_filename(filename)
     if not project_name:
         raise ValueError("Could not infer a project name from this PDF filename")
 
     num_cams = 0
-    camera_patterns = [
-        r"(?:number of cameras?|cameras?|cams?|qty|quantity|units?)\s*[:\-]?\s*(\d{1,4})\b",
-        r"\b(\d{1,4})\s*(?:cameras?|cams?)\b",
-    ]
-    for pattern in camera_patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            num_cams = _safe_int(match.group(1), default=0)
-            if num_cams > 0:
-                break
+    payment_amount = 0.0
+    if raw_df is not None:
+        num_cams, payment_amount = _extract_purchase_order_metrics(raw_df, text)
 
-    country = ""
+    country = _guess_order_country(project_name)
     country_match = re.search(r"(?:country|market)\s*[:\-]?\s*([A-Za-z][A-Za-z\s-]{2,40})", text, re.IGNORECASE)
     if country_match:
         country = _safe_str(country_match.group(1)).strip()
 
-    activation_date = None
-    activation_patterns = [
-        r"(?:activation|go\s*live|start date)\s*[:\-]?\s*(\d{4}-\d{2}-\d{2})",
-        r"(?:activation|go\s*live|start date)\s*[:\-]?\s*(\d{2}[/-]\d{2}[/-]\d{4})",
-    ]
-    for pattern in activation_patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            activation_date = _parse_optional_datetime(match.group(1))
-            if activation_date is not None:
-                break
+    activation_date = _extract_order_date_from_text(text)
 
     return [{
         "project_name": project_name,
         "country": country,
         "num_cams": num_cams,
+        "payment_amount": payment_amount,
         "payment_month": "",
         "installation_year": activation_date.year if activation_date else None,
         "activation_date": activation_date,
@@ -855,11 +937,11 @@ def _parse_uploaded_project_order(file_bytes: bytes, filename: str) -> tuple[dic
     header_info = _find_project_order_header_row(raw_df)
     if header_info is None:
         if suffix == ".pdf":
-            rows = _parse_single_project_order_pdf(file_bytes, filename)
+            rows = _parse_single_project_order_pdf(file_bytes, filename, raw_df=raw_df)
             metadata = {
                 "filename": filename,
                 "row_count": len(rows),
-                "columns_found": ["project_name"],
+                "columns_found": ["project_name", "num_cams", "payment_amount", "installation_year"],
             }
             return metadata, rows
         raise ValueError("Could not find a project-name column in the uploaded order file")
@@ -883,6 +965,7 @@ def _parse_uploaded_project_order(file_bytes: bytes, filename: str) -> tuple[dic
             "project_name": project_name,
             "country": _safe_str(raw_df.iat[row_idx, columns["country"]]).strip() if "country" in columns else "",
             "num_cams": _safe_int(raw_df.iat[row_idx, columns["num_cams"]], default=0),
+            "payment_amount": _safe_float(raw_df.iat[row_idx, columns["payment_amount"]], default=0.0) if "payment_amount" in columns else 0.0,
             "payment_month": payment_month,
             "installation_year": install_year,
             "activation_date": activation_date,
@@ -1917,6 +2000,11 @@ elif page == "📦 Orders":
         for project in projects
         if _safe_str(project.project_name).strip()
     }
+    project_lookup = {
+        _safe_str(project.project_name).strip().lower(): project
+        for project in projects
+        if _safe_str(project.project_name).strip()
+    }
     install_year_options = [""] + [str(year) for year in range(datetime.date.today().year + 1, 2014, -1)]
 
     total_orders = len(orders)
@@ -1998,16 +2086,22 @@ elif page == "📦 Orders":
                             "default_order_reference": order_reference,
                         })
                         for row_index, row in enumerate(import_rows):
+                            existing_project = project_lookup.get(row["project_name"].strip().lower())
+                            resolved_country = row["country"] or (existing_project.country if existing_project else "") or _guess_order_country(row["project_name"])
+                            resolved_ordered_cams = row["num_cams"] or (_safe_int(existing_project.num_cams, default=0) if existing_project else 0)
+                            resolved_payment_month = row["payment_month"] or (_safe_str(existing_project.payment_month).strip() if existing_project else "")
+                            resolved_install_year = row["installation_year"] or (existing_project.installation_year if existing_project else None)
                             preview_rows.append({
                                 "_preview_id": f"{source_key}::{row_index}",
                                 "_source_key": source_key,
                                 "File": order_source["source_path"],
                                 "Order Ref": order_reference,
                                 "Project": row["project_name"],
-                                "Country": row["country"],
-                                "Ordered Cams": row["num_cams"],
-                                "Payment Month": row["payment_month"],
-                                "Install Year": row["installation_year"] or "",
+                                "Country": resolved_country,
+                                "Ordered Cams": resolved_ordered_cams,
+                                "Payment Amount": _safe_float(row.get("payment_amount"), default=0.0),
+                                "Payment Month": resolved_payment_month,
+                                "Install Year": resolved_install_year or "",
                                 "Requested Activation": row["activation_date"].date().isoformat() if row["activation_date"] else "",
                             })
                     except Exception as exc:
@@ -2040,15 +2134,12 @@ elif page == "📦 Orders":
                             column_config={
                                 "_preview_id": None,
                                 "_source_key": None,
+                                "Ordered Cams": st.column_config.NumberColumn("Ordered Cams", min_value=0, step=1),
+                                "Payment Amount": st.column_config.NumberColumn("Payment Amount", min_value=0.0, step=1.0, format="€ %.2f"),
                             },
                             disabled=[
                                 "File",
                                 "Project",
-                                "Country",
-                                "Ordered Cams",
-                                "Payment Month",
-                                "Install Year",
-                                "Requested Activation",
                             ],
                             key="orders_import_review",
                         )
@@ -2089,12 +2180,13 @@ elif page == "📦 Orders":
                                     import_rows_to_create.append({
                                         "order_number": order_ref_value,
                                         "project_name": row["project_name"],
-                                        "country": row["country"],
-                                        "ordered_cameras": row["num_cams"],
-                                        "payment_month": row["payment_month"],
-                                        "installation_year": row["installation_year"],
+                                        "country": _safe_str(reviewed_row.get("Country", row["country"])).strip(),
+                                        "ordered_cameras": _safe_int(reviewed_row.get("Ordered Cams", row["num_cams"]), default=0),
+                                        "payment_amount": _safe_float(reviewed_row.get("Payment Amount", row.get("payment_amount", 0.0)), default=0.0),
+                                        "payment_month": _safe_str(reviewed_row.get("Payment Month", row["payment_month"])).strip(),
+                                        "installation_year": _safe_int(reviewed_row.get("Install Year", row["installation_year"])),
                                         "order_date": import_order_date,
-                                        "requested_activation_date": row["activation_date"],
+                                        "requested_activation_date": _parse_order_date(reviewed_row.get("Requested Activation", row["activation_date"])),
                                         "status": import_order_status,
                                         "notes": f"Imported from {file_info['source_path']}",
                                         "source_filename": file_info["source_path"],
@@ -2140,13 +2232,15 @@ elif page == "📦 Orders":
 
                 nc4, nc5, nc6 = st.columns(3)
                 new_ordered_cameras = nc4.number_input("Ordered cameras", min_value=0, step=1, key="new_order_cameras")
-                new_payment_month = nc5.selectbox("Payment month", [""] + MONTH_ORDER, key="new_order_payment_month")
-                new_installation_year = nc6.selectbox("Install year", install_year_options, key="new_order_install_year")
+                new_payment_amount = nc5.number_input("Payment amount", min_value=0.0, step=1.0, key="new_order_amount")
+                new_payment_month = nc6.selectbox("Payment month", [""] + MONTH_ORDER, key="new_order_payment_month")
 
                 nc7, nc8, nc9 = st.columns(3)
-                new_order_date = nc7.date_input("Order date", value=datetime.date.today(), key="new_order_date")
-                new_has_activation = nc8.checkbox("Set requested activation", value=False, key="new_order_has_activation")
-                new_requested_activation = nc9.date_input(
+                new_installation_year = nc7.selectbox("Install year", install_year_options, key="new_order_install_year")
+                new_order_date = nc8.date_input("Order date", value=datetime.date.today(), key="new_order_date")
+                new_has_activation = nc9.checkbox("Set requested activation", value=False, key="new_order_has_activation")
+
+                new_requested_activation = st.date_input(
                     "Requested activation date",
                     value=datetime.date.today(),
                     disabled=not new_has_activation,
@@ -2168,6 +2262,7 @@ elif page == "📦 Orders":
                                 "project_name": _safe_str(new_project_name).strip(),
                                 "country": _safe_str(new_country).strip(),
                                 "ordered_cameras": int(new_ordered_cameras),
+                                "payment_amount": float(new_payment_amount),
                                 "payment_month": _safe_str(new_payment_month).strip(),
                                 "installation_year": _safe_int(new_installation_year) or None,
                                 "order_date": new_order_date,
@@ -2222,6 +2317,7 @@ elif page == "📦 Orders":
                 "Project": _safe_str(order.get("project_name")),
                 "Country": _safe_str(order.get("country")),
                 "Ordered Cams": _safe_int(order.get("ordered_cameras"), default=0),
+                "Payment Amount": _safe_float(order.get("payment_amount"), default=0.0),
                 "Payment Month": _safe_str(order.get("payment_month")),
                 "Install Year": _safe_int(order.get("installation_year"), default=0) or "",
                 "Order Date": (_parse_order_date(order.get("order_date")) or ""),
@@ -2306,6 +2402,7 @@ elif page == "📦 Orders":
         current_activation_date = _parse_order_date(selected_order.get("requested_activation_date"))
         current_payment_month = _safe_str(selected_order.get("payment_month")).strip()
         current_installation_year = _safe_str(selected_order.get("installation_year")).strip()
+        current_payment_amount = _safe_float(selected_order.get("payment_amount"), default=0.0)
         current_status = _normalize_order_status(selected_order.get("status", ""))
         if current_status not in ORDER_STATUS_OPTIONS:
             current_status = ORDER_STATUS_OPTIONS[0]
@@ -2324,27 +2421,34 @@ elif page == "📦 Orders":
                 value=max(0, _safe_int(selected_order.get("ordered_cameras"), default=0)),
                 key="upd_order_cameras",
             )
-            upd_payment_month = uc5.selectbox(
+            upd_payment_amount = uc5.number_input(
+                "Payment amount",
+                min_value=0.0,
+                step=1.0,
+                value=current_payment_amount,
+                key="upd_order_amount",
+            )
+            upd_payment_month = uc6.selectbox(
                 "Payment month",
                 [""] + MONTH_ORDER,
                 index=([""] + MONTH_ORDER).index(current_payment_month) if current_payment_month in MONTH_ORDER else 0,
                 key="upd_order_payment_month",
             )
-            upd_installation_year = uc6.selectbox(
+
+            uc7, uc8, uc9 = st.columns(3)
+            upd_installation_year = uc7.selectbox(
                 "Install year",
                 install_year_options,
                 index=install_year_options.index(current_installation_year) if current_installation_year in install_year_options else 0,
                 key="upd_order_install_year",
             )
-
-            uc7, uc8, uc9 = st.columns(3)
-            upd_order_date = uc7.date_input("Order date", value=current_order_date, key="upd_order_date")
-            upd_has_activation = uc8.checkbox(
+            upd_order_date = uc8.date_input("Order date", value=current_order_date, key="upd_order_date")
+            upd_has_activation = uc9.checkbox(
                 "Set requested activation",
                 value=current_activation_date is not None,
                 key="upd_order_has_activation",
             )
-            upd_requested_activation = uc9.date_input(
+            upd_requested_activation = st.date_input(
                 "Requested activation date",
                 value=current_activation_date or datetime.date.today(),
                 disabled=not upd_has_activation,
@@ -2374,6 +2478,7 @@ elif page == "📦 Orders":
                         project_name=_safe_str(upd_project_name).strip(),
                         country=_safe_str(upd_country).strip(),
                         ordered_cameras=int(upd_ordered_cameras),
+                        payment_amount=float(upd_payment_amount),
                         payment_month=_safe_str(upd_payment_month).strip(),
                         installation_year=_safe_int(upd_installation_year) or None,
                         order_date=upd_order_date,

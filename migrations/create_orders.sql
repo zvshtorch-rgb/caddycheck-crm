@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS orders (
     project_name                TEXT        NOT NULL,
     country                     TEXT,
     ordered_cameras             INTEGER     NOT NULL DEFAULT 0,
+    payment_amount              NUMERIC,
     payment_month               TEXT,
     installation_year           INTEGER,
     order_date                  DATE,
