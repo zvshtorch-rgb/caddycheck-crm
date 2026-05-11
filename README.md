@@ -118,3 +118,100 @@ For Gmail, use:
 All generated files are saved to the `output/` directory:
 - Monthly invoices: `CC_M_inv_<number>_<Mon>_<Year>.xlsx`
 - Dashboard exports: `CaddyCheck_Dashboard_<timestamp>.xlsx`
+
+---
+
+## Scheduled Monthly Sending
+
+Use `monthly_auto_send.py` to generate and email the monthly invoice automatically on the 1st of the month.
+
+Default behavior:
+- If you run it on `2026-05-01`, it prepares and sends the invoice for `April 2026`.
+- It uses the configured default recipients and CC addresses.
+- It saves invoice rows to the ledger before sending unless you disable that.
+- It refuses to resend the same month/year if that month already exists in `config/sent_invoices_log.json` unless you pass `--force`.
+
+Manual test:
+
+```bash
+python monthly_auto_send.py --dry-run
+```
+
+Live send:
+
+```bash
+python monthly_auto_send.py
+```
+
+Useful overrides:
+
+```bash
+python monthly_auto_send.py --month April --year 2026
+python monthly_auto_send.py --to finance@example.com --cc ops@example.com
+python monthly_auto_send.py --source excel
+python monthly_auto_send.py --force
+```
+
+Recommended Windows Task Scheduler setup:
+
+1. Create a Basic Task named `CaddyCheck Monthly Invoice`.
+2. Trigger: `Monthly`, every `1` month, on day `1`.
+3. Start time: choose the local time you want the email to go out.
+4. Action: `Start a program`.
+5. Program/script: path to your Python executable.
+6. Add arguments: `monthly_auto_send.py`.
+7. Start in: the project folder.
+
+Example values:
+
+```text
+Program/script: C:\Python311\python.exe
+Add arguments: monthly_auto_send.py
+Start in: F:\caddycheck-crm
+```
+
+Recommended first run in Task Scheduler:
+- Use `monthly_auto_send.py --dry-run` first.
+- Confirm the target month, invoice number, recipients, and total in the task history/logs.
+- Then switch the task arguments back to `monthly_auto_send.py`.
+
+---
+
+## Orders Workflow
+
+The CRM now supports project orders as a separate workflow from Projects.
+
+Before using it in the shared cloud app:
+- Run `migrations/create_orders.sql` in the Supabase SQL editor.
+
+How to use the Orders page:
+- Open the `📦 Orders` page in the Streamlit app.
+- Use `Import Orders` to upload a customer order file (`PDF`, `XLSX`, or `CSV`).
+- Or use `New Order` to create an order row manually.
+
+Tracked order fields:
+- Order reference
+- Project name
+- Country
+- Ordered cameras
+- Payment month
+- Install year
+- Requested activation date
+- Status
+- Notes
+
+Supported order statuses:
+- `New`
+- `Ordered`
+- `In Progress`
+- `Installed`
+- `Active`
+- `Cancelled`
+
+Creating CRM projects from orders:
+- Use `Create Missing Projects From Selected Orders` on the Orders page.
+- This creates projects in the Projects list from order rows that do not yet exist as projects.
+
+Storage behavior:
+- If the `orders` table exists in Supabase, orders are stored centrally.
+- If the table is missing, the app falls back to local JSON storage and shows a warning in the UI.
