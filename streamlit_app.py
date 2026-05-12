@@ -124,6 +124,16 @@ def _suggest_project_matches(candidate: object, project_names: list[str], limit:
     return [name for score, name in scored_matches[:limit] if score >= 0.55]
 
 
+def _get_exact_existing_project_match(candidate: object, project_names: list[str]) -> str:
+    candidate_key = _normalize_project_name_key(candidate)
+    if not candidate_key:
+        return ""
+    for project_name in project_names:
+        if _normalize_project_name_key(project_name) == candidate_key:
+            return project_name
+    return ""
+
+
 def _invoice_category_label(invoice) -> str:
     return str(getattr(invoice, "maintenance_year", "")).strip().lower()
 
@@ -2578,25 +2588,24 @@ elif page == "📦 Orders":
         current_status = _normalize_order_status(selected_order.get("status", ""))
         if current_status not in ORDER_STATUS_OPTIONS:
             current_status = ORDER_STATUS_OPTIONS[0]
-        suggested_match_name, suggested_match_score = _suggest_best_project_match(selected_order.get("project_name"), project_name_choices)
-        suggested_project_names = _suggest_project_matches(selected_order.get("project_name"), project_name_choices, limit=5)
-
-        if suggested_match_name:
-            st.caption(f"Suggested existing project match: {suggested_match_name} ({suggested_match_score:.2f})")
+        exact_project_match = _get_exact_existing_project_match(selected_order.get("project_name"), project_name_choices)
+        if exact_project_match:
+            st.caption(f"Exact project match found: {exact_project_match}")
+        else:
+            st.caption("No exact project match found. Use the dropdown below to pick a real project name.")
 
         with st.form("update_order_form"):
             uc1, uc2, uc3 = st.columns(3)
             upd_order_number = uc1.text_input("Order reference", value=_safe_str(selected_order.get("order_number")), key=f"upd_order_number{field_key_suffix}")
             upd_project_name = uc2.text_input("Project name", value=_safe_str(selected_order.get("project_name")), key=f"upd_order_project{field_key_suffix}")
             upd_country = uc3.text_input("Country", value=_safe_str(selected_order.get("country")), key=f"upd_order_country{field_key_suffix}")
-
-            project_match_options = [""] + suggested_project_names
-            if suggested_match_name and suggested_match_name not in suggested_project_names:
-                project_match_options = [""] + [suggested_match_name] + suggested_project_names
+            exact_project_picker_options = [""] + project_name_choices
+            exact_project_index = 1 if exact_project_match and exact_project_match in project_name_choices else 0
             upd_project_match = st.selectbox(
-                "Suggested project matches",
-                project_match_options,
-                index=1 if suggested_match_name and len(project_match_options) > 1 else 0,
+                "Existing project name (exact match only)",
+                exact_project_picker_options,
+                index=exact_project_index,
+                help="This dropdown only shows project names that already exist in the Projects list.",
                 key=f"upd_order_project_match{field_key_suffix}",
             )
 
