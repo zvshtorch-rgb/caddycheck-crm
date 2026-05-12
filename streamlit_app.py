@@ -75,6 +75,31 @@ def _project_name_matches(candidate: object, existing_keys: set[str]) -> bool:
     return any(SequenceMatcher(None, candidate_key, existing_key).ratio() >= 0.88 for existing_key in existing_keys)
 
 
+def _suggest_best_project_match(candidate: object, project_names: list[str]) -> tuple[str, float]:
+    candidate_key = _normalize_project_name_key(candidate)
+    if not candidate_key or not project_names:
+        return "", 0.0
+
+    from difflib import SequenceMatcher
+
+    best_name = ""
+    best_score = 0.0
+    for project_name in project_names:
+        project_key = _normalize_project_name_key(project_name)
+        if not project_key:
+            continue
+        if candidate_key == project_key:
+            return project_name, 1.0
+        if candidate_key in project_key or project_key in candidate_key:
+            score = 0.95
+        else:
+            score = SequenceMatcher(None, candidate_key, project_key).ratio()
+        if score > best_score:
+            best_score = score
+            best_name = project_name
+    return best_name, best_score
+
+
 def _invoice_category_label(invoice) -> str:
     return str(getattr(invoice, "maintenance_year", "")).strip().lower()
 
@@ -2111,6 +2136,11 @@ elif page == "📦 Orders":
         for project in projects
         if _safe_str(project.project_name).strip()
     }
+    project_name_choices = [
+        _safe_str(project.project_name).strip()
+        for project in projects
+        if _safe_str(project.project_name).strip()
+    ]
     install_year_options = [""] + [str(year) for year in range(datetime.date.today().year + 1, 2014, -1)]
 
     total_orders = len(orders)
@@ -2430,6 +2460,7 @@ elif page == "📦 Orders":
                 "ID": _safe_int(order.get("id"), default=0),
                 "Order": _safe_str(order.get("order_number")),
                 "Project": _safe_str(order.get("project_name")),
+                "Suggested Match": _suggest_best_project_match(order.get("project_name"), project_name_choices)[0],
                 "Country": _safe_str(order.get("country")),
                 "Ordered Cams": _safe_int(order.get("ordered_cameras"), default=0),
                 "Payment Amount": _safe_float(order.get("payment_amount"), default=0.0),
@@ -2523,6 +2554,17 @@ elif page == "📦 Orders":
         current_status = _normalize_order_status(selected_order.get("status", ""))
         if current_status not in ORDER_STATUS_OPTIONS:
             current_status = ORDER_STATUS_OPTIONS[0]
+        suggested_match_name, suggested_match_score = _suggest_best_project_match(selected_order.get("project_name"), project_name_choices)
+
+        if suggested_match_name:
+            st.caption(f"Suggested existing project match: {suggested_match_name} ({suggested_match_score:.2f})")
+            match_col1, match_col2 = st.columns([3, 1])
+            if match_col1.button("Use suggested match", key=f"use_suggested_match_{selected_order_id}"):
+                st.session_state[f"upd_order_project_{selected_order_id}"] = suggested_match_name
+                st.rerun()
+            if match_col2.button("Copy", key=f"copy_suggested_match_{selected_order_id}"):
+                st.session_state[f"upd_order_project_{selected_order_id}"] = suggested_match_name
+                st.rerun()
 
         with st.form("update_order_form"):
             uc1, uc2, uc3 = st.columns(3)
