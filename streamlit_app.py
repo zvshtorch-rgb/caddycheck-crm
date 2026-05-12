@@ -801,6 +801,7 @@ def _parse_order_amount_token(value: str) -> Optional[float]:
 def _extract_purchase_order_metrics(raw_df: pd.DataFrame, text: str) -> tuple[int, float]:
     ordered_cameras = 0
     line_totals: list[tuple[int, float]] = []  # (qty, amount) per detected line item
+    seen_row_texts: set[str] = set()
     seen_amounts: set[float] = set()
 
     summary_label_re = re.compile(
@@ -835,6 +836,11 @@ def _extract_purchase_order_metrics(raw_df: pd.DataFrame, text: str) -> tuple[in
         if is_header_row:
             continue
         is_summary_row = bool(text_cells) and all(summary_label_re.match(t) for t in text_cells)
+
+        normalized_row_text = re.sub(r"\s+", " ", " ".join(row_values).strip()).lower()
+        if normalized_row_text in seen_row_texts:
+            continue
+        seen_row_texts.add(normalized_row_text)
 
         qty_candidates = [
             _safe_int(cell, default=0)
