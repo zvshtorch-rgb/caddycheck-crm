@@ -100,6 +100,30 @@ def _suggest_best_project_match(candidate: object, project_names: list[str]) -> 
     return best_name, best_score
 
 
+def _suggest_project_matches(candidate: object, project_names: list[str], limit: int = 5) -> list[str]:
+    candidate_key = _normalize_project_name_key(candidate)
+    if not candidate_key or not project_names:
+        return []
+
+    from difflib import SequenceMatcher
+
+    scored_matches: list[tuple[float, str]] = []
+    for project_name in project_names:
+        project_key = _normalize_project_name_key(project_name)
+        if not project_key:
+            continue
+        if candidate_key == project_key:
+            score = 1.0
+        elif candidate_key in project_key or project_key in candidate_key:
+            score = 0.95
+        else:
+            score = SequenceMatcher(None, candidate_key, project_key).ratio()
+        scored_matches.append((score, project_name))
+
+    scored_matches.sort(key=lambda item: (-item[0], item[1].lower()))
+    return [name for score, name in scored_matches[:limit] if score >= 0.55]
+
+
 def _invoice_category_label(invoice) -> str:
     return str(getattr(invoice, "maintenance_year", "")).strip().lower()
 
@@ -2555,22 +2579,26 @@ elif page == "📦 Orders":
         if current_status not in ORDER_STATUS_OPTIONS:
             current_status = ORDER_STATUS_OPTIONS[0]
         suggested_match_name, suggested_match_score = _suggest_best_project_match(selected_order.get("project_name"), project_name_choices)
+        suggested_project_names = _suggest_project_matches(selected_order.get("project_name"), project_name_choices, limit=5)
 
         if suggested_match_name:
             st.caption(f"Suggested existing project match: {suggested_match_name} ({suggested_match_score:.2f})")
-            match_col1, match_col2 = st.columns([3, 1])
-            if match_col1.button("Use suggested match", key=f"use_suggested_match_{selected_order_id}"):
-                st.session_state[f"upd_order_project_{selected_order_id}"] = suggested_match_name
-                st.rerun()
-            if match_col2.button("Copy", key=f"copy_suggested_match_{selected_order_id}"):
-                st.session_state[f"upd_order_project_{selected_order_id}"] = suggested_match_name
-                st.rerun()
 
         with st.form("update_order_form"):
             uc1, uc2, uc3 = st.columns(3)
             upd_order_number = uc1.text_input("Order reference", value=_safe_str(selected_order.get("order_number")), key=f"upd_order_number{field_key_suffix}")
             upd_project_name = uc2.text_input("Project name", value=_safe_str(selected_order.get("project_name")), key=f"upd_order_project{field_key_suffix}")
             upd_country = uc3.text_input("Country", value=_safe_str(selected_order.get("country")), key=f"upd_order_country{field_key_suffix}")
+
+            project_match_options = [""] + suggested_project_names
+            if suggested_match_name and suggested_match_name not in suggested_project_names:
+                project_match_options = [""] + [suggested_match_name] + suggested_project_names
+            upd_project_match = st.selectbox(
+                "Suggested project matches",
+                project_match_options,
+                index=1 if suggested_match_name and len(project_match_options) > 1 else 0,
+                key=f"upd_order_project_match{field_key_suffix}",
+            )
 
             uc4, uc5, uc6 = st.columns(3)
             upd_ordered_cameras = uc4.number_input(
@@ -2626,7 +2654,8 @@ elif page == "📦 Orders":
             delete_order_btn = form_col2.form_submit_button("🗑️ Delete", type="secondary")
 
         if update_order_btn:
-            if not _safe_str(upd_project_name).strip():
+            final_project_name = _safe_str(upd_project_match).strip() or _safe_str(upd_project_name).strip()
+            if not final_project_name:
                 st.error("Project name is required.")
             else:
                 try:
@@ -2634,7 +2663,7 @@ elif page == "📦 Orders":
                         _safe_int(selected_order.get("id"), default=0),
                         orders_source_name,
                         order_number=_safe_str(upd_order_number).strip(),
-                        project_name=_safe_str(upd_project_name).strip(),
+                        project_name=final_project_name,
                         country=_safe_str(upd_country).strip(),
                         ordered_cameras=int(upd_ordered_cameras),
                         payment_amount=float(upd_payment_amount),
