@@ -60,6 +60,21 @@ def _normalize_project_name_key(value: object) -> str:
     return re.sub(r"[^a-z0-9]+", "", text)
 
 
+def _project_name_matches(candidate: object, existing_keys: set[str]) -> bool:
+    candidate_key = _normalize_project_name_key(candidate)
+    if not candidate_key:
+        return False
+    if candidate_key in existing_keys:
+        return True
+    for existing_key in existing_keys:
+        if candidate_key in existing_key or existing_key in candidate_key:
+            return True
+
+    from difflib import SequenceMatcher
+
+    return any(SequenceMatcher(None, candidate_key, existing_key).ratio() >= 0.88 for existing_key in existing_keys)
+
+
 def _invoice_category_label(invoice) -> str:
     return str(getattr(invoice, "maintenance_year", "")).strip().lower()
 
@@ -1812,7 +1827,7 @@ elif page == "🏗️ Projects":
                         }
                         new_project_rows = [
                             row for row in import_rows
-                            if _normalize_project_name_key(row["project_name"]) not in existing_project_names
+                            if not _project_name_matches(row["project_name"], existing_project_names)
                         ]
                         skipped_existing = len(import_rows) - len(new_project_rows)
 
@@ -2105,7 +2120,7 @@ elif page == "📦 Orders":
     )
     missing_project_orders = [
         order for order in orders
-        if _normalize_project_name_key(order.get("project_name")) not in project_name_keys
+        if not _project_name_matches(order.get("project_name"), project_name_keys)
     ]
     total_ordered_cameras = sum(_safe_int(order.get("ordered_cameras"), default=0) for order in orders)
 
@@ -2405,7 +2420,7 @@ elif page == "📦 Orders":
     if missing_only:
         filtered_orders = [
             order for order in filtered_orders
-            if _normalize_project_name_key(order.get("project_name")) not in project_name_keys
+            if not _project_name_matches(order.get("project_name"), project_name_keys)
         ]
 
     st.caption(f"Showing {len(filtered_orders)} of {len(orders)} order row(s)")
@@ -2423,7 +2438,7 @@ elif page == "📦 Orders":
                 "Order Date": (_parse_order_date(order.get("order_date")) or ""),
                 "Requested Activation": (_parse_order_date(order.get("requested_activation_date")) or ""),
                 "Status": _normalize_order_status(order.get("status", "")),
-                "Project Exists": "Yes" if _normalize_project_name_key(order.get("project_name")) in project_name_keys else "No",
+                "Project Exists": "Yes" if _project_name_matches(order.get("project_name"), project_name_keys) else "No",
             }
             for order in filtered_orders
         ])
@@ -2437,7 +2452,7 @@ elif page == "📦 Orders":
         missing_order_options = {
             f"#{_safe_int(order.get('id'), default=0)} | {_safe_str(order.get('order_number')) or 'No Ref'} | {_safe_str(order.get('project_name'))}": order
             for order in filtered_orders
-            if _normalize_project_name_key(order.get("project_name")) not in project_name_keys
+            if not _project_name_matches(order.get("project_name"), project_name_keys)
         }
         if missing_order_options:
             selected_missing_orders = st.multiselect(
@@ -2460,7 +2475,7 @@ elif page == "📦 Orders":
                     for label in selected_missing_orders:
                         order = missing_order_options[label]
                         project_name = _safe_str(order.get("project_name")).strip()
-                        if not project_name or _normalize_project_name_key(project_name) in existing_project_keys:
+                        if not project_name or _project_name_matches(project_name, existing_project_keys):
                             continue
                         activation_date = _parse_order_date(order.get("requested_activation_date"))
                         projects.append(ProjectModel(
