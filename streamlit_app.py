@@ -862,7 +862,7 @@ def _extract_purchase_order_metrics(raw_df: pd.DataFrame, text: str) -> tuple[in
             continue
         seen_amounts.add(line_amount)
         line_totals.append((line_qty, line_amount))
-        ordered_cameras = max(ordered_cameras, line_qty)
+        ordered_cameras += line_qty
 
     payment_amount = sum(amount for _, amount in line_totals)
 
