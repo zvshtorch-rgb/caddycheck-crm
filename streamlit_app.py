@@ -814,6 +814,16 @@ def _extract_order_camera_total_from_text(text: str) -> int:
     return max(matches) if matches else 0
 
 
+def _infer_order_camera_total_from_amount(payment_amount: float, rate_per_camera: float = 778.0) -> int:
+    if payment_amount <= 0 or rate_per_camera <= 0:
+        return 0
+    inferred = payment_amount / rate_per_camera
+    rounded = round(inferred)
+    if rounded >= 1 and abs(inferred - rounded) <= 0.05:
+        return int(rounded)
+    return 0
+
+
 def _extract_purchase_order_metrics(raw_df: pd.DataFrame, text: str) -> tuple[int, float]:
     ordered_cameras = 0
     line_totals: list[tuple[int, float]] = []  # (qty, amount) per detected line item
@@ -909,6 +919,10 @@ def _extract_purchase_order_metrics(raw_df: pd.DataFrame, text: str) -> tuple[in
         if unique_amount_tokens:
             # Prefer the largest amount as the order total (typically the grand total)
             payment_amount = unique_amount_tokens[0]
+
+    amount_inferred_cams = _infer_order_camera_total_from_amount(payment_amount)
+    if amount_inferred_cams > ordered_cameras:
+        ordered_cameras = amount_inferred_cams
 
     return ordered_cameras, round(payment_amount, 2)
 
@@ -1030,7 +1044,13 @@ def _parse_uploaded_project_order(file_bytes: bytes, filename: str) -> tuple[dic
         rows.append({
             "project_name": project_name,
             "country": _safe_str(raw_df.iat[row_idx, columns["country"]]).strip() if "country" in columns else "",
-            "num_cams": max(_safe_int(raw_df.iat[row_idx, columns["num_cams"]], default=0), explicit_camera_total),
+            "num_cams": max(
+                _safe_int(raw_df.iat[row_idx, columns["num_cams"]], default=0),
+                explicit_camera_total,
+                _infer_order_camera_total_from_amount(
+                    _safe_float(raw_df.iat[row_idx, columns["payment_amount"]], default=0.0) if "payment_amount" in columns else 0.0
+                ),
+            ),
             "payment_amount": _safe_float(raw_df.iat[row_idx, columns["payment_amount"]], default=0.0) if "payment_amount" in columns else 0.0,
             "payment_month": payment_month,
             "installation_year": install_year,
