@@ -55,6 +55,11 @@ def _safe_str(v):
     return str(v)
 
 
+def _normalize_project_name_key(value: object) -> str:
+    text = _safe_str(value).strip().lower()
+    return re.sub(r"[^a-z0-9]+", "", text)
+
+
 def _invoice_category_label(invoice) -> str:
     return str(getattr(invoice, "maintenance_year", "")).strip().lower()
 
@@ -1801,13 +1806,13 @@ elif page == "🏗️ Projects":
                             if normalized_import_names.count(row["project_name"].strip().lower()) > 1
                         })
                         existing_project_names = {
-                            _safe_str(project.project_name).strip().lower()
+                            _normalize_project_name_key(project.project_name)
                             for project in projects
                             if _safe_str(project.project_name).strip()
                         }
                         new_project_rows = [
                             row for row in import_rows
-                            if row["project_name"].strip().lower() not in existing_project_names
+                            if _normalize_project_name_key(row["project_name"]) not in existing_project_names
                         ]
                         skipped_existing = len(import_rows) - len(new_project_rows)
 
@@ -2082,12 +2087,12 @@ elif page == "📦 Orders":
         )
 
     project_name_keys = {
-        _safe_str(project.project_name).strip().lower()
+        _normalize_project_name_key(project.project_name)
         for project in projects
         if _safe_str(project.project_name).strip()
     }
     project_lookup = {
-        _safe_str(project.project_name).strip().lower(): project
+        _normalize_project_name_key(project.project_name): project
         for project in projects
         if _safe_str(project.project_name).strip()
     }
@@ -2100,7 +2105,7 @@ elif page == "📦 Orders":
     )
     missing_project_orders = [
         order for order in orders
-        if _safe_str(order.get("project_name")).strip().lower() not in project_name_keys
+        if _normalize_project_name_key(order.get("project_name")) not in project_name_keys
     ]
     total_ordered_cameras = sum(_safe_int(order.get("ordered_cameras"), default=0) for order in orders)
 
@@ -2400,7 +2405,7 @@ elif page == "📦 Orders":
     if missing_only:
         filtered_orders = [
             order for order in filtered_orders
-            if _safe_str(order.get("project_name")).strip().lower() not in project_name_keys
+            if _normalize_project_name_key(order.get("project_name")) not in project_name_keys
         ]
 
     st.caption(f"Showing {len(filtered_orders)} of {len(orders)} order row(s)")
@@ -2418,7 +2423,7 @@ elif page == "📦 Orders":
                 "Order Date": (_parse_order_date(order.get("order_date")) or ""),
                 "Requested Activation": (_parse_order_date(order.get("requested_activation_date")) or ""),
                 "Status": _normalize_order_status(order.get("status", "")),
-                "Project Exists": "Yes" if _safe_str(order.get("project_name")).strip().lower() in project_name_keys else "No",
+                "Project Exists": "Yes" if _normalize_project_name_key(order.get("project_name")) in project_name_keys else "No",
             }
             for order in filtered_orders
         ])
@@ -2432,7 +2437,7 @@ elif page == "📦 Orders":
         missing_order_options = {
             f"#{_safe_int(order.get('id'), default=0)} | {_safe_str(order.get('order_number')) or 'No Ref'} | {_safe_str(order.get('project_name'))}": order
             for order in filtered_orders
-            if _safe_str(order.get("project_name")).strip().lower() not in project_name_keys
+            if _normalize_project_name_key(order.get("project_name")) not in project_name_keys
         }
         if missing_order_options:
             selected_missing_orders = st.multiselect(
@@ -2447,7 +2452,7 @@ elif page == "📦 Orders":
                     from models.project import Project as ProjectModel
 
                     existing_project_keys = {
-                        _safe_str(project.project_name).strip().lower()
+                        _normalize_project_name_key(project.project_name)
                         for project in projects
                         if _safe_str(project.project_name).strip()
                     }
@@ -2455,7 +2460,7 @@ elif page == "📦 Orders":
                     for label in selected_missing_orders:
                         order = missing_order_options[label]
                         project_name = _safe_str(order.get("project_name")).strip()
-                        if not project_name or project_name.lower() in existing_project_keys:
+                        if not project_name or _normalize_project_name_key(project_name) in existing_project_keys:
                             continue
                         activation_date = _parse_order_date(order.get("requested_activation_date"))
                         projects.append(ProjectModel(
@@ -2470,7 +2475,7 @@ elif page == "📦 Orders":
                             ),
                             status=_project_status_from_order_status(order.get("status", "")),
                         ))
-                        existing_project_keys.add(project_name.lower())
+                        existing_project_keys.add(_normalize_project_name_key(project_name))
                         added_projects += 1
 
                     try:
@@ -2492,6 +2497,8 @@ elif page == "📦 Orders":
         }
         selected_order_label = st.selectbox("Select order row", list(order_options.keys()), key="orders_selected_row")
         selected_order = order_options[selected_order_label]
+        selected_order_id = _safe_int(selected_order.get("id"), default=0)
+        field_key_suffix = f"_{selected_order_id}"
 
         current_order_date = _parse_order_date(selected_order.get("order_date")) or datetime.date.today()
         current_activation_date = _parse_order_date(selected_order.get("requested_activation_date"))
@@ -2504,9 +2511,9 @@ elif page == "📦 Orders":
 
         with st.form("update_order_form"):
             uc1, uc2, uc3 = st.columns(3)
-            upd_order_number = uc1.text_input("Order reference", value=_safe_str(selected_order.get("order_number")), key="upd_order_number")
-            upd_project_name = uc2.text_input("Project name", value=_safe_str(selected_order.get("project_name")), key="upd_order_project")
-            upd_country = uc3.text_input("Country", value=_safe_str(selected_order.get("country")), key="upd_order_country")
+            upd_order_number = uc1.text_input("Order reference", value=_safe_str(selected_order.get("order_number")), key=f"upd_order_number{field_key_suffix}")
+            upd_project_name = uc2.text_input("Project name", value=_safe_str(selected_order.get("project_name")), key=f"upd_order_project{field_key_suffix}")
+            upd_country = uc3.text_input("Country", value=_safe_str(selected_order.get("country")), key=f"upd_order_country{field_key_suffix}")
 
             uc4, uc5, uc6 = st.columns(3)
             upd_ordered_cameras = uc4.number_input(
@@ -2514,20 +2521,20 @@ elif page == "📦 Orders":
                 min_value=0,
                 step=1,
                 value=max(0, _safe_int(selected_order.get("ordered_cameras"), default=0)),
-                key="upd_order_cameras",
+                key=f"upd_order_cameras{field_key_suffix}",
             )
             upd_payment_amount = uc5.number_input(
                 "Payment amount",
                 min_value=0.0,
                 step=1.0,
                 value=current_payment_amount,
-                key="upd_order_amount",
+                key=f"upd_order_amount{field_key_suffix}",
             )
             upd_payment_month = uc6.selectbox(
                 "Payment month",
                 [""] + MONTH_ORDER,
                 index=([""] + MONTH_ORDER).index(current_payment_month) if current_payment_month in MONTH_ORDER else 0,
-                key="upd_order_payment_month",
+                key=f"upd_order_payment_month{field_key_suffix}",
             )
 
             uc7, uc8, uc9 = st.columns(3)
@@ -2535,28 +2542,28 @@ elif page == "📦 Orders":
                 "Install year",
                 install_year_options,
                 index=install_year_options.index(current_installation_year) if current_installation_year in install_year_options else 0,
-                key="upd_order_install_year",
+                key=f"upd_order_install_year{field_key_suffix}",
             )
-            upd_order_date = uc8.date_input("Order date", value=current_order_date, key="upd_order_date")
+            upd_order_date = uc8.date_input("Order date", value=current_order_date, key=f"upd_order_date{field_key_suffix}")
             upd_has_activation = uc9.checkbox(
                 "Set requested activation",
                 value=current_activation_date is not None,
-                key="upd_order_has_activation",
+                key=f"upd_order_has_activation{field_key_suffix}",
             )
             upd_requested_activation = st.date_input(
                 "Requested activation date",
                 value=current_activation_date or datetime.date.today(),
                 disabled=not upd_has_activation,
-                key="upd_order_activation",
+                key=f"upd_order_activation{field_key_suffix}",
             )
 
             upd_status = st.selectbox(
                 "Status",
                 ORDER_STATUS_OPTIONS,
                 index=ORDER_STATUS_OPTIONS.index(current_status),
-                key="upd_order_status",
+                key=f"upd_order_status{field_key_suffix}",
             )
-            upd_notes = st.text_area("Notes", value=_safe_str(selected_order.get("notes")), height=100, key="upd_order_notes")
+            upd_notes = st.text_area("Notes", value=_safe_str(selected_order.get("notes")), height=100, key=f"upd_order_notes{field_key_suffix}")
             form_col1, form_col2 = st.columns([3, 1])
             update_order_btn = form_col1.form_submit_button("💾 Update Order", type="primary")
             delete_order_btn = form_col2.form_submit_button("🗑️ Delete", type="secondary")
