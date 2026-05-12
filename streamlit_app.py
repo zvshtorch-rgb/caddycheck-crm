@@ -798,6 +798,22 @@ def _parse_order_amount_token(value: str) -> Optional[float]:
         return None
 
 
+def _extract_order_camera_total_from_text(text: str) -> int:
+    patterns = [
+        r"\b(?:total|in total|overall|overall total|grand total)\s*(?:of\s*)?(\d{1,4})\s*(?:cameras?|cams?)\b",
+        r"\b(\d{1,4})\s*(?:cameras?|cams?)\s*(?:in\s+total|total|overall)\b",
+        r"\b(?:cameras?|cams?|quantity|qty)\s*[:\-]?\s*(\d{1,4})\b",
+        r"\b(\d{1,4})\s*(?:checkouts?|cameras?|cams?)\b",
+    ]
+    matches: list[int] = []
+    for pattern in patterns:
+        for match in re.finditer(pattern, text, re.IGNORECASE):
+            value = _safe_int(match.group(1), default=0)
+            if value > 0:
+                matches.append(value)
+    return max(matches) if matches else 0
+
+
 def _extract_purchase_order_metrics(raw_df: pd.DataFrame, text: str) -> tuple[int, float]:
     ordered_cameras = 0
     line_totals: list[tuple[int, float]] = []  # (qty, amount) per detected line item
@@ -997,6 +1013,7 @@ def _parse_uploaded_project_order(file_bytes: bytes, filename: str) -> tuple[dic
 
     header_row_idx, columns = header_info
     rows: list[dict] = []
+    explicit_camera_total = _extract_order_camera_total_from_text(_extract_project_order_pdf_text(file_bytes)) if suffix == ".pdf" else 0
     for row_idx in range(header_row_idx + 1, len(raw_df.index)):
         project_name = _safe_str(raw_df.iat[row_idx, columns["project_name"]]).strip()
         if not project_name:
@@ -1013,7 +1030,7 @@ def _parse_uploaded_project_order(file_bytes: bytes, filename: str) -> tuple[dic
         rows.append({
             "project_name": project_name,
             "country": _safe_str(raw_df.iat[row_idx, columns["country"]]).strip() if "country" in columns else "",
-            "num_cams": _safe_int(raw_df.iat[row_idx, columns["num_cams"]], default=0),
+            "num_cams": max(_safe_int(raw_df.iat[row_idx, columns["num_cams"]], default=0), explicit_camera_total),
             "payment_amount": _safe_float(raw_df.iat[row_idx, columns["payment_amount"]], default=0.0) if "payment_amount" in columns else 0.0,
             "payment_month": payment_month,
             "installation_year": install_year,
