@@ -2509,7 +2509,6 @@ elif page == "📦 Orders":
                 "Country": _safe_str(order.get("country")),
                 "Ordered Cams": _safe_int(order.get("ordered_cameras"), default=0),
                 "Payment Amount": _safe_float(order.get("payment_amount"), default=0.0),
-                "Payment Month": _safe_str(order.get("payment_month")),
                 "Install Year": _safe_int(order.get("installation_year"), default=0) or "",
                 "Order Date": (_parse_order_date(order.get("order_date")) or ""),
                 "Requested Activation": (_parse_order_date(order.get("requested_activation_date")) or ""),
