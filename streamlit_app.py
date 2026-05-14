@@ -1565,9 +1565,16 @@ if page == "📊 Dashboard":
             return "color: #27AE60; font-weight: bold"
         return "color: #E74C3C"
 
+    proj_table = proj_df
+    if len(proj_df) > 0:
+        proj_table = proj_df.style.set_properties(subset=["# Cams"], **{"text-align": "left"})
+        if "Status" in proj_df.columns:
+            proj_table = proj_table.map(color_status, subset=["Status"])
+
     st.dataframe(
-        proj_df.style.map(color_status, subset=["Status"]) if "Status" in proj_df.columns and len(proj_df) > 0 else proj_df,
+        proj_table,
         use_container_width=True,
+        hide_index=True,
         height=300,
     )
 
