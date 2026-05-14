@@ -191,6 +191,7 @@ from services.supabase_service import (
     create_orders as create_orders_supabase,
     update_order as update_order_supabase,
     delete_order as delete_order_supabase,
+    download_sent_invoice_pdf as download_sent_invoice_pdf_supabase,
 )
 
 ORDER_STATUS_OPTIONS = [
@@ -3877,6 +3878,8 @@ elif page == "📅 Monthly Invoice":
                     selected_sent_row = sent_download_options[selected_sent_label]
                     archive_path_text = _safe_str(selected_sent_row.get("pdf_archive_path", "")).strip()
                     archive_path = Path(archive_path_text) if archive_path_text else None
+                    download_bytes = None
+                    download_name = _safe_str(selected_sent_row.get("pdf_filename", "")).strip() or "invoice.pdf"
                     if archive_path is None or not archive_path.exists():
                         pdf_filename = _safe_str(selected_sent_row.get("pdf_filename", "")).strip()
                         if pdf_filename:
@@ -3886,13 +3889,26 @@ elif page == "📅 Monthly Invoice":
 
                     if archive_path and archive_path.exists():
                         with open(archive_path, "rb") as pdf_file:
-                            st.download_button(
-                                "Download Sent PDF",
-                                data=pdf_file.read(),
-                                file_name=archive_path.name,
-                                mime="application/pdf",
-                                key="download_sent_pdf",
-                            )
+                            download_bytes = pdf_file.read()
+                        download_name = archive_path.name
+                    else:
+                        storage_bucket = _safe_str(selected_sent_row.get("pdf_storage_bucket", "")).strip()
+                        storage_path = _safe_str(selected_sent_row.get("pdf_storage_path", "")).strip()
+                        if storage_bucket and storage_path:
+                            try:
+                                download_bytes = download_sent_invoice_pdf_supabase(storage_bucket, storage_path)
+                                download_name = Path(storage_path).name or download_name
+                            except Exception as exc:
+                                st.caption(f"Supabase PDF archive is not available yet: {exc}")
+
+                    if download_bytes is not None:
+                        st.download_button(
+                            "Download Sent PDF",
+                            data=download_bytes,
+                            file_name=download_name,
+                            mime="application/pdf",
+                            key="download_sent_pdf",
+                        )
                     else:
                         st.info("No archived PDF is stored for this sent entry yet.")
                         sent_month = _safe_str(selected_sent_row.get("month", "")).strip()

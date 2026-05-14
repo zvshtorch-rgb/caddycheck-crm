@@ -129,7 +129,10 @@ Default behavior:
 - If you run it on `2026-05-01`, it prepares and sends the invoice for `April 2026`.
 - It uses the configured default recipients and CC addresses.
 - It saves invoice rows to the ledger before sending unless you disable that.
-- It refuses to resend the same month/year if that month already exists in `config/sent_invoices_log.json` unless you pass `--force`.
+- It refuses to resend the same month/year if that month already exists in the sent invoice log unless you pass `--force`.
+
+For shared/cloud use:
+- Run `migrations/create_sent_invoices.sql` in the Supabase SQL editor so sent invoices persist across app restarts.
 
 Manual test:
 
@@ -215,3 +218,32 @@ Creating CRM projects from orders:
 Storage behavior:
 - If the `orders` table exists in Supabase, orders are stored centrally.
 - If the table is missing, the app falls back to local JSON storage and shows a warning in the UI.
+
+---
+
+## Slide Content: Supabase, Streamlit, and GitHub
+
+If you want a single slide that explains how the app is connected, you can use this:
+
+**Title:** How CaddyCheck CRM connects Streamlit, Supabase, and GitHub
+
+**Slide text:**
+- **Streamlit** is the user interface. It shows the dashboard, orders, projects, invoices, and settings.
+- **Supabase** is the live database. The app reads and writes projects, invoices, orders, tickets, and subscriptions there.
+- **GitHub** stores the source code and updates. When the app changes, the code is committed and deployed from GitHub.
+- Optional local files act as a fallback when Supabase data is not available.
+
+**Simple flow diagram:**
+
+```text
+User
+  ↓
+Streamlit app
+  ↓
+Supabase database
+  ↓
+GitHub repository
+```
+
+**Short speaker note:**
+The Streamlit app is the front end that the user interacts with. Supabase is the backend database where the app saves live data. GitHub keeps the codebase versioned and is the place from which the app is deployed and maintained.

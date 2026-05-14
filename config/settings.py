@@ -4,6 +4,8 @@ import json
 import logging
 from pathlib import Path
 
+logger = logging.getLogger(__name__)
+
 # Base directory of the project
 BASE_DIR = Path(__file__).parent.parent
 
@@ -205,8 +207,16 @@ def save_email_config(config: dict) -> None:
         json.dump(safe_config, f, indent=2)
 
 
-def load_sent_invoices_log() -> list:
-    """Load sent invoice email history."""
+def _is_missing_supabase_table_error(exc: Exception, table_name: str) -> bool:
+    message = str(exc).lower()
+    return table_name.lower() in message and (
+        "could not find the table" in message
+        or "does not exist" in message
+        or "42p01" in message
+    )
+
+
+def _load_local_sent_invoices_log() -> list:
     if SENT_INVOICES_LOG_FILE.exists():
         try:
             with open(SENT_INVOICES_LOG_FILE, "r", encoding="utf-8") as f:
@@ -217,20 +227,68 @@ def load_sent_invoices_log() -> list:
     return []
 
 
-def append_sent_invoice_log(entry: dict) -> None:
-    """Append a sent invoice email record to the local log file."""
+def _append_local_sent_invoice_log(entry: dict) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    entries = load_sent_invoices_log()
+    entries = _load_local_sent_invoices_log()
     entries.append(entry)
     with open(SENT_INVOICES_LOG_FILE, "w", encoding="utf-8") as f:
         json.dump(entries, f, indent=2)
 
 
-def save_sent_invoices_log(entries: list) -> None:
-    """Replace the sent invoice email history file."""
+def _save_local_sent_invoices_log(entries: list) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     with open(SENT_INVOICES_LOG_FILE, "w", encoding="utf-8") as f:
         json.dump(entries, f, indent=2)
+
+
+def load_sent_invoices_log() -> list:
+    """Load sent invoice email history, preferring Supabase when available."""
+    local_entries = _load_local_sent_invoices_log()
+    try:
+        from services.supabase_service import load_sent_invoices, save_sent_invoices
+
+        remote_entries = load_sent_invoices()
+        if not remote_entries and local_entries:
+            save_sent_invoices(local_entries)
+            remote_entries = load_sent_invoices()
+        return remote_entries or local_entries
+    except RuntimeError as exc:
+        if "Supabase credentials not configured" not in str(exc):
+            logger.warning("Falling back to local sent invoice log: %s", exc)
+    except Exception as exc:
+        if not _is_missing_supabase_table_error(exc, "sent_invoices"):
+            logger.warning("Falling back to local sent invoice log: %s", exc)
+    return local_entries
+
+
+def append_sent_invoice_log(entry: dict) -> None:
+    """Append a sent invoice email record, preferring Supabase and keeping a local backup."""
+    try:
+        from services.supabase_service import append_sent_invoice
+
+        append_sent_invoice(entry)
+    except RuntimeError as exc:
+        if "Supabase credentials not configured" not in str(exc):
+            logger.warning("Could not append sent invoice log to Supabase: %s", exc)
+    except Exception as exc:
+        if not _is_missing_supabase_table_error(exc, "sent_invoices"):
+            logger.warning("Could not append sent invoice log to Supabase: %s", exc)
+    _append_local_sent_invoice_log(entry)
+
+
+def save_sent_invoices_log(entries: list) -> None:
+    """Replace the sent invoice email history, preferring Supabase and keeping a local backup."""
+    try:
+        from services.supabase_service import save_sent_invoices
+
+        save_sent_invoices(entries)
+    except RuntimeError as exc:
+        if "Supabase credentials not configured" not in str(exc):
+            logger.warning("Could not save sent invoice log to Supabase: %s", exc)
+    except Exception as exc:
+        if not _is_missing_supabase_table_error(exc, "sent_invoices"):
+            logger.warning("Could not save sent invoice log to Supabase: %s", exc)
+    _save_local_sent_invoices_log(entries)
 
 
 def load_orders_records() -> list:

@@ -1,9 +1,11 @@
 """Supabase service — cloud storage for projects, invoices, and tickets."""
 import datetime
 import logging
+from pathlib import Path
 from typing import List, Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
+SENT_INVOICE_BUCKET = "sent-invoices"
 
 
 def _get_client():
@@ -462,6 +464,170 @@ def update_order(order_id: int, **fields) -> dict:
 def delete_order(order_id: int) -> None:
     client = _get_client()
     client.table("orders").delete().eq("id", order_id).execute()
+
+
+# ── Sent invoices ─────────────────────────────────────────────────────────────
+
+def _normalize_str_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    return [str(value).strip()] if str(value).strip() else []
+
+
+def _sent_invoice_storage_path(entry: Dict[str, Any], file_path: Path) -> str:
+    year = entry.get("year") or "unknown"
+    month = str(entry.get("month") or "unknown").strip().lower().replace(" ", "-")
+    invoice_number = entry.get("invoice_number") or "unknown"
+    sent_at = str(entry.get("sent_at") or datetime.datetime.utcnow().isoformat()).replace(":", "-")
+    return f"{year}/{month}/{invoice_number}_{sent_at}_{file_path.name}"
+
+
+def _ensure_storage_bucket(client, bucket_name: str) -> None:
+    try:
+        buckets = client.storage.list_buckets()
+        for bucket in buckets:
+            name = bucket.get("name") if isinstance(bucket, dict) else getattr(bucket, "name", None)
+            if name == bucket_name:
+                return
+    except Exception:
+        pass
+
+    try:
+        client.storage.create_bucket(bucket_name, {"public": False})
+    except Exception as exc:
+        if "already exists" not in str(exc).lower():
+            raise
+
+
+def upload_sent_invoice_pdf(file_path: str | Path, storage_path: Optional[str] = None) -> Dict[str, str]:
+    client = _get_client()
+    pdf_path = Path(file_path)
+    if not pdf_path.exists():
+        raise FileNotFoundError(f"Sent invoice PDF was not found: {pdf_path}")
+
+    _ensure_storage_bucket(client, SENT_INVOICE_BUCKET)
+    target_path = storage_path or pdf_path.name
+    file_bytes = pdf_path.read_bytes()
+
+    try:
+        client.storage.from_(SENT_INVOICE_BUCKET).remove([target_path])
+    except Exception:
+        pass
+
+    client.storage.from_(SENT_INVOICE_BUCKET).upload(
+        target_path,
+        file_bytes,
+        {"content-type": "application/pdf"},
+    )
+    return {
+        "pdf_storage_bucket": SENT_INVOICE_BUCKET,
+        "pdf_storage_path": target_path,
+    }
+
+
+def download_sent_invoice_pdf(bucket_name: str, storage_path: str) -> bytes:
+    client = _get_client()
+    return client.storage.from_(bucket_name).download(storage_path)
+
+
+def _normalize_sent_invoice_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
+    normalized: Dict[str, Any] = {}
+    if entry.get("id") not in (None, ""):
+        normalized["id"] = int(entry["id"])
+
+    normalized["sent_at"] = str(entry.get("sent_at") or datetime.datetime.utcnow().isoformat())
+    normalized["invoice_number"] = int(entry["invoice_number"]) if entry.get("invoice_number") not in (None, "") else None
+    normalized["month"] = str(entry.get("month") or "").strip() or None
+    normalized["year"] = int(entry["year"]) if entry.get("year") not in (None, "") else None
+    normalized["pdf_filename"] = str(entry.get("pdf_filename") or "").strip() or None
+    normalized["pdf_archive_path"] = str(entry.get("pdf_archive_path") or "").strip() or None
+    normalized["pdf_storage_bucket"] = str(entry.get("pdf_storage_bucket") or "").strip() or None
+    normalized["pdf_storage_path"] = str(entry.get("pdf_storage_path") or "").strip() or None
+    normalized["recipients"] = _normalize_str_list(entry.get("recipients"))
+    normalized["cc"] = _normalize_str_list(entry.get("cc"))
+    normalized["subject"] = str(entry.get("subject") or "").strip() or None
+    normalized["project_count"] = int(entry["project_count"]) if entry.get("project_count") not in (None, "") else None
+    normalized["total_amount"] = float(entry["total_amount"]) if entry.get("total_amount") not in (None, "") else None
+    normalized["saved_to_ledger"] = bool(entry.get("saved_to_ledger"))
+    normalized["ledger_rows_added"] = int(entry["ledger_rows_added"]) if entry.get("ledger_rows_added") not in (None, "") else None
+    normalized["source_name"] = str(entry.get("source_name") or "").strip() or None
+    normalized["updated_at"] = datetime.datetime.utcnow().isoformat()
+    return normalized
+
+
+def _attach_sent_invoice_storage(entry: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = _normalize_sent_invoice_entry(entry)
+    archive_path_text = normalized.get("pdf_archive_path")
+    if not archive_path_text:
+        return normalized
+
+    archive_path = Path(archive_path_text)
+    if not archive_path.exists():
+        return normalized
+
+    if normalized.get("pdf_storage_bucket") and normalized.get("pdf_storage_path"):
+        return normalized
+
+    try:
+        storage_meta = upload_sent_invoice_pdf(
+            archive_path,
+            storage_path=_sent_invoice_storage_path(normalized, archive_path),
+        )
+        normalized.update(storage_meta)
+    except Exception as exc:
+        logger.warning("Could not upload sent invoice PDF to Supabase storage: %s", exc)
+    return normalized
+
+
+def load_sent_invoices() -> List[dict]:
+    client = _get_client()
+    resp = client.table("sent_invoices").select("*").order("sent_at", desc=True).execute()
+    rows = resp.data or []
+    for row in rows:
+        row["recipients"] = _normalize_str_list(row.get("recipients"))
+        row["cc"] = _normalize_str_list(row.get("cc"))
+    return rows
+
+
+def append_sent_invoice(entry: Dict[str, Any]) -> dict:
+    client = _get_client()
+    row = _attach_sent_invoice_storage(entry)
+    resp = client.table("sent_invoices").insert(row).execute()
+    saved = resp.data[0] if resp.data else {}
+    if saved:
+        saved["recipients"] = _normalize_str_list(saved.get("recipients"))
+        saved["cc"] = _normalize_str_list(saved.get("cc"))
+    return saved
+
+
+def save_sent_invoices(entries: List[Dict[str, Any]]) -> None:
+    client = _get_client()
+    existing_rows = client.table("sent_invoices").select("id").execute().data or []
+    keep_ids: set[int] = set()
+
+    for entry in entries:
+        row = _attach_sent_invoice_storage(entry)
+        row_id = row.pop("id", None)
+        if row_id is not None:
+            resp = client.table("sent_invoices").update(row).eq("id", row_id).execute()
+            keep_ids.add(row_id)
+            if resp.data:
+                continue
+        resp = client.table("sent_invoices").insert(row).execute()
+        if resp.data:
+            saved_id = resp.data[0].get("id")
+            if saved_id is not None:
+                keep_ids.add(int(saved_id))
+
+    for existing in existing_rows:
+        existing_id = existing.get("id")
+        if existing_id is None or int(existing_id) in keep_ids:
+            continue
+        client.table("sent_invoices").delete().eq("id", int(existing_id)).execute()
 
 
 # ── Subscriptions ──────────────────────────────────────────────────────────────

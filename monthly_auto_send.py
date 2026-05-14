@@ -145,7 +145,7 @@ def main() -> int:
 
     if _already_sent(month_name, year) and not args.force:
         logger.error(
-            "Invoice for %s %s already appears in sent_invoices_log.json. Use --force to send again.",
+            "Invoice for %s %s already appears in the sent invoice log. Use --force to send again.",
             month_name,
             year,
         )
