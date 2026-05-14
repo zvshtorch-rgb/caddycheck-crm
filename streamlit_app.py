@@ -1559,16 +1559,19 @@ if page == "📊 Dashboard":
         "Install Year":    _safe_str(p.installation_year),
         "Status":          _safe_str(p.status),
     } for p in sorted_proj])
+    proj_display_df = proj_df.copy()
+    if len(proj_display_df) > 0:
+        proj_display_df["# Cams"] = proj_display_df["# Cams"].map(lambda value: _safe_str(value))
 
     def color_status(val):
         if str(val).strip().lower() == "active":
             return "color: #27AE60; font-weight: bold"
         return "color: #E74C3C"
 
-    proj_table = proj_df
-    if len(proj_df) > 0:
-        proj_table = proj_df.style.set_properties(subset=["# Cams"], **{"text-align": "left"})
-        if "Status" in proj_df.columns:
+    proj_table = proj_display_df
+    if len(proj_display_df) > 0:
+        proj_table = proj_display_df.style.set_properties(subset=["# Cams"], **{"text-align": "left"})
+        if "Status" in proj_display_df.columns:
             proj_table = proj_table.map(color_status, subset=["Status"])
 
     st.dataframe(
