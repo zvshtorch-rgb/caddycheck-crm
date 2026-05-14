@@ -3517,8 +3517,73 @@ elif page == "💸 Debt Report":
                 elems.append(Paragraph("No Y2+ unpaid invoices.", styles["Normal"]))
 
             doc.build(elems)
-            st.download_button("⬇️ Download Debt PDF", pdf_buf.getvalue(),
+            debt_pdf_bytes = pdf_buf.getvalue()
+            st.download_button("⬇️ Download Debt PDF", debt_pdf_bytes,
                                file_name="debt_report.pdf", mime="application/pdf")
+
+            st.markdown("### Email Debt Report")
+            email_cfg = get_email_config()
+            default_subject = f"Debt Report - {datetime.datetime.now().strftime('%Y-%m-%d')}"
+            default_body = (
+                "Dear Team,\n\n"
+                f"Please find attached the current debt report.\n\n"
+                f"Total debt: €{total_debt_amt:,.0f}\n"
+                f"Projects with debt: {proj_with_debt}\n\n"
+                "Best regards,\n"
+                "CaddyCheck CRM"
+            )
+
+            with st.form("debt_report_email_form"):
+                debt_to_addrs = st.text_input(
+                    "To (comma-separated)",
+                    ", ".join(email_cfg.get("default_recipients", [])),
+                    key="debt_report_email_to",
+                )
+                debt_cc_addrs = st.text_input(
+                    "CC (comma-separated)",
+                    ", ".join(email_cfg.get("default_cc", [])),
+                    key="debt_report_email_cc",
+                )
+                debt_subject = st.text_input(
+                    "Subject",
+                    default_subject,
+                    key="debt_report_email_subject",
+                )
+                debt_body = st.text_area(
+                    "Body",
+                    default_body,
+                    height=140,
+                    key="debt_report_email_body",
+                )
+                debt_send_btn = st.form_submit_button("Send Debt Report")
+
+            if debt_send_btn:
+                if not email_cfg.get("smtp_username"):
+                    st.error("SMTP not configured. Go to ⚙️ Settings to set up email.")
+                else:
+                    from services.email_service import send_invoice_email
+                    import tempfile
+
+                    debt_recipients = [r.strip() for r in debt_to_addrs.split(",") if r.strip()]
+                    debt_cc_list = [c.strip() for c in debt_cc_addrs.split(",") if c.strip()]
+                    if not debt_recipients:
+                        st.error("Enter at least one recipient email address.")
+                    else:
+                        with tempfile.TemporaryDirectory() as tmp_dir:
+                            debt_pdf_path = Path(tmp_dir) / "debt_report.pdf"
+                            debt_pdf_path.write_bytes(debt_pdf_bytes)
+                            try:
+                                send_invoice_email(
+                                    attachment_path=debt_pdf_path,
+                                    recipients=debt_recipients,
+                                    cc=debt_cc_list,
+                                    subject=debt_subject,
+                                    body=debt_body,
+                                    config=email_cfg,
+                                )
+                                st.success("Debt report email sent.")
+                            except Exception as exc:
+                                st.error(f"Debt report email failed: {exc}")
         except Exception as e:
             st.warning(f"PDF export unavailable: {e}")
 
