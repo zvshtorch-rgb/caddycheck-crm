@@ -2132,25 +2132,6 @@ elif page == "🏗️ Projects":
             height=600,
         )
 
-    # Revenue breakdown
-    st.markdown("---")
-    st.subheader("Revenue Breakdown by Year")
-    cur_year = datetime.datetime.now().year
-    rev_rows = []
-    for p in filtered:
-        if p.installation_year:
-            for yr in range(p.installation_year, cur_year + 1):
-                rev_rows.append({
-                    "Project":   _safe_str(p.project_name),
-                    "Year":      int(yr),
-                    "Maint. Year": _safe_str(p.get_maintenance_year_label(yr)),
-                    "Rate/Cam":  f"€{p.get_rate(yr):,.0f}",
-                    "Expected":  f"€{p.get_expected_amount(yr):,.0f}",
-                })
-    if rev_rows:
-        st.dataframe(pd.DataFrame(rev_rows), use_container_width=True, height=400)
-
-
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE: ORDERS
 # ══════════════════════════════════════════════════════════════════════════════
