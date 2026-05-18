@@ -4926,6 +4926,30 @@ elif page == "🏦 Bank Payment":
             })
 
         st.markdown("---")
+        st.markdown("### 📋 Parsed Files Summary")
+        summary_rows = []
+        for item in parsed_bank_files:
+            parsed = item["parsed"]
+            current_inv = _safe_int(st.session_state.get(item["inv_no_key"], parsed.get("invoice_number") or 0), default=0)
+            current_date = st.session_state.get(item["pay_date_key"], parsed.get("payment_date"))
+            instructed = parsed.get("instructed_amount") or 0.0
+            received = parsed.get("received_amount") or 0.0
+            fee = (instructed - received) if (instructed and received) else 0.0
+            summary_rows.append({
+                "#": item["index"],
+                "File": item["name"],
+                "Invoice #": current_inv if current_inv else "—",
+                "Payment Date": str(current_date) if current_date else "—",
+                "Instructed (€)": float(instructed) if instructed else 0.0,
+                "Received (€)": float(received) if received else 0.0,
+                "Fee (€)": float(fee) if fee else 0.0,
+            })
+        st.dataframe(
+            summary_rows,
+            use_container_width=True,
+            hide_index=True,
+        )
+
         if st.button("✅ Save All Parsed Payments", type="primary", key="save_all_parsed_payments"):
             batch_saved = 0
             batch_skipped = []
