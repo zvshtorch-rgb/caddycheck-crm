@@ -4688,7 +4688,7 @@ elif page == "🏦 Bank Payment":
 
     # ── Manual lookup (no PDF) ────────────────────────────────────────────────
     st.markdown("---")
-    with st.expander("🔍 Manual Lookup (no PDF)", expanded=not bool(uploaded)):
+    with st.expander("🔍 Manual Lookup (no PDF)", expanded=not bool(uploaded_files)):
         mc1, mc2 = st.columns(2)
         manual_inv_no = mc1.number_input(
             "Invoice #", min_value=0, step=1, key="manual_inv_no",
