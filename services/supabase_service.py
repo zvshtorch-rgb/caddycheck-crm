@@ -406,6 +406,7 @@ def create_ticket(
     title: str,
     description: str = "",
     priority: str = "Medium",
+    subcategory: str = "",
 ) -> dict:
     client = _get_client()
     resp = client.table("tickets").select("id").order("id", desc=True).limit(1).execute()
@@ -417,6 +418,7 @@ def create_ticket(
         "title": title,
         "description": description,
         "priority": priority,
+        "subcategory": subcategory or None,
         "status": "Open",
     }
     resp = client.table("tickets").insert(row).execute()

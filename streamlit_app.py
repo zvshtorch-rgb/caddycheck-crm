@@ -205,6 +205,8 @@ ORDER_STATUS_OPTIONS = [
     "Cancelled",
 ]
 
+TICKET_SUBCATEGORY_OPTIONS = ["PushOut", "TopDown", "BackTray", "License"]
+
 SUPPORTED_ORDER_FILE_SUFFIXES = {".pdf", ".xlsx", ".xlsm", ".xls", ".csv"}
 from services.excel_service import (
     compute_debt_summaries,
@@ -4260,6 +4262,7 @@ elif page == "🎫 Tickets":
                 t_project  = st.selectbox("Project", project_names, key="nt_proj")
                 t_title    = st.text_input("Title", key="nt_title")
                 t_desc     = st.text_area("Description", height=100, key="nt_desc")
+                t_subcategory = st.selectbox("Sub-category", TICKET_SUBCATEGORY_OPTIONS, index=0, key="nt_subcat")
                 t_priority = st.selectbox("Priority", ["Low", "Medium", "High", "Critical"], index=1, key="nt_prio")
                 submitted  = st.form_submit_button("Create Ticket", type="primary")
             if submitted:
@@ -4267,7 +4270,7 @@ elif page == "🎫 Tickets":
                     st.error("Title is required.")
                 else:
                     try:
-                        ticket = create_ticket(t_project, t_title.strip(), t_desc.strip(), t_priority)
+                        ticket = create_ticket(t_project, t_title.strip(), t_desc.strip(), t_priority, t_subcategory)
                         st.success(f"Ticket {ticket.get('ticket_number', '')} created!")
                         st.rerun()
                     except Exception as e:
@@ -4275,12 +4278,13 @@ elif page == "🎫 Tickets":
 
     # ── Filters ───────────────────────────────────────────────────────────────
     with st.expander("🔍 Filters", expanded=True):
-        fc1, fc2, fc3, fc4 = st.columns(4)
+        fc1, fc2, fc3, fc4, fc5 = st.columns(5)
         project_names_all = ["All"] + sorted({t["project_name"] for t in all_tickets})
         tf_proj   = fc1.selectbox("Project",  project_names_all, key="tf_proj")
         tf_status = fc2.selectbox("Status",   ["All", "Open", "In Progress", "Resolved", "Closed"], key="tf_status")
         tf_prio   = fc3.selectbox("Priority", ["All", "Critical", "High", "Medium", "Low"], key="tf_prio")
-        tf_search = fc4.text_input("Search title", key="tf_search")
+        tf_subcat = fc4.selectbox("Sub-category", ["All"] + TICKET_SUBCATEGORY_OPTIONS, key="tf_subcat")
+        tf_search = fc5.text_input("Search title", key="tf_search")
 
     filtered_tickets = all_tickets
     if tf_proj != "All":
@@ -4289,6 +4293,8 @@ elif page == "🎫 Tickets":
         filtered_tickets = [t for t in filtered_tickets if t["status"] == tf_status]
     if tf_prio != "All":
         filtered_tickets = [t for t in filtered_tickets if t["priority"] == tf_prio]
+    if tf_subcat != "All":
+        filtered_tickets = [t for t in filtered_tickets if _safe_str(t.get("subcategory")).strip() == tf_subcat]
     if tf_search.strip():
         filtered_tickets = [t for t in filtered_tickets if tf_search.lower() in t["title"].lower()]
 
@@ -4319,6 +4325,7 @@ elif page == "🎫 Tickets":
             "Ticket #":    t["ticket_number"],
             "Project":     t["project_name"],
             "Title":       t["title"],
+            "Sub-category": _safe_str(t.get("subcategory")),
             "Priority":    t["priority"],
             "Status":      t["status"],
             "Created":     t["created_at"][:10] if t.get("created_at") else "",
@@ -4354,6 +4361,13 @@ elif page == "🎫 Tickets":
                                           index=["Low", "Medium", "High", "Critical"].index(sel_ticket["priority"])
                                           if sel_ticket["priority"] in ["Low", "Medium", "High", "Critical"] else 1,
                                           key="upd_prio")
+            new_subcategory = st.selectbox(
+                "Sub-category",
+                TICKET_SUBCATEGORY_OPTIONS,
+                index=TICKET_SUBCATEGORY_OPTIONS.index(_safe_str(sel_ticket.get("subcategory")).strip())
+                if _safe_str(sel_ticket.get("subcategory")).strip() in TICKET_SUBCATEGORY_OPTIONS else 0,
+                key="upd_subcat",
+            )
             new_notes = st.text_area("Notes / update comment", value=sel_ticket.get("notes") or "", height=80, key="upd_notes")
             col_upd, col_del = st.columns([3, 1])
             upd_btn = col_upd.form_submit_button("💾 Update Ticket", type="primary")
@@ -4361,7 +4375,7 @@ elif page == "🎫 Tickets":
 
         if upd_btn:
             try:
-                update_ticket(sel_ticket["id"], status=new_status, priority=new_priority, notes=new_notes)
+                update_ticket(sel_ticket["id"], status=new_status, priority=new_priority, subcategory=new_subcategory, notes=new_notes)
                 st.success("Ticket updated!")
                 st.rerun()
             except Exception as e:
