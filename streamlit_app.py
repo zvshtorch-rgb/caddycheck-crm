@@ -4394,11 +4394,15 @@ elif page == "🎫 Tickets":
 # PAGE: BANK PAYMENT
 # ══════════════════════════════════════════════════════════════════════════════
 elif page == "🏦 Bank Payment":
+    import hashlib
+
     from services.bank_pdf_service import parse_swift_pdf
     from services.supabase_service import (
         get_invoices_by_number, mark_invoice_row_paid,
         get_subscription, upsert_subscription, create_renewal_link,
+        append_bank_payment_with_allocations, load_bank_payments, load_bank_payment_allocations,
     )
+    from config.settings import append_bank_payment_log, load_bank_payments_log
 
     st.title("🏦 Bank Payment Import")
 
@@ -4431,7 +4435,7 @@ elif page == "🏦 Bank Payment":
                     _lc2.code(_url, language=None)
         st.markdown("---")
 
-    def _render_invoice_lookup(inv_no: int, pay_date: datetime.date, key_prefix: str):
+    def _render_invoice_lookup(inv_no: int, pay_date: datetime.date, key_prefix: str, payment_context: Optional[dict] = None):
         """Look up rows for inv_no and render selection + confirm UI."""
         if inv_no <= 0:
             st.info("Enter a valid invoice number to look up matching rows.")
@@ -4493,6 +4497,8 @@ elif page == "🏦 Bank Payment":
             errors = []
             renewal_links = []
             renewal_warnings = []
+            allocation_rows = []
+            total_applied = 0.0
 
             for _, row in df[df["Project"].isin(selected)].iterrows():
                 proj = row["Project"]
@@ -4503,6 +4509,17 @@ elif page == "🏦 Bank Payment":
                         payment_date=confirm_date,
                         payment_amount=row["Amount (€)"],
                     )
+
+                    amount_applied = _safe_float(row["Amount (€)"])
+                    total_applied += amount_applied
+                    allocation_rows.append({
+                        "invoice_row_id": int(row["id"]),
+                        "invoice_number": inv_no,
+                        "project_name": proj,
+                        "maintenance_year": _safe_str(row["Maint. Year"]),
+                        "year": None,
+                        "amount_applied": amount_applied,
+                    })
 
                     try:
                         # 2. Compute new valid_until (extend from current expiry or today)
@@ -4561,6 +4578,31 @@ elif page == "🏦 Bank Payment":
             else:
                 if renewal_warnings:
                     st.warning("\n".join(renewal_warnings))
+
+                payment_entry = {
+                    "payment_date": confirm_date.isoformat(),
+                    "invoice_number": inv_no,
+                    "source_name": payment_context.get("source_name") if payment_context else f"manual-invoice-{inv_no}",
+                    "source_kind": payment_context.get("source_kind") if payment_context else "manual",
+                    "payment_fingerprint": payment_context.get("payment_fingerprint") if payment_context else hashlib.sha256(
+                        f"manual|{inv_no}|{confirm_date.isoformat()}|{','.join(str(r['invoice_row_id']) for r in allocation_rows)}|{total_applied:.2f}".encode("utf-8")
+                    ).hexdigest(),
+                    "instructed_amount": payment_context.get("instructed_amount") if payment_context else None,
+                    "received_amount": payment_context.get("received_amount") if payment_context else None,
+                    "applied_amount": total_applied,
+                    "fee_amount": payment_context.get("fee_amount") if payment_context else None,
+                    "currency": payment_context.get("currency") if payment_context else "EUR",
+                    "raw_text": payment_context.get("raw_text") if payment_context else None,
+                    "parsed_payload": payment_context.get("parsed_payload") if payment_context else {},
+                    "notes": payment_context.get("notes") if payment_context else None,
+                }
+
+                try:
+                    append_bank_payment_with_allocations(payment_entry, allocation_rows)
+                except Exception as payment_exc:
+                    append_bank_payment_log({**payment_entry, "allocations": allocation_rows})
+                    st.warning(f"Payment was saved locally because the bank payment table is not ready yet: {payment_exc}")
+
                 st.cache_data.clear()
                 st.session_state["_renewal_result"] = {
                     "inv_no": inv_no,
@@ -4570,55 +4612,79 @@ elif page == "🏦 Bank Payment":
                 st.rerun()
 
     # ── PDF upload section ────────────────────────────────────────────────────
-    st.markdown("Upload a SWIFT MT103 bank transfer PDF to auto-extract payment details.")
-    uploaded = st.file_uploader("Upload bank transfer PDF", type=["pdf"])
+    st.markdown("Upload SWIFT MT103 bank transfer PDF(s) to auto-extract payment details.")
+    uploaded_files = st.file_uploader("Upload bank transfer PDF(s)", type=["pdf"], accept_multiple_files=True)
 
-    if uploaded:
-        with st.spinner("Parsing PDF…"):
-            try:
-                parsed = parse_swift_pdf(uploaded.read())
-            except Exception as exc:
-                st.error(f"Failed to parse PDF: {exc}")
-                st.stop()
+    if uploaded_files:
+        for index, uploaded in enumerate(uploaded_files, start=1):
+            file_bytes = uploaded.read()
+            uploaded_hash = hashlib.sha256(file_bytes).hexdigest()
+            with st.expander(f"📄 {index}. {uploaded.name}", expanded=index == 1):
+                with st.spinner("Parsing PDF…"):
+                    try:
+                        parsed = parse_swift_pdf(file_bytes)
+                    except Exception as exc:
+                        st.error(f"Failed to parse PDF: {exc}")
+                        continue
 
-        st.markdown("### Extracted Payment Data")
-        st.caption("All fields are editable — correct any parsing errors before proceeding.")
+                st.caption("All fields are editable — correct any parsing errors before proceeding.")
 
-        ec1, ec2, ec3 = st.columns(3)
-        inv_no = ec1.number_input(
-            "Invoice #",
-            value=int(parsed["invoice_number"]) if parsed["invoice_number"] else 0,
-            min_value=0, step=1, key="pdf_inv_no",
-        )
-        pay_date = ec2.date_input(
-            "Payment Date",
-            value=parsed["payment_date"] if parsed["payment_date"] else datetime.date.today(),
-            key="pdf_pay_date",
-        )
-        ec3.metric(
-            "Instructed Amount",
-            f"€{parsed['instructed_amount']:,.2f}" if parsed["instructed_amount"] else "—",
-        )
-
-        if parsed["received_amount"] and parsed["instructed_amount"]:
-            fee = parsed["instructed_amount"] - parsed["received_amount"]
-            if fee > 0:
-                st.info(
-                    f"Bank fee deducted: €{fee:,.2f}  "
-                    f"(instructed €{parsed['instructed_amount']:,.2f} → "
-                    f"received €{parsed['received_amount']:,.2f}). "
-                    "The invoiced amount will be kept as-is."
+                ec1, ec2, ec3 = st.columns(3)
+                inv_no = ec1.number_input(
+                    "Invoice #",
+                    value=int(parsed["invoice_number"]) if parsed["invoice_number"] else 0,
+                    min_value=0,
+                    step=1,
+                    key=f"pdf_inv_no_{index}",
+                )
+                pay_date = ec2.date_input(
+                    "Payment Date",
+                    value=parsed["payment_date"] if parsed["payment_date"] else datetime.date.today(),
+                    key=f"pdf_pay_date_{index}",
+                )
+                ec3.metric(
+                    "Instructed Amount",
+                    f"€{parsed['instructed_amount']:,.2f}" if parsed["instructed_amount"] else "—",
                 )
 
-        if not parsed["invoice_number"] and not parsed["payment_date"]:
-            st.warning(
-                "Could not extract payment data from this PDF. "
-                "Use the manual lookup below instead."
-            )
+                if parsed["received_amount"] and parsed["instructed_amount"]:
+                    fee = parsed["instructed_amount"] - parsed["received_amount"]
+                    if fee > 0:
+                        st.info(
+                            f"Bank fee deducted: €{fee:,.2f}  "
+                            f"(instructed €{parsed['instructed_amount']:,.2f} → "
+                            f"received €{parsed['received_amount']:,.2f}). "
+                            "The invoiced amount will be kept as-is."
+                        )
 
-        st.markdown("---")
-        st.markdown("### Matching Invoice Rows")
-        _render_invoice_lookup(inv_no, pay_date, key_prefix="pdf")
+                if not parsed["invoice_number"] and not parsed["payment_date"]:
+                    st.warning(
+                        "Could not extract payment data from this PDF. "
+                        "Use the manual lookup below instead."
+                    )
+
+                st.markdown("---")
+                st.markdown("### Matching Invoice Rows")
+                _render_invoice_lookup(
+                    inv_no,
+                    pay_date,
+                    key_prefix=f"pdf_{index}",
+                    payment_context={
+                        "source_name": uploaded.name,
+                        "source_kind": "pdf",
+                        "payment_fingerprint": uploaded_hash,
+                        "instructed_amount": parsed.get("instructed_amount"),
+                        "received_amount": parsed.get("received_amount"),
+                        "fee_amount": (
+                            parsed.get("instructed_amount") - parsed.get("received_amount")
+                            if parsed.get("instructed_amount") is not None and parsed.get("received_amount") is not None
+                            else None
+                        ),
+                        "currency": "EUR",
+                        "raw_text": parsed.get("raw_text"),
+                        "parsed_payload": parsed,
+                    },
+                )
 
     # ── Manual lookup (no PDF) ────────────────────────────────────────────────
     st.markdown("---")
@@ -4631,3 +4697,48 @@ elif page == "🏦 Bank Payment":
             "Payment Date", value=datetime.date.today(), key="manual_date",
         )
         _render_invoice_lookup(manual_inv_no, manual_date, key_prefix="manual")
+
+    st.markdown("---")
+    st.subheader("Saved Bank Payments")
+    bank_payment_rows = load_bank_payments_log()
+    if bank_payment_rows:
+        payment_df = pd.DataFrame([
+            {
+                "Saved At": _safe_str(row.get("created_at") or row.get("updated_at") or "")[:19].replace("T", " "),
+                "Payment Date": _safe_str(row.get("payment_date")),
+                "Invoice #": _safe_int(row.get("invoice_number"), default=0),
+                "Source": _safe_str(row.get("source_name")),
+                "Kind": _safe_str(row.get("source_kind")),
+                "Applied (€)": f"€{_safe_float(row.get('applied_amount', 0.0)):,.0f}",
+                "Fee (€)": f"€{_safe_float(row.get('fee_amount', 0.0)):,.0f}" if row.get("fee_amount") not in (None, "") else "",
+                "Fingerprint": _safe_str(row.get("payment_fingerprint"))[:12],
+            }
+            for row in bank_payment_rows
+        ])
+        st.dataframe(payment_df, use_container_width=True, hide_index=True, height=260)
+
+        payment_labels = [
+            f"#{_safe_int(row.get('invoice_number'), default=0)} | {_safe_str(row.get('payment_date'))} | {_safe_str(row.get('source_name'))}"
+            for row in bank_payment_rows
+        ]
+        selected_payment_label = st.selectbox("Payment details", payment_labels, key="saved_bank_payment")
+        selected_payment_row = bank_payment_rows[payment_labels.index(selected_payment_label)]
+        payment_id = selected_payment_row.get("id")
+        allocations = []
+        if payment_id is not None:
+            allocations = load_bank_payment_allocations(int(payment_id))
+        if not allocations:
+            allocations = selected_payment_row.get("allocations", []) or []
+        if allocations:
+            alloc_df = pd.DataFrame([
+                {
+                    "Project": _safe_str(a.get("project_name")),
+                    "Invoice #": _safe_int(a.get("invoice_number"), default=0),
+                    "Maint. Year": _safe_str(a.get("maintenance_year")),
+                    "Amount (€)": f"€{_safe_float(a.get('amount_applied', 0.0)):,.0f}",
+                }
+                for a in allocations
+            ])
+            st.dataframe(alloc_df, use_container_width=True, hide_index=True)
+    else:
+        st.info("No bank payments have been saved yet.")

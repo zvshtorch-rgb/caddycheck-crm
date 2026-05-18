@@ -7,6 +7,8 @@ from typing import List, Optional, Dict, Any
 logger = logging.getLogger(__name__)
 SENT_INVOICE_BUCKET = "sent-invoices"
 LICENSE_CHANGE_LOG_TABLE = "license_change_log"
+BANK_PAYMENTS_TABLE = "bank_payments"
+BANK_PAYMENT_ALLOCATIONS_TABLE = "bank_payment_allocations"
 
 
 def _get_client():
@@ -48,6 +50,44 @@ def _normalize_license_change_log_entry(entry: Dict[str, Any]) -> Dict[str, Any]
     normalized["source_name"] = str(entry.get("source_name") or "").strip() or None
     normalized["notes"] = str(entry.get("notes") or "").strip() or None
     normalized["updated_at"] = datetime.datetime.utcnow().isoformat()
+    return normalized
+
+
+def _normalize_bank_payment_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
+    normalized: Dict[str, Any] = {}
+    if entry.get("id") not in (None, ""):
+        normalized["id"] = int(entry["id"])
+
+    normalized["created_at"] = str(entry.get("created_at") or datetime.datetime.utcnow().isoformat())
+    normalized["updated_at"] = datetime.datetime.utcnow().isoformat()
+    normalized["payment_date"] = str(entry.get("payment_date") or "").strip() or None
+    normalized["invoice_number"] = int(entry["invoice_number"]) if entry.get("invoice_number") not in (None, "") else None
+    normalized["source_name"] = str(entry.get("source_name") or "").strip() or None
+    normalized["source_kind"] = str(entry.get("source_kind") or "").strip() or None
+    normalized["payment_fingerprint"] = str(entry.get("payment_fingerprint") or "").strip() or None
+    normalized["instructed_amount"] = float(entry["instructed_amount"]) if entry.get("instructed_amount") not in (None, "") else None
+    normalized["received_amount"] = float(entry["received_amount"]) if entry.get("received_amount") not in (None, "") else None
+    normalized["applied_amount"] = float(entry["applied_amount"]) if entry.get("applied_amount") not in (None, "") else None
+    normalized["fee_amount"] = float(entry["fee_amount"]) if entry.get("fee_amount") not in (None, "") else None
+    normalized["currency"] = str(entry.get("currency") or "EUR").strip() or "EUR"
+    normalized["raw_text"] = str(entry.get("raw_text") or "").strip() or None
+    normalized["parsed_payload"] = entry.get("parsed_payload") if entry.get("parsed_payload") is not None else {}
+    normalized["notes"] = str(entry.get("notes") or "").strip() or None
+    return normalized
+
+
+def _normalize_bank_payment_allocation_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
+    normalized: Dict[str, Any] = {}
+    if entry.get("id") not in (None, ""):
+        normalized["id"] = int(entry["id"])
+    normalized["payment_id"] = int(entry["payment_id"])
+    normalized["invoice_row_id"] = int(entry["invoice_row_id"]) if entry.get("invoice_row_id") not in (None, "") else None
+    normalized["invoice_number"] = int(entry["invoice_number"]) if entry.get("invoice_number") not in (None, "") else None
+    normalized["project_name"] = str(entry.get("project_name") or "").strip() or None
+    normalized["maintenance_year"] = str(entry.get("maintenance_year") or "").strip() or None
+    normalized["year"] = int(entry["year"]) if entry.get("year") not in (None, "") else None
+    normalized["amount_applied"] = float(entry["amount_applied"]) if entry.get("amount_applied") not in (None, "") else None
+    normalized["created_at"] = str(entry.get("created_at") or datetime.datetime.utcnow().isoformat())
     return normalized
 
 
@@ -675,6 +715,116 @@ def save_sent_invoices(entries: List[Dict[str, Any]]) -> None:
         if existing_id is None or int(existing_id) in keep_ids:
             continue
         client.table("sent_invoices").delete().eq("id", int(existing_id)).execute()
+
+
+# ── Bank payments ────────────────────────────────────────────────────────────
+
+def load_bank_payments() -> List[dict]:
+    client = _get_client()
+    resp = client.table(BANK_PAYMENTS_TABLE).select("*").order("payment_date", desc=True).execute()
+    return resp.data or []
+
+
+def load_bank_payment_allocations(payment_id: Optional[int] = None) -> List[dict]:
+    client = _get_client()
+    query = client.table(BANK_PAYMENT_ALLOCATIONS_TABLE).select("*").order("id", desc=False)
+    if payment_id is not None:
+        query = query.eq("payment_id", int(payment_id))
+    return query.execute().data or []
+
+
+def append_bank_payment(entry: Dict[str, Any]) -> dict:
+    client = _get_client()
+    row = _normalize_bank_payment_entry(entry)
+    fingerprint = row.get("payment_fingerprint")
+    existing_id = None
+    if fingerprint:
+        existing = client.table(BANK_PAYMENTS_TABLE).select("id").eq("payment_fingerprint", fingerprint).execute().data or []
+        if existing:
+            existing_id = int(existing[0]["id"])
+
+    if existing_id is not None:
+        resp = client.table(BANK_PAYMENTS_TABLE).update(row).eq("id", existing_id).execute()
+    else:
+        resp = client.table(BANK_PAYMENTS_TABLE).insert(row).execute()
+
+    saved = resp.data[0] if resp.data else {}
+    return saved
+
+
+def save_bank_payments(entries: List[Dict[str, Any]]) -> None:
+    client = _get_client()
+    existing_rows = client.table(BANK_PAYMENTS_TABLE).select("id").execute().data or []
+    keep_ids: set[int] = set()
+
+    for entry in entries:
+        row = _normalize_bank_payment_entry(entry)
+        row_id = row.pop("id", None)
+        if row_id is not None:
+            resp = client.table(BANK_PAYMENTS_TABLE).update(row).eq("id", row_id).execute()
+            keep_ids.add(row_id)
+            if resp.data:
+                continue
+        resp = client.table(BANK_PAYMENTS_TABLE).insert(row).execute()
+        if resp.data:
+            saved_id = resp.data[0].get("id")
+            if saved_id is not None:
+                keep_ids.add(int(saved_id))
+
+    for existing in existing_rows:
+        existing_id = existing.get("id")
+        if existing_id is None or int(existing_id) in keep_ids:
+            continue
+        client.table(BANK_PAYMENTS_TABLE).delete().eq("id", int(existing_id)).execute()
+
+
+def save_bank_payment_bundles(entries: List[Dict[str, Any]]) -> None:
+    """Save bank payments together with their allocation rows."""
+    client = _get_client()
+    existing_rows = client.table(BANK_PAYMENTS_TABLE).select("id").execute().data or []
+    keep_ids: set[int] = set()
+
+    for entry in entries:
+        allocations = list(entry.get("allocations", []) or [])
+        row = _normalize_bank_payment_entry(entry)
+        row.pop("id", None)
+        saved_payment = append_bank_payment(row)
+        payment_id = saved_payment.get("id")
+        if payment_id is None:
+            continue
+        payment_id = int(payment_id)
+        keep_ids.add(payment_id)
+        client.table(BANK_PAYMENT_ALLOCATIONS_TABLE).delete().eq("payment_id", payment_id).execute()
+        normalized_allocations = []
+        for allocation in allocations:
+            normalized_allocations.append(_normalize_bank_payment_allocation_entry({**allocation, "payment_id": payment_id}))
+        if normalized_allocations:
+            client.table(BANK_PAYMENT_ALLOCATIONS_TABLE).insert(normalized_allocations).execute()
+
+    for existing in existing_rows:
+        existing_id = existing.get("id")
+        if existing_id is None or int(existing_id) in keep_ids:
+            continue
+        client.table(BANK_PAYMENTS_TABLE).delete().eq("id", int(existing_id)).execute()
+
+
+def append_bank_payment_with_allocations(entry: Dict[str, Any], allocations: List[Dict[str, Any]]) -> dict:
+    client = _get_client()
+    saved_payment = append_bank_payment(entry)
+    payment_id = saved_payment.get("id")
+    if payment_id is None:
+        raise RuntimeError("Could not save bank payment record")
+
+    payment_id = int(payment_id)
+    client.table(BANK_PAYMENT_ALLOCATIONS_TABLE).delete().eq("payment_id", payment_id).execute()
+    normalized_allocations = []
+    for allocation in allocations:
+        normalized = _normalize_bank_payment_allocation_entry({**allocation, "payment_id": payment_id})
+        normalized_allocations.append(normalized)
+    if normalized_allocations:
+        client.table(BANK_PAYMENT_ALLOCATIONS_TABLE).insert(normalized_allocations).execute()
+    saved_payment["allocations"] = normalized_allocations
+    return saved_payment
 
 
 # ── License change log ───────────────────────────────────────────────────────

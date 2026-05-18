@@ -21,6 +21,7 @@ OVERRIDES_FILE = CONFIG_DIR / "project_overrides.json"
 DATA_PATHS_FILE = CONFIG_DIR / "data_paths.json"
 SENT_INVOICES_LOG_FILE = CONFIG_DIR / "sent_invoices_log.json"
 LICENSE_CHANGE_LOG_FILE = CONFIG_DIR / "license_change_log.json"
+BANK_PAYMENTS_LOG_FILE = CONFIG_DIR / "bank_payments_log.json"
 ORDERS_FILE = CONFIG_DIR / "orders.json"
 
 PROJECT_NAME_ALIASES = {
@@ -279,6 +280,31 @@ def _save_local_license_change_log(entries: list) -> None:
         json.dump(entries, f, indent=2)
 
 
+def _load_local_bank_payments_log() -> list:
+    if BANK_PAYMENTS_LOG_FILE.exists():
+        try:
+            with open(BANK_PAYMENTS_LOG_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data if isinstance(data, list) else []
+        except Exception:
+            pass
+    return []
+
+
+def _append_local_bank_payment_log(entry: dict) -> None:
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    entries = _load_local_bank_payments_log()
+    entries.append(entry)
+    with open(BANK_PAYMENTS_LOG_FILE, "w", encoding="utf-8") as f:
+        json.dump(entries, f, indent=2)
+
+
+def _save_local_bank_payments_log(entries: list) -> None:
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    with open(BANK_PAYMENTS_LOG_FILE, "w", encoding="utf-8") as f:
+        json.dump(entries, f, indent=2)
+
+
 def load_sent_invoices_log() -> list:
     """Load sent invoice email history, preferring Supabase when available."""
     local_entries = _load_local_sent_invoices_log()
@@ -378,6 +404,56 @@ def save_license_change_log(entries: list) -> None:
         if not _is_missing_supabase_table_error(exc, "license_change_log"):
             logger.warning("Could not save license change log to Supabase: %s", exc)
     _save_local_license_change_log(entries)
+
+
+def load_bank_payments_log() -> list:
+    """Load bank payment history, preferring Supabase when available."""
+    local_entries = _load_local_bank_payments_log()
+    try:
+        from services.supabase_service import load_bank_payments, save_bank_payment_bundles
+
+        remote_entries = load_bank_payments()
+        if not remote_entries and local_entries:
+            save_bank_payment_bundles(local_entries)
+            remote_entries = load_bank_payments()
+        return remote_entries or local_entries
+    except RuntimeError as exc:
+        if "Supabase credentials not configured" not in str(exc):
+            logger.warning("Falling back to local bank payment log: %s", exc)
+    except Exception as exc:
+        if not _is_missing_supabase_table_error(exc, "bank_payments"):
+            logger.warning("Falling back to local bank payment log: %s", exc)
+    return local_entries
+
+
+def append_bank_payment_log(entry: dict) -> None:
+    """Append a bank payment record, preferring Supabase and keeping a local backup."""
+    try:
+        from services.supabase_service import append_bank_payment
+
+        append_bank_payment(entry)
+    except RuntimeError as exc:
+        if "Supabase credentials not configured" not in str(exc):
+            logger.warning("Could not append bank payment to Supabase: %s", exc)
+    except Exception as exc:
+        if not _is_missing_supabase_table_error(exc, "bank_payments"):
+            logger.warning("Could not append bank payment to Supabase: %s", exc)
+    _append_local_bank_payment_log(entry)
+
+
+def save_bank_payments_log(entries: list) -> None:
+    """Replace the bank payment history, preferring Supabase and keeping a local backup."""
+    try:
+        from services.supabase_service import save_bank_payment_bundles
+
+        save_bank_payment_bundles(entries)
+    except RuntimeError as exc:
+        if "Supabase credentials not configured" not in str(exc):
+            logger.warning("Could not save bank payment log to Supabase: %s", exc)
+    except Exception as exc:
+        if not _is_missing_supabase_table_error(exc, "bank_payments"):
+            logger.warning("Could not save bank payment log to Supabase: %s", exc)
+    _save_local_bank_payments_log(entries)
 
 
 def load_orders_records() -> list:
