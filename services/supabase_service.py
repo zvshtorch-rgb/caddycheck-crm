@@ -8,6 +8,7 @@ from typing import List, Optional, Dict, Any
 logger = logging.getLogger(__name__)
 SENT_INVOICE_BUCKET = "sent-invoices"
 ORDER_PDF_BUCKET = "order-pdfs"
+BANK_PAYMENT_BUCKET = "bank-payments"
 LICENSE_CHANGE_LOG_TABLE = "license_change_log"
 BANK_PAYMENTS_TABLE = "bank_payments"
 BANK_PAYMENT_ALLOCATIONS_TABLE = "bank_payment_allocations"
@@ -75,6 +76,8 @@ def _normalize_bank_payment_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
     normalized["raw_text"] = str(entry.get("raw_text") or "").strip() or None
     normalized["parsed_payload"] = entry.get("parsed_payload") if entry.get("parsed_payload") is not None else {}
     normalized["notes"] = str(entry.get("notes") or "").strip() or None
+    normalized["pdf_storage_bucket"] = str(entry.get("pdf_storage_bucket") or "").strip() or None
+    normalized["pdf_storage_path"] = str(entry.get("pdf_storage_path") or "").strip() or None
     return normalized
 
 
@@ -684,6 +687,79 @@ def create_order_pdf_signed_url(bucket_name: str, storage_path: str, expires_in:
         resp = client.storage.from_(bucket_name).create_signed_url(storage_path, expires_in)
     except Exception as exc:
         logger.warning("Could not create signed URL for order PDF: %s", exc)
+        return None
+    if isinstance(resp, dict):
+        return resp.get("signedURL") or resp.get("signed_url") or resp.get("signedUrl")
+    return None
+
+
+def _bank_payment_storage_path(filename: str) -> str:
+    base = Path(filename).name or "bank_payment.pdf"
+    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", base).strip("_") or "bank_payment.pdf"
+    stamp = datetime.datetime.utcnow().strftime("%Y/%m/%Y%m%d-%H%M%S")
+    return f"{stamp}-{safe_name}"
+
+
+def upload_bank_payment_pdf(file_bytes: bytes, filename: str, storage_path: Optional[str] = None) -> Dict[str, str]:
+    import tempfile
+
+    client = _get_client()
+    _ensure_storage_bucket(client, BANK_PAYMENT_BUCKET)
+    target_path = storage_path or _bank_payment_storage_path(filename)
+
+    try:
+        client.storage.from_(BANK_PAYMENT_BUCKET).remove([target_path])
+    except Exception:
+        pass
+
+    suffix = Path(filename).suffix.lower() or ".pdf"
+    content_type = "application/pdf" if suffix == ".pdf" else "application/octet-stream"
+
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp_file:
+        tmp_file.write(file_bytes)
+        tmp_path = Path(tmp_file.name)
+
+    try:
+        client.storage.from_(BANK_PAYMENT_BUCKET).upload(
+            path=target_path,
+            file=str(tmp_path),
+            file_options={"content-type": content_type, "upsert": "true"},
+        )
+    finally:
+        try:
+            tmp_path.unlink()
+        except Exception:
+            pass
+
+    return {
+        "pdf_storage_bucket": BANK_PAYMENT_BUCKET,
+        "pdf_storage_path": target_path,
+    }
+
+
+def download_bank_payment_pdf(bucket_name: str, storage_path: str) -> bytes:
+    client = _get_client()
+    return client.storage.from_(bucket_name).download(storage_path)
+
+
+def create_bank_payment_pdf_signed_url(bucket_name: str, storage_path: str, expires_in: int = 3600) -> Optional[str]:
+    client = _get_client()
+    try:
+        resp = client.storage.from_(bucket_name).create_signed_url(storage_path, expires_in)
+    except Exception as exc:
+        logger.warning("Could not create signed URL for bank payment PDF: %s", exc)
+        return None
+    if isinstance(resp, dict):
+        return resp.get("signedURL") or resp.get("signed_url") or resp.get("signedUrl")
+    return None
+
+
+def create_sent_invoice_pdf_signed_url(bucket_name: str, storage_path: str, expires_in: int = 3600) -> Optional[str]:
+    client = _get_client()
+    try:
+        resp = client.storage.from_(bucket_name).create_signed_url(storage_path, expires_in)
+    except Exception as exc:
+        logger.warning("Could not create signed URL for sent invoice PDF: %s", exc)
         return None
     if isinstance(resp, dict):
         return resp.get("signedURL") or resp.get("signed_url") or resp.get("signedUrl")

@@ -197,6 +197,7 @@ from services.supabase_service import (
     upload_order_pdf as upload_order_pdf_supabase,
     download_order_pdf as download_order_pdf_supabase,
     create_order_pdf_signed_url as create_order_pdf_signed_url_supabase,
+    create_sent_invoice_pdf_signed_url as create_sent_invoice_pdf_signed_url_supabase,
 )
 
 ORDER_STATUS_OPTIONS = [
@@ -4250,6 +4251,39 @@ elif page == "📅 Monthly Invoice":
                             )
                             st.rerun()
 
+                sent_history_rows = []
+                for row in reversed(sent_invoice_rows):
+                    bucket = _safe_str(row.get("pdf_storage_bucket", "")).strip()
+                    storage_path = _safe_str(row.get("pdf_storage_path", "")).strip()
+                    signed_url = ""
+                    if bucket and storage_path:
+                        try:
+                            signed_url = create_sent_invoice_pdf_signed_url_supabase(
+                                bucket, storage_path
+                            ) or ""
+                        except Exception:
+                            signed_url = ""
+                    sent_history_rows.append({
+                        "Invoice #": _safe_int(row.get("invoice_number"), default=0),
+                        "Month": _safe_str(row.get("month", "")),
+                        "Year": _safe_int(row.get("year"), default=0),
+                        "Total (€)": _safe_float(row.get("total_amount", 0.0), 0.0),
+                        "Filename": _safe_str(row.get("pdf_filename", "")),
+                        "Sent At": _safe_str(row.get("sent_at", "")),
+                        "Source PDF": signed_url,
+                    })
+                if sent_history_rows:
+                    st.dataframe(
+                        sent_history_rows,
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "Source PDF": st.column_config.LinkColumn(
+                                "Source PDF", display_text="Download"
+                            ),
+                        },
+                    )
+
                 sent_download_options = {
                     f"#{_safe_int(row.get('invoice_number'), default=0)} | {_safe_str(row.get('month', ''))} {_safe_int(row.get('year'), default=0)} | {_safe_str(row.get('pdf_filename', ''))}": row
                     for row in reversed(sent_invoice_rows)
@@ -4593,6 +4627,8 @@ elif page == "🏦 Bank Payment":
         get_invoices_by_number, mark_invoice_row_paid,
         get_subscription, upsert_subscription, create_renewal_link,
         append_bank_payment_with_allocations, load_bank_payments, load_bank_payment_allocations,
+        upload_bank_payment_pdf as upload_bank_payment_pdf_supabase,
+        create_bank_payment_pdf_signed_url as create_bank_payment_pdf_signed_url_supabase,
     )
     from config.settings import append_bank_payment_log, load_bank_payments_log
 
@@ -4883,6 +4919,7 @@ elif page == "🏦 Bank Payment":
                 "index": index,
                 "name": uploaded.name,
                 "hash": uploaded_hash,
+                "file_bytes": file_bytes,
                 "parsed": parsed,
                 "inv_no_key": f"pdf_inv_no_{index}",
                 "pay_date_key": f"pdf_pay_date_{index}",
@@ -4899,6 +4936,11 @@ elif page == "🏦 Bank Payment":
                 try:
                     item_inv_no = _safe_int(st.session_state.get(item["inv_no_key"], 0), default=0)
                     item_pay_date = st.session_state.get(item["pay_date_key"], item["parsed"].get("payment_date") or datetime.date.today())
+                    item_storage_meta: dict = {}
+                    try:
+                        item_storage_meta = upload_bank_payment_pdf_supabase(item["file_bytes"], item["name"]) or {}
+                    except Exception as exc:
+                        logger.warning("Could not upload bank payment PDF to Supabase Storage: %s", exc)
                     item_payment_context = {
                         "source_name": item["name"],
                         "source_kind": "pdf-batch",
@@ -4932,7 +4974,13 @@ elif page == "🏦 Bank Payment":
                             "parsed_payload": item_payment_context["parsed_payload"],
                             "notes": "Auto-saved from batch upload without invoice number.",
                         }
-                        append_bank_payment_log({**payment_entry, "allocations": []})
+                        if item_storage_meta:
+                            payment_entry["pdf_storage_bucket"] = item_storage_meta.get("pdf_storage_bucket")
+                            payment_entry["pdf_storage_path"] = item_storage_meta.get("pdf_storage_path")
+                        try:
+                            append_bank_payment_with_allocations(payment_entry, [])
+                        except Exception:
+                            append_bank_payment_log({**payment_entry, "allocations": []})
                         batch_saved += 1
                         batch_saved_records.append(payment_entry)
                         batch_skipped.append(f"{item['name']}: saved without invoice match")
@@ -4955,7 +5003,13 @@ elif page == "🏦 Bank Payment":
                             "parsed_payload": item_payment_context["parsed_payload"],
                             "notes": "Auto-saved from batch upload but no invoice rows were found.",
                         }
-                        append_bank_payment_log({**payment_entry, "allocations": []})
+                        if item_storage_meta:
+                            payment_entry["pdf_storage_bucket"] = item_storage_meta.get("pdf_storage_bucket")
+                            payment_entry["pdf_storage_path"] = item_storage_meta.get("pdf_storage_path")
+                        try:
+                            append_bank_payment_with_allocations(payment_entry, [])
+                        except Exception:
+                            append_bank_payment_log({**payment_entry, "allocations": []})
                         batch_saved += 1
                         batch_saved_records.append(payment_entry)
                         batch_skipped.append(f"{item['name']}: no invoice rows found")
@@ -4978,7 +5032,13 @@ elif page == "🏦 Bank Payment":
                             "parsed_payload": item_payment_context["parsed_payload"],
                             "notes": "Auto-saved from batch upload; invoice rows were already paid.",
                         }
-                        append_bank_payment_log({**payment_entry, "allocations": []})
+                        if item_storage_meta:
+                            payment_entry["pdf_storage_bucket"] = item_storage_meta.get("pdf_storage_bucket")
+                            payment_entry["pdf_storage_path"] = item_storage_meta.get("pdf_storage_path")
+                        try:
+                            append_bank_payment_with_allocations(payment_entry, [])
+                        except Exception:
+                            append_bank_payment_log({**payment_entry, "allocations": []})
                         batch_saved += 1
                         batch_saved_records.append(payment_entry)
                         batch_skipped.append(f"{item['name']}: rows already paid")
@@ -5070,6 +5130,10 @@ elif page == "🏦 Bank Payment":
                         "notes": item_payment_context.get("notes"),
                     }
 
+                    if item_storage_meta:
+                        payment_entry["pdf_storage_bucket"] = item_storage_meta.get("pdf_storage_bucket")
+                        payment_entry["pdf_storage_path"] = item_storage_meta.get("pdf_storage_path")
+
                     if errors:
                         batch_skipped.append(f"{item['name']}: " + "; ".join(errors))
                     if renewal_warnings:
@@ -5110,6 +5174,16 @@ elif page == "🏦 Bank Payment":
     st.subheader("Saved Bank Payments")
     bank_payment_rows = load_bank_payments_log()
     if bank_payment_rows:
+        bank_pdf_links: dict[str, str | None] = {}
+        for row in bank_payment_rows:
+            storage_bucket = _safe_str(row.get("pdf_storage_bucket")).strip()
+            storage_path = _safe_str(row.get("pdf_storage_path")).strip()
+            fp_key = _safe_str(row.get("payment_fingerprint"))
+            link: str | None = None
+            if storage_bucket and storage_path:
+                link = create_bank_payment_pdf_signed_url_supabase(storage_bucket, storage_path)
+            bank_pdf_links[fp_key] = link
+
         payment_df = pd.DataFrame([
             {
                 "Saved At": _safe_str(row.get("created_at") or row.get("updated_at") or "")[:19].replace("T", " "),
@@ -5120,10 +5194,23 @@ elif page == "🏦 Bank Payment":
                 "Applied (€)": f"€{_safe_float(row.get('applied_amount', 0.0)):,.0f}",
                 "Fee (€)": f"€{_safe_float(row.get('fee_amount', 0.0)):,.0f}" if row.get("fee_amount") not in (None, "") else "",
                 "Fingerprint": _safe_str(row.get("payment_fingerprint"))[:12],
+                "Source PDF": bank_pdf_links.get(_safe_str(row.get("payment_fingerprint"))) or "",
             }
             for row in bank_payment_rows
         ])
-        st.dataframe(payment_df, use_container_width=True, hide_index=True, height=260)
+        st.dataframe(
+            payment_df,
+            use_container_width=True,
+            hide_index=True,
+            height=260,
+            column_config={
+                "Source PDF": st.column_config.LinkColumn(
+                    "Source PDF",
+                    help="Click to open the originally uploaded bank transfer PDF.",
+                    display_text="Download",
+                ),
+            },
+        )
 
         payment_labels = [
             f"#{_safe_int(row.get('invoice_number'), default=0)} | {_safe_str(row.get('payment_date'))} | {_safe_str(row.get('source_name'))}"
