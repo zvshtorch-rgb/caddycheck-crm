@@ -586,7 +586,13 @@ def _ensure_storage_bucket(client, bucket_name: str) -> None:
         pass
 
     try:
-        client.storage.create_bucket(bucket_name, {"public": False})
+        client.storage.create_bucket(bucket_name, options={"public": False})
+    except TypeError:
+        try:
+            client.storage.create_bucket(bucket_name)
+        except Exception as exc:
+            if "already exists" not in str(exc).lower():
+                raise
     except Exception as exc:
         if "already exists" not in str(exc).lower():
             raise
