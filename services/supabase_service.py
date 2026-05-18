@@ -6,6 +6,7 @@ from typing import List, Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
 SENT_INVOICE_BUCKET = "sent-invoices"
+LICENSE_CHANGE_LOG_TABLE = "license_change_log"
 
 
 def _get_client():
@@ -30,6 +31,24 @@ def _parse_date(val) -> Optional[datetime.datetime]:
         return datetime.datetime.fromisoformat(str(val))
     except Exception:
         return None
+
+
+def _normalize_license_change_log_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
+    normalized: Dict[str, Any] = {}
+    if entry.get("id") not in (None, ""):
+        normalized["id"] = int(entry["id"])
+
+    normalized["changed_at"] = str(entry.get("changed_at") or datetime.datetime.utcnow().isoformat())
+    normalized["project_name"] = str(entry.get("project_name") or "").strip() or None
+    normalized["country"] = str(entry.get("country") or "").strip() or None
+    normalized["old_license_eop"] = str(entry.get("old_license_eop") or "").strip() or None
+    normalized["new_license_eop"] = str(entry.get("new_license_eop") or "").strip() or None
+    normalized["action"] = str(entry.get("action") or "").strip() or "Updated"
+    normalized["updated_by"] = str(entry.get("updated_by") or "").strip() or None
+    normalized["source_name"] = str(entry.get("source_name") or "").strip() or None
+    normalized["notes"] = str(entry.get("notes") or "").strip() or None
+    normalized["updated_at"] = datetime.datetime.utcnow().isoformat()
+    return normalized
 
 
 # ── Projects ──────────────────────────────────────────────────────────────────
@@ -628,6 +647,47 @@ def save_sent_invoices(entries: List[Dict[str, Any]]) -> None:
         if existing_id is None or int(existing_id) in keep_ids:
             continue
         client.table("sent_invoices").delete().eq("id", int(existing_id)).execute()
+
+
+# ── License change log ───────────────────────────────────────────────────────
+
+def load_license_change_log() -> List[dict]:
+    client = _get_client()
+    resp = client.table(LICENSE_CHANGE_LOG_TABLE).select("*").order("changed_at", desc=True).execute()
+    return resp.data or []
+
+
+def append_license_change_log(entry: Dict[str, Any]) -> dict:
+    client = _get_client()
+    row = _normalize_license_change_log_entry(entry)
+    resp = client.table(LICENSE_CHANGE_LOG_TABLE).insert(row).execute()
+    return resp.data[0] if resp.data else {}
+
+
+def save_license_change_log(entries: List[Dict[str, Any]]) -> None:
+    client = _get_client()
+    existing_rows = client.table(LICENSE_CHANGE_LOG_TABLE).select("id").execute().data or []
+    keep_ids: set[int] = set()
+
+    for entry in entries:
+        row = _normalize_license_change_log_entry(entry)
+        row_id = row.pop("id", None)
+        if row_id is not None:
+            resp = client.table(LICENSE_CHANGE_LOG_TABLE).update(row).eq("id", row_id).execute()
+            keep_ids.add(row_id)
+            if resp.data:
+                continue
+        resp = client.table(LICENSE_CHANGE_LOG_TABLE).insert(row).execute()
+        if resp.data:
+            saved_id = resp.data[0].get("id")
+            if saved_id is not None:
+                keep_ids.add(int(saved_id))
+
+    for existing in existing_rows:
+        existing_id = existing.get("id")
+        if existing_id is None or int(existing_id) in keep_ids:
+            continue
+        client.table(LICENSE_CHANGE_LOG_TABLE).delete().eq("id", int(existing_id)).execute()
 
 
 # ── Subscriptions ──────────────────────────────────────────────────────────────

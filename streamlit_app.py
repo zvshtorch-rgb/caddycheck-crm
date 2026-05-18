@@ -174,6 +174,8 @@ from config.settings import (
     load_sent_invoices_log,
     append_sent_invoice_log,
     save_sent_invoices_log,
+    load_license_change_log,
+    append_license_change_log,
     load_orders_records,
     save_orders_records,
 )
@@ -476,6 +478,8 @@ def _add_months(base_date: datetime.date, months: int) -> datetime.date:
 
 def _license_status(project, today: Optional[datetime.date] = None) -> str:
     today = today or datetime.date.today()
+    if str(getattr(project, "status", "")).strip().lower() == "offline":
+        return "Offline"
     license_date = _project_license_date(project)
     if license_date is None:
         return "Missing"
@@ -1826,7 +1830,10 @@ elif page == "🏗️ Projects":
     if search:
         filtered = [p for p in filtered if search.lower() in p.project_name.lower()]
 
-    filtered = sorted(filtered, key=lambda p: (0 if p.is_active() else 1, p.project_name))
+    sort_row_1, sort_row_2 = st.columns(2)
+    sort_options = ["Activation Date", "Install Year", "Project Name", "Country", "# Cams", "Payment Month", "Status", "License EOP"]
+    selected_sort_column = sort_row_1.selectbox("Sort by", sort_options, index=0, key="proj_sort_column")
+    selected_sort_order = sort_row_2.selectbox("Sort order", ["Descending", "Ascending"], index=0, key="proj_sort_order")
 
     st.caption(f"Showing {len(filtered)} of {len(projects)} projects")
 
@@ -1841,6 +1848,22 @@ elif page == "🏗️ Projects":
         "Status":          _safe_str(p.status),
         "License EOP":     p.license_eop.date() if p.license_eop else None,
     } for p in filtered])
+
+    if not df.empty:
+        df["Activation Date"] = pd.to_datetime(df["Activation Date"], errors="coerce")
+        df["License EOP"] = pd.to_datetime(df["License EOP"], errors="coerce")
+        df["Install Year"] = pd.to_numeric(df["Install Year"], errors="coerce")
+        ascending = selected_sort_order == "Ascending"
+        sort_column = selected_sort_column
+        if sort_column in df.columns:
+            df = df.sort_values(
+                by=sort_column,
+                ascending=ascending,
+                na_position="last",
+                kind="mergesort",
+            )
+        df["Activation Date"] = df["Activation Date"].dt.date
+        df["License EOP"] = df["License EOP"].dt.date
 
     def color_status(val):
         if str(val).strip().lower() == "active":
@@ -2754,7 +2777,7 @@ elif page == "🔐 Licenses":
         )
         license_status = lf2.selectbox(
             "License Status",
-            ["All", "Active", "Update Next Month", "Expired", "Missing"],
+            ["All", "Active", "Update Next Month", "Expired", "Missing", "Offline"],
             key="license_status",
         )
         license_search = lf3.text_input("Search project", key="license_search")
@@ -2766,7 +2789,7 @@ elif page == "🔐 Licenses":
         and (not license_search.strip() or license_search.lower() in row["Project"].lower())
     ]
 
-    st.subheader(f"Projects Needing Update in {calendar.month_name[next_month]} {next_month_year}")
+    st.subheader(f"Projects Needing Update in {calendar.month_name[next_month]} {next_month_year} (offline excluded)")
     if next_month_rows:
         st.dataframe(
             pd.DataFrame(next_month_rows)[["Project", "Country", "Cameras", "License EOP", "Status"]],
@@ -2775,7 +2798,7 @@ elif page == "🔐 Licenses":
             height=220,
         )
     else:
-        st.info(f"No projects currently expire in {calendar.month_name[next_month]} {next_month_year}.")
+        st.info(f"No non-offline projects currently expire in {calendar.month_name[next_month]} {next_month_year}.")
 
     if CAN_EDIT and license_rows:
         st.markdown("---")
@@ -2804,6 +2827,7 @@ elif page == "🔐 Licenses":
             submit_license = st.form_submit_button("Save License Update")
 
         if submit_license and selected_project is not None:
+            previous_license_date = current_license_date
             if extend_action == "Set exact date":
                 target_license_date = new_license_date
             elif extend_action == "Extend by 1 month":
@@ -2814,6 +2838,14 @@ elif page == "🔐 Licenses":
             selected_project.license_eop = datetime.datetime.combine(target_license_date, datetime.time.min)
             try:
                 _save_projects(projects, _data_path)
+                append_license_change_log({
+                    "project_name": selected_project.project_name,
+                    "country": selected_project.country,
+                    "old_license_eop": previous_license_date.isoformat() if previous_license_date else None,
+                    "new_license_eop": target_license_date.isoformat(),
+                    "action": extend_action,
+                    "source_name": _data_path,
+                })
                 load_data.clear()
                 st.session_state["_flash_success"] = (
                     f"License EOP updated for {selected_project.project_name}: {target_license_date.strftime('%Y-%m-%d')}"
@@ -2847,6 +2879,8 @@ elif page == "🔐 Licenses":
             return "color: #E74C3C; font-weight: bold"
         if key == "missing":
             return "color: #7F8C8D; font-weight: bold"
+        if key == "offline":
+            return "color: #5D6D7E; font-weight: bold"
         return ""
 
     st.dataframe(
@@ -2855,6 +2889,53 @@ elif page == "🔐 Licenses":
         hide_index=True,
         height=480,
     )
+
+    st.markdown("---")
+    st.subheader("License Change Log")
+    license_change_rows = load_license_change_log()
+    if license_change_rows:
+        history_rows = []
+        for row in license_change_rows:
+            changed_at = _parse_optional_datetime(row.get("changed_at"))
+            history_rows.append({
+                "Changed At": changed_at.strftime("%Y-%m-%d %H:%M") if changed_at else _safe_str(row.get("changed_at")),
+                "Month": changed_at.strftime("%B %Y") if changed_at else "",
+                "Project": _safe_str(row.get("project_name")),
+                "Country": _safe_str(row.get("country")),
+                "Old License EOP": _safe_str(row.get("old_license_eop")),
+                "New License EOP": _safe_str(row.get("new_license_eop")),
+                "Action": _safe_str(row.get("action")),
+                "Source": _safe_str(row.get("source_name")),
+            })
+
+        history_df = pd.DataFrame(history_rows)
+        month_choices = ["All"] + sorted({row["Month"] for row in history_rows if row["Month"]}, reverse=True)
+        selected_month = st.selectbox("History month", month_choices, key="license_history_month")
+        preset_options = ["All", "Previous month only"]
+        selected_preset = st.selectbox("History preset", preset_options, key="license_history_preset")
+
+        if selected_preset == "Previous month only":
+            previous_month_date = today.replace(day=1) - datetime.timedelta(days=1)
+            previous_month_label = previous_month_date.strftime("%B %Y")
+            history_df = history_df[history_df["Month"] == previous_month_label]
+        if selected_month != "All":
+            history_df = history_df[history_df["Month"] == selected_month]
+
+        visible_history_df = history_df[["Changed At", "Project", "Country", "Old License EOP", "New License EOP", "Action", "Source"]]
+        st.download_button(
+            "Download CSV",
+            data=visible_history_df.to_csv(index=False).encode("utf-8"),
+            file_name="license_change_log.csv",
+            mime="text/csv",
+        )
+        st.dataframe(
+            visible_history_df,
+            use_container_width=True,
+            hide_index=True,
+            height=320,
+        )
+    else:
+        st.info("No license changes have been logged yet.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════

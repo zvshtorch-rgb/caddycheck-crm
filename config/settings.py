@@ -20,6 +20,7 @@ EMAIL_CONFIG_FILE = CONFIG_DIR / "email_config.json"
 OVERRIDES_FILE = CONFIG_DIR / "project_overrides.json"
 DATA_PATHS_FILE = CONFIG_DIR / "data_paths.json"
 SENT_INVOICES_LOG_FILE = CONFIG_DIR / "sent_invoices_log.json"
+LICENSE_CHANGE_LOG_FILE = CONFIG_DIR / "license_change_log.json"
 ORDERS_FILE = CONFIG_DIR / "orders.json"
 
 # Sheet names
@@ -241,6 +242,31 @@ def _save_local_sent_invoices_log(entries: list) -> None:
         json.dump(entries, f, indent=2)
 
 
+def _load_local_license_change_log() -> list:
+    if LICENSE_CHANGE_LOG_FILE.exists():
+        try:
+            with open(LICENSE_CHANGE_LOG_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data if isinstance(data, list) else []
+        except Exception:
+            pass
+    return []
+
+
+def _append_local_license_change_log(entry: dict) -> None:
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    entries = _load_local_license_change_log()
+    entries.append(entry)
+    with open(LICENSE_CHANGE_LOG_FILE, "w", encoding="utf-8") as f:
+        json.dump(entries, f, indent=2)
+
+
+def _save_local_license_change_log(entries: list) -> None:
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    with open(LICENSE_CHANGE_LOG_FILE, "w", encoding="utf-8") as f:
+        json.dump(entries, f, indent=2)
+
+
 def load_sent_invoices_log() -> list:
     """Load sent invoice email history, preferring Supabase when available."""
     local_entries = _load_local_sent_invoices_log()
@@ -289,6 +315,57 @@ def save_sent_invoices_log(entries: list) -> None:
         if not _is_missing_supabase_table_error(exc, "sent_invoices"):
             logger.warning("Could not save sent invoice log to Supabase: %s", exc)
     _save_local_sent_invoices_log(entries)
+
+
+def load_license_change_log() -> list:
+    """Load license change history, preferring Supabase when available."""
+    local_entries = _load_local_license_change_log()
+    try:
+        from services.supabase_service import load_license_change_log as load_remote_license_change_log
+        from services.supabase_service import save_license_change_log as save_remote_license_change_log
+
+        remote_entries = load_remote_license_change_log()
+        if not remote_entries and local_entries:
+            save_remote_license_change_log(local_entries)
+            remote_entries = local_entries
+        return remote_entries or local_entries
+    except RuntimeError as exc:
+        if "Supabase credentials not configured" not in str(exc):
+            logger.warning("Falling back to local license change log: %s", exc)
+    except Exception as exc:
+        if not _is_missing_supabase_table_error(exc, "license_change_log"):
+            logger.warning("Falling back to local license change log: %s", exc)
+    return local_entries
+
+
+def append_license_change_log(entry: dict) -> None:
+    """Append a license update record, preferring Supabase and keeping a local backup."""
+    try:
+        from services.supabase_service import append_license_change_log as append_remote_license_change_log
+
+        append_remote_license_change_log(entry)
+    except RuntimeError as exc:
+        if "Supabase credentials not configured" not in str(exc):
+            logger.warning("Could not append license change log to Supabase: %s", exc)
+    except Exception as exc:
+        if not _is_missing_supabase_table_error(exc, "license_change_log"):
+            logger.warning("Could not append license change log to Supabase: %s", exc)
+    _append_local_license_change_log(entry)
+
+
+def save_license_change_log(entries: list) -> None:
+    """Replace the license update history, preferring Supabase and keeping a local backup."""
+    try:
+        from services.supabase_service import save_license_change_log as save_remote_license_change_log
+
+        save_remote_license_change_log(entries)
+    except RuntimeError as exc:
+        if "Supabase credentials not configured" not in str(exc):
+            logger.warning("Could not save license change log to Supabase: %s", exc)
+    except Exception as exc:
+        if not _is_missing_supabase_table_error(exc, "license_change_log"):
+            logger.warning("Could not save license change log to Supabase: %s", exc)
+    _save_local_license_change_log(entries)
 
 
 def load_orders_records() -> list:
