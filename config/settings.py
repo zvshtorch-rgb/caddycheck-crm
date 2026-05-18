@@ -23,6 +23,11 @@ SENT_INVOICES_LOG_FILE = CONFIG_DIR / "sent_invoices_log.json"
 LICENSE_CHANGE_LOG_FILE = CONFIG_DIR / "license_change_log.json"
 ORDERS_FILE = CONFIG_DIR / "orders.json"
 
+PROJECT_NAME_ALIASES = {
+    "ad waaken": "Proxy Waaken",
+    "proxy kluisbergen": "AD Kluisbergen",
+}
+
 # Sheet names
 SHEET_PROJECTS_OVERVIEW = "Projects overview"
 SHEET_INVOICE_DETAILS = "Invoice details"
@@ -90,6 +95,13 @@ def normalize_month(month_str: str) -> str:
         if full.lower().startswith(key):
             return full
     return month_str.strip().title()
+
+
+def canonical_project_name(project_name: str) -> str:
+    text = str(project_name or "").strip()
+    if not text:
+        return ""
+    return PROJECT_NAME_ALIASES.get(text.lower(), text)
 
 
 def get_data_paths() -> dict:

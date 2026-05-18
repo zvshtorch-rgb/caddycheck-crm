@@ -55,7 +55,7 @@ def _normalize_license_change_log_entry(entry: Dict[str, Any]) -> Dict[str, Any]
 
 def load_projects() -> list:
     from models.project import Project
-    from config.settings import get_project_overrides
+    from config.settings import get_project_overrides, canonical_project_name
     client = _get_client()
     resp = client.table("projects").select("*").order("project_name").execute()
     projects = []
@@ -69,7 +69,7 @@ def load_projects() -> list:
                 except Exception:
                     pass
         p = Project(
-            project_name=row["project_name"],
+            project_name=canonical_project_name(row["project_name"]),
             country=row.get("country") or "",
             num_cams=row.get("num_cameras") or 0,
             payment_month=row.get("payment_month") or "",
@@ -101,9 +101,10 @@ def load_projects() -> list:
 
 def upsert_projects(projects: list) -> None:
     client = _get_client()
+    from config.settings import canonical_project_name
     rows_by_name: Dict[str, Dict[str, Any]] = {}
     for p in projects:
-        project_name = str(p.project_name or "").strip()
+        project_name = canonical_project_name(str(p.project_name or "").strip())
         if not project_name:
             continue
         row: Dict[str, Any] = {
@@ -215,6 +216,7 @@ def _invoice_row(inv) -> Dict[str, Any]:
 
 def load_invoices() -> list:
     from models.invoice import Invoice
+    from config.settings import canonical_project_name
     global _invoice_id_map, _invoice_number_project_id_map
     _invoice_id_map = {}
     _invoice_number_project_id_map = {}
@@ -224,7 +226,7 @@ def load_invoices() -> list:
     for row in resp.data:
         inv = Invoice(
             invoice_number=float(row["invoice_number"]) if row.get("invoice_number") else None,
-            project_name=row.get("project_name", ""),
+            project_name=canonical_project_name(row.get("project_name", "")),
             maintenance_year=row.get("maintenance_year", ""),
             payment_amount=float(row.get("payment_amount") or 0),
             cameras_number=row.get("cameras_number"),
@@ -252,12 +254,14 @@ def load_invoices() -> list:
 
 def upsert_invoices(invoices: list) -> None:
     client = _get_client()
+    from config.settings import canonical_project_name
     to_update: list = []
     to_insert: list = []
     deduped_invoices: Dict[tuple, Any] = {}
     duplicate_count = 0
 
     for inv in invoices:
+        inv.project_name = canonical_project_name(inv.project_name)
         numbered_key = _invoice_number_project_identity(inv.invoice_number, inv.project_name)
         logical_key = _invoice_identity(inv.project_name, inv.maintenance_year, inv.year)
         dedupe_key = numbered_key if numbered_key is not None else logical_key
@@ -297,13 +301,15 @@ def upsert_invoices(invoices: list) -> None:
 
 
 def append_invoice_rows(invoice_number: int, projects: list, year: int) -> int:
+    from config.settings import canonical_project_name
+
     rows_to_insert = []
     for proj in sorted(projects, key=lambda p: p.project_name):
         if proj.num_cams <= 0:
             continue
         rows_to_insert.append({
             "invoice_number": str(invoice_number),
-            "project_name": proj.project_name,
+            "project_name": canonical_project_name(proj.project_name),
             "maintenance_year": proj.get_maintenance_year_label(year),
             "payment_amount": proj.get_expected_amount(year),
             "cameras_number": proj.num_cams,
@@ -392,13 +398,18 @@ def get_tickets(
     project_name: Optional[str] = None,
     status: Optional[str] = None,
 ) -> List[dict]:
+    from config.settings import canonical_project_name
+
     client = _get_client()
     query = client.table("tickets").select("*").order("created_at", desc=True)
     if project_name:
-        query = query.eq("project_name", project_name)
+        query = query.eq("project_name", canonical_project_name(project_name))
     if status:
         query = query.eq("status", status)
-    return query.execute().data
+    rows = query.execute().data or []
+    for row in rows:
+        row["project_name"] = canonical_project_name(row.get("project_name"))
+    return rows
 
 
 def create_ticket(
@@ -408,13 +419,15 @@ def create_ticket(
     priority: str = "Medium",
     subcategory: str = "",
 ) -> dict:
+    from config.settings import canonical_project_name
+
     client = _get_client()
     resp = client.table("tickets").select("id").order("id", desc=True).limit(1).execute()
     next_seq = (resp.data[0]["id"] + 1) if resp.data else 1
     ticket_number = f"TK-{next_seq:04d}"
     row = {
         "ticket_number": ticket_number,
-        "project_name": project_name,
+        "project_name": canonical_project_name(project_name),
         "title": title,
         "description": description,
         "priority": priority,
@@ -426,7 +439,11 @@ def create_ticket(
 
 
 def update_ticket(ticket_id: int, **fields) -> dict:
+    from config.settings import canonical_project_name
+
     client = _get_client()
+    if "project_name" in fields:
+        fields["project_name"] = canonical_project_name(fields.get("project_name"))
     fields["updated_at"] = datetime.datetime.utcnow().isoformat()
     if fields.get("status") in ("Resolved", "Closed"):
         fields.setdefault("resolved_at", datetime.datetime.utcnow().isoformat())
@@ -442,13 +459,22 @@ def delete_ticket(ticket_id: int) -> None:
 # ── Orders ───────────────────────────────────────────────────────────────────
 
 def load_orders() -> List[dict]:
+    from config.settings import canonical_project_name
+
     client = _get_client()
     resp = client.table("orders").select("*").order("created_at", desc=True).execute()
-    return resp.data or []
+    rows = resp.data or []
+    for row in rows:
+        row["project_name"] = canonical_project_name(row.get("project_name"))
+    return rows
 
 
 def _normalize_order_fields(fields: Dict[str, Any]) -> Dict[str, Any]:
+    from config.settings import canonical_project_name
+
     normalized = dict(fields)
+    if "project_name" in normalized:
+        normalized["project_name"] = canonical_project_name(normalized.get("project_name"))
     for date_field in ("order_date", "requested_activation_date"):
         value = normalized.get(date_field)
         if isinstance(value, datetime.datetime):

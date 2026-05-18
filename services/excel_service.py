@@ -17,6 +17,7 @@ from config.settings import (
     normalize_month,
     get_project_overrides,
     get_data_paths,
+    canonical_project_name,
 )
 from models.project import Project
 from models.invoice import Invoice, DebtSummary
@@ -82,7 +83,7 @@ def load_projects(filepath: Path = None) -> List[Project]:
 
     projects = []
     for _, row in df.iterrows():
-        name = _safe_str(row.get("Project Name"))
+        name = canonical_project_name(_safe_str(row.get("Project Name")))
         if not name:
             continue
 
@@ -137,7 +138,7 @@ def load_invoices(filepath: Path = None) -> List[Invoice]:
 
     invoices = []
     for _, row in df.iterrows():
-        project_name = _safe_str(row.get("Project name"))
+        project_name = canonical_project_name(_safe_str(row.get("Project name")))
         if not project_name:
             continue
 
@@ -313,14 +314,14 @@ def save_projects_to_excel(
     ws = wb[SHEET_PROJECTS_OVERVIEW]
 
     # Build lookup: project_name -> Project
-    proj_map = {p.project_name.strip(): p for p in projects}
+    proj_map = {canonical_project_name(p.project_name).strip(): p for p in projects}
 
     existing_names = set()
     for row_idx in range(2, ws.max_row + 1):
         cell = ws.cell(row=row_idx, column=1)
         if isinstance(cell, MergedCell) or not cell.value:
             continue
-        name = str(cell.value).strip()
+        name = canonical_project_name(str(cell.value).strip())
         existing_names.add(name)
         proj = proj_map.get(name)
         if proj is None:
@@ -337,10 +338,11 @@ def save_projects_to_excel(
 
     # Append rows for brand-new projects not yet in the sheet
     for proj in projects:
-        if proj.project_name.strip() in existing_names:
+        canonical_name = canonical_project_name(proj.project_name).strip()
+        if canonical_name in existing_names:
             continue
         row_data = [None] * 22
-        row_data[_PROJ_COL["Project Name"] - 1]       = proj.project_name
+        row_data[_PROJ_COL["Project Name"] - 1]       = canonical_name
         row_data[_PROJ_COL["Country"] - 1]            = proj.country or None
         row_data[_PROJ_COL["# Cams"] - 1]             = proj.num_cams or None
         row_data[_PROJ_COL["payment month"] - 1]      = proj.payment_month[:3] if proj.payment_month else None
@@ -349,7 +351,7 @@ def save_projects_to_excel(
         row_data[_PROJ_COL["Status"] - 1]             = proj.status or None
         row_data[_PROJ_COL["Licsense EOP "] - 1]      = proj.license_eop
         ws.append(row_data)
-        logger.info("Appended new project row: %s", proj.project_name)
+        logger.info("Appended new project row: %s", canonical_name)
 
     wb.save(filepath)
     logger.info("Projects saved successfully.")
@@ -445,7 +447,7 @@ def save_invoices_to_excel(
     for inv in invoices:
         if inv.invoice_number:
             inv_by_number[inv.invoice_number] = inv
-        key = (inv.project_name.lower().strip(), inv.maintenance_year, inv.year)
+        key = (canonical_project_name(inv.project_name).lower().strip(), inv.maintenance_year, inv.year)
         inv_by_name_year[key] = inv
 
     existing_keys = set()
@@ -482,7 +484,7 @@ def save_invoices_to_excel(
                 except (ValueError, TypeError):
                     yr_val = None
                 key = (
-                    str(name_cell.value).lower().strip(),
+                    canonical_project_name(str(name_cell.value)).lower().strip(),
                     str(my_cell.value or "").strip(),
                     yr_val,
                 )
@@ -492,7 +494,7 @@ def save_invoices_to_excel(
             continue
 
         _safe_write(ws, row_idx, _INV_COL["Invoice Number"],   inv.invoice_number if inv.invoice_number else None)
-        _safe_write(ws, row_idx, _INV_COL["Project name"],     inv.project_name or None)
+        _safe_write(ws, row_idx, _INV_COL["Project name"],     canonical_project_name(inv.project_name) or None)
         _safe_write(ws, row_idx, _INV_COL["Maintenance Year"], inv.maintenance_year or None)
         _safe_write(ws, row_idx, _INV_COL["Payment amount"],   inv.payment_amount if inv.payment_amount else None)
         _safe_write(ws, row_idx, _INV_COL["Cameras number"],   int(inv.cameras_number) if inv.cameras_number else None)
@@ -502,13 +504,14 @@ def save_invoices_to_excel(
 
     # Append brand-new invoices that do not already exist in the sheet.
     for inv in invoices:
-        identity = _invoice_identity(inv.invoice_number, inv.project_name, inv.maintenance_year, inv.year)
+        canonical_name = canonical_project_name(inv.project_name)
+        identity = _invoice_identity(inv.invoice_number, canonical_name, inv.maintenance_year, inv.year)
         if identity in existing_keys:
             continue
 
         row_data = [None] * 8
         row_data[_INV_COL["Invoice Number"] - 1] = inv.invoice_number if inv.invoice_number else None
-        row_data[_INV_COL["Project name"] - 1] = inv.project_name or None
+        row_data[_INV_COL["Project name"] - 1] = canonical_name or None
         row_data[_INV_COL["Maintenance Year"] - 1] = inv.maintenance_year or None
         row_data[_INV_COL["Payment amount"] - 1] = inv.payment_amount if inv.payment_amount else None
         row_data[_INV_COL["Cameras number"] - 1] = int(inv.cameras_number) if inv.cameras_number else None
@@ -517,7 +520,7 @@ def save_invoices_to_excel(
         row_data[_INV_COL["Year"] - 1] = inv.year
         ws.append(row_data)
         existing_keys.add(identity)
-        logger.info("Appended new invoice row: %s / %s", inv.invoice_number, inv.project_name)
+        logger.info("Appended new invoice row: %s / %s", inv.invoice_number, canonical_name)
 
     wb.save(filepath)
     logger.info("Invoices saved successfully.")
@@ -567,7 +570,7 @@ def append_monthly_invoice_rows(
         ws.delete_rows(row_idx, 1)
 
     appended = 0
-    for proj in sorted(projects, key=lambda p: p.project_name):
+    for proj in sorted(projects, key=lambda p: canonical_project_name(p.project_name)):
         if proj.num_cams <= 0:
             continue
 
@@ -576,7 +579,7 @@ def append_monthly_invoice_rows(
 
         row_data = [None] * 8
         row_data[_INV_COL["Invoice Number"] - 1]    = invoice_number
-        row_data[_INV_COL["Project name"] - 1]      = proj.project_name
+        row_data[_INV_COL["Project name"] - 1]      = canonical_project_name(proj.project_name)
         row_data[_INV_COL["Maintenance Year"] - 1]  = maint_label
         row_data[_INV_COL["Payment amount"] - 1]    = amount
         row_data[_INV_COL["Cameras number"] - 1]    = proj.num_cams
