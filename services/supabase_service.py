@@ -656,6 +656,18 @@ def download_order_pdf(bucket_name: str, storage_path: str) -> bytes:
     return client.storage.from_(bucket_name).download(storage_path)
 
 
+def create_order_pdf_signed_url(bucket_name: str, storage_path: str, expires_in: int = 3600) -> Optional[str]:
+    client = _get_client()
+    try:
+        resp = client.storage.from_(bucket_name).create_signed_url(storage_path, expires_in)
+    except Exception as exc:
+        logger.warning("Could not create signed URL for order PDF: %s", exc)
+        return None
+    if isinstance(resp, dict):
+        return resp.get("signedURL") or resp.get("signed_url") or resp.get("signedUrl")
+    return None
+
+
 def _normalize_sent_invoice_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
     normalized: Dict[str, Any] = {}
     if entry.get("id") not in (None, ""):

@@ -196,6 +196,7 @@ from services.supabase_service import (
     download_sent_invoice_pdf as download_sent_invoice_pdf_supabase,
     upload_order_pdf as upload_order_pdf_supabase,
     download_order_pdf as download_order_pdf_supabase,
+    create_order_pdf_signed_url as create_order_pdf_signed_url_supabase,
 )
 
 ORDER_STATUS_OPTIONS = [
@@ -2583,6 +2584,16 @@ elif page == "📦 Orders":
 
     st.caption(f"Showing {len(filtered_orders)} of {len(orders)} order row(s)")
     if filtered_orders:
+        order_pdf_links: dict[int, str | None] = {}
+        for order in filtered_orders:
+            order_id = _safe_int(order.get("id"), default=0)
+            storage_bucket = _safe_str(order.get("pdf_storage_bucket")).strip()
+            storage_path = _safe_str(order.get("pdf_storage_path")).strip()
+            link: str | None = None
+            if storage_bucket and storage_path:
+                link = create_order_pdf_signed_url_supabase(storage_bucket, storage_path)
+            order_pdf_links[order_id] = link
+
         orders_df = pd.DataFrame([
             {
                 "ID": _safe_int(order.get("id"), default=0),
@@ -2597,32 +2608,23 @@ elif page == "📦 Orders":
                 "Requested Activation": (_parse_order_date(order.get("requested_activation_date")) or ""),
                 "Status": _normalize_order_status(order.get("status", "")),
                 "Project Exists": "Yes" if _project_name_matches(order.get("project_name"), project_name_keys) else "No",
-                "Source PDF": "Available" if _get_order_pdf_bytes(order) is not None else "Missing",
+                "Source PDF": order_pdf_links.get(_safe_int(order.get("id"), default=0)) or "",
             }
             for order in filtered_orders
         ])
-        st.dataframe(orders_df, use_container_width=True, hide_index=True, height=340)
-
-        downloadable_orders = [order for order in filtered_orders if _get_order_pdf_bytes(order) is not None]
-        if downloadable_orders:
-            st.markdown("---")
-            st.subheader("Source PDF Downloads")
-            for order in downloadable_orders:
-                order_pdf = _get_order_pdf_bytes(order)
-                if order_pdf is None:
-                    continue
-                file_bytes, file_name = order_pdf
-                download_col_1, download_col_2 = st.columns([5, 1])
-                download_col_1.caption(
-                    f"#{_safe_int(order.get('id'), default=0)} | {_safe_str(order.get('order_number')) or 'No Ref'} | {_safe_str(order.get('project_name'))}"
-                )
-                download_col_2.download_button(
-                    "Download",
-                    data=file_bytes,
-                    file_name=file_name,
-                    mime="application/octet-stream",
-                    key=f"download_order_source_{_safe_int(order.get('id'), default=0)}",
-                )
+        st.dataframe(
+            orders_df,
+            use_container_width=True,
+            hide_index=True,
+            height=340,
+            column_config={
+                "Source PDF": st.column_config.LinkColumn(
+                    "Source PDF",
+                    help="Click to open the originally uploaded order PDF.",
+                    display_text="Download",
+                ),
+            },
+        )
     else:
         st.info("No orders match the current filters.")
 
