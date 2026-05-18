@@ -1,6 +1,7 @@
 """Supabase service — cloud storage for projects, invoices, and tickets."""
 import datetime
 import logging
+import re
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 
@@ -623,12 +624,15 @@ def download_sent_invoice_pdf(bucket_name: str, storage_path: str) -> bytes:
 
 
 def _order_pdf_storage_path(filename: str) -> str:
-    safe_name = filename.replace("\\", "/").strip("/") or "order.pdf"
+    base = Path(filename).name or "order.pdf"
+    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", base).strip("_") or "order.pdf"
     stamp = datetime.datetime.utcnow().strftime("%Y/%m/%Y%m%d-%H%M%S")
     return f"{stamp}-{safe_name}"
 
 
 def upload_order_pdf(file_bytes: bytes, filename: str, storage_path: Optional[str] = None) -> Dict[str, str]:
+    import tempfile
+
     client = _get_client()
     _ensure_storage_bucket(client, ORDER_PDF_BUCKET)
     target_path = storage_path or _order_pdf_storage_path(filename)
@@ -638,13 +642,25 @@ def upload_order_pdf(file_bytes: bytes, filename: str, storage_path: Optional[st
     except Exception:
         pass
 
-    suffix = Path(filename).suffix.lower()
+    suffix = Path(filename).suffix.lower() or ".pdf"
     content_type = "application/pdf" if suffix == ".pdf" else "application/octet-stream"
-    client.storage.from_(ORDER_PDF_BUCKET).upload(
-        target_path,
-        file_bytes,
-        {"content-type": content_type},
-    )
+
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp_file:
+        tmp_file.write(file_bytes)
+        tmp_path = Path(tmp_file.name)
+
+    try:
+        client.storage.from_(ORDER_PDF_BUCKET).upload(
+            path=target_path,
+            file=str(tmp_path),
+            file_options={"content-type": content_type, "upsert": "true"},
+        )
+    finally:
+        try:
+            tmp_path.unlink()
+        except Exception:
+            pass
+
     return {
         "pdf_storage_bucket": ORDER_PDF_BUCKET,
         "pdf_storage_path": target_path,
