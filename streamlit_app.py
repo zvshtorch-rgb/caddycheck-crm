@@ -3392,8 +3392,70 @@ elif page == "💸 Debt Report":
     paid_trial_total_amt = sum(i.payment_amount for i in all_unpaid if _is_paid_trial_category(i))
     y2_total_amt = sum(i.payment_amount for i in all_unpaid if _is_maintenance_category(i))
 
+    from collections import defaultdict
+
+    grouped_unpaid: dict[tuple, list] = defaultdict(list)
+    for row_index, invoice_row in enumerate(debt_inv):
+        raw_invoice_number = _safe_str(invoice_row.invoice_number).strip()
+        if raw_invoice_number:
+            try:
+                invoice_key = ("invoice", int(float(raw_invoice_number)))
+            except Exception:
+                invoice_key = ("row", row_index)
+        else:
+            invoice_key = ("row", row_index)
+        grouped_unpaid[invoice_key].append(invoice_row)
+
+    grouped_unpaid_rows = []
+    for invoice_key, rows in grouped_unpaid.items():
+        invoice_numbers = []
+        project_names = []
+        countries = []
+        maint_years = []
+        years = []
+        total_amount = 0.0
+        for invoice_row in rows:
+            raw_invoice_number = _safe_str(invoice_row.invoice_number).strip()
+            if raw_invoice_number:
+                invoice_numbers.append(str(int(float(raw_invoice_number))))
+            project_name = _safe_str(invoice_row.project_name).strip()
+            if project_name:
+                project_names.append(project_name)
+            country = _safe_str(_get_country(invoice_row.project_name)).strip()
+            if country:
+                countries.append(country)
+            maint_year = _safe_str(invoice_row.maintenance_year).strip()
+            if maint_year:
+                maint_years.append(maint_year)
+            if invoice_row.year is not None:
+                years.append(int(invoice_row.year))
+            elif invoice_row.payment_date is not None:
+                years.append(invoice_row.payment_date.year)
+            total_amount += _safe_float(invoice_row.payment_amount)
+
+        unique_project_names = sorted({name for name in project_names if name})
+        unique_countries = sorted({country for country in countries if country})
+        unique_maint_years = sorted({label for label in maint_years if label})
+        grouped_unpaid_rows.append({
+            "Invoice #": invoice_numbers[0] if invoice_numbers else "—",
+            "Project Name": unique_project_names[0] if len(unique_project_names) <= 1 else f"{unique_project_names[0]} (+{len(unique_project_names) - 1} more)",
+            "Projects": len(unique_project_names),
+            "Country": ", ".join(unique_countries),
+            "Maint. Year": ", ".join(unique_maint_years),
+            "Amount (€)": total_amount,
+            "Year": str(max(years)) if years else "",
+        })
+
+    grouped_unpaid_rows.sort(
+        key=lambda row: (
+            int(row["Invoice #"]) if str(row["Invoice #"]).isdigit() else 0,
+            row["Project Name"].lower(),
+        ),
+        reverse=True,
+    )
+
     mc1, mc2, mc3, mc4, mc5, mc6 = st.columns(6)
-    mc1.metric("Unpaid Invoices",  len(debt_inv))
+    mc1.metric("Unpaid Invoices",  len(grouped_unpaid_rows))
     mc2.metric("Projects with Debt", proj_with_debt)
     mc3.metric("Total Debt",       f"€{total_debt_amt:,.0f}")
     mc4.metric("Y1 Debt",          f"€{y1_total_amt:,.0f}")
@@ -3428,18 +3490,8 @@ elif page == "💸 Debt Report":
 
     # ── Detailed table: one row per unpaid invoice ────────────────────────────
     st.subheader("Unpaid Invoices Detail")
-    detail_rows = [{
-        "Invoice #":      str(int(i.invoice_number)) if i.invoice_number else "—",
-        "Project Name":   _safe_str(i.project_name),
-        "Country":        _safe_str(_get_country(i.project_name)),
-        "Maint. Year":    _safe_str(i.maintenance_year),
-        "Amount (€)":     _safe_float(i.payment_amount),
-        "Year":           _safe_str(_safe_int(i.year) or ""),
-        "Payment Date":   i.payment_date.strftime("%Y-%m-%d") if i.payment_date else "",
-    } for i in sorted(debt_inv, key=lambda x: (x.project_name, x.year or 0))]
-
-    if detail_rows:
-        detail_df = pd.DataFrame(detail_rows)
+    if grouped_unpaid_rows:
+        detail_df = pd.DataFrame(grouped_unpaid_rows)
         st.dataframe(detail_df, use_container_width=True, hide_index=True, height=350)
 
         # Download detail as CSV
