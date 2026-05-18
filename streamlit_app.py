@@ -194,6 +194,8 @@ from services.supabase_service import (
     update_order as update_order_supabase,
     delete_order as delete_order_supabase,
     download_sent_invoice_pdf as download_sent_invoice_pdf_supabase,
+    upload_order_pdf as upload_order_pdf_supabase,
+    download_order_pdf as download_order_pdf_supabase,
 )
 
 ORDER_STATUS_OPTIONS = [
@@ -1174,6 +1176,65 @@ def _archive_uploaded_order_file(file_bytes: bytes, filename: str) -> Path:
     archive_path = archive_dir / f"{stamp}-{safe_stem}{safe_suffix}"
     archive_path.write_bytes(file_bytes)
     return archive_path
+
+
+def _resolve_order_archive_path(order: dict) -> Path | None:
+    archive_path_text = _safe_str(order.get("source_archive_path")).strip()
+    if archive_path_text:
+        archive_path = Path(archive_path_text)
+        if archive_path.exists():
+            return archive_path
+
+    from config.settings import get_data_paths
+
+    source_name = _safe_str(order.get("source_filename")).strip()
+    if not source_name:
+        return None
+
+    archive_dir = get_data_paths()["output_dir"] / "orders"
+    if not archive_dir.exists():
+        return None
+
+    source_path = Path(source_name)
+    candidate_stems = {
+        source_path.stem,
+        re.sub(r"[\\/]+", "_", source_name),
+        re.sub(r"[^A-Za-z0-9._-]+", "_", source_path.stem).strip("_"),
+    }
+    candidate_stems = {stem for stem in candidate_stems if stem}
+
+    for stem in candidate_stems:
+        exact_matches = sorted(archive_dir.glob(f"*-{stem}{source_path.suffix or '.*'}"))
+        if exact_matches:
+            return exact_matches[0]
+
+        fallback_matches = sorted(archive_dir.glob(f"*-{stem}*"))
+        if fallback_matches:
+            return fallback_matches[0]
+
+    return None
+
+
+def _get_order_pdf_bytes(order: dict) -> tuple[bytes, str] | None:
+    """Return (file_bytes, filename) for an order's source PDF, or None."""
+    storage_bucket = _safe_str(order.get("pdf_storage_bucket")).strip()
+    storage_path = _safe_str(order.get("pdf_storage_path")).strip()
+    if storage_bucket and storage_path:
+        try:
+            data = download_order_pdf_supabase(storage_bucket, storage_path)
+            filename = Path(storage_path).name or _safe_str(order.get("source_filename")).strip() or "order.pdf"
+            return data, filename
+        except Exception as exc:
+            logger.warning("Could not download order PDF from Supabase Storage: %s", exc)
+
+    archive_path = _resolve_order_archive_path(order)
+    if archive_path is not None:
+        try:
+            return archive_path.read_bytes(), archive_path.name
+        except Exception as exc:
+            logger.warning("Could not read archived order PDF: %s", exc)
+
+    return None
 
 
 def _expand_uploaded_order_sources(uploaded_order_files) -> list[dict]:
@@ -2400,13 +2461,29 @@ elif page == "📦 Orders":
                                 if st.button("Import Order Rows", type="primary", key="import_orders_btn"):
                                     try:
                                         archive_paths = {}
+                                        storage_meta_by_key = {}
                                         for file_info in parsed_sources:
                                             archive_paths[file_info["source_key"]] = _archive_uploaded_order_file(
                                                 file_info["file_bytes"],
                                                 file_info["archive_name"],
                                             )
+                                            try:
+                                                storage_meta_by_key[file_info["source_key"]] = upload_order_pdf_supabase(
+                                                    file_info["file_bytes"],
+                                                    file_info["archive_name"],
+                                                )
+                                            except Exception as exc:
+                                                logger.warning(
+                                                    "Could not upload order PDF to Supabase Storage: %s",
+                                                    exc,
+                                                )
                                         for row in import_rows_to_create:
-                                            row["source_archive_path"] = str(archive_paths[row.pop("_source_key")])
+                                            source_key = row.pop("_source_key")
+                                            row["source_archive_path"] = str(archive_paths[source_key])
+                                            storage_meta = storage_meta_by_key.get(source_key)
+                                            if storage_meta:
+                                                row["pdf_storage_bucket"] = storage_meta.get("pdf_storage_bucket")
+                                                row["pdf_storage_path"] = storage_meta.get("pdf_storage_path")
                                             row.pop("_archive_name", None)
                                         created_count = _create_orders(import_rows_to_create, orders_source_name)
                                         load_orders_data.clear()
@@ -2520,10 +2597,32 @@ elif page == "📦 Orders":
                 "Requested Activation": (_parse_order_date(order.get("requested_activation_date")) or ""),
                 "Status": _normalize_order_status(order.get("status", "")),
                 "Project Exists": "Yes" if _project_name_matches(order.get("project_name"), project_name_keys) else "No",
+                "Source PDF": "Available" if _get_order_pdf_bytes(order) is not None else "Missing",
             }
             for order in filtered_orders
         ])
         st.dataframe(orders_df, use_container_width=True, hide_index=True, height=340)
+
+        downloadable_orders = [order for order in filtered_orders if _get_order_pdf_bytes(order) is not None]
+        if downloadable_orders:
+            st.markdown("---")
+            st.subheader("Source PDF Downloads")
+            for order in downloadable_orders:
+                order_pdf = _get_order_pdf_bytes(order)
+                if order_pdf is None:
+                    continue
+                file_bytes, file_name = order_pdf
+                download_col_1, download_col_2 = st.columns([5, 1])
+                download_col_1.caption(
+                    f"#{_safe_int(order.get('id'), default=0)} | {_safe_str(order.get('order_number')) or 'No Ref'} | {_safe_str(order.get('project_name'))}"
+                )
+                download_col_2.download_button(
+                    "Download",
+                    data=file_bytes,
+                    file_name=file_name,
+                    mime="application/octet-stream",
+                    key=f"download_order_source_{_safe_int(order.get('id'), default=0)}",
+                )
     else:
         st.info("No orders match the current filters.")
 
@@ -2716,17 +2815,16 @@ elif page == "📦 Orders":
             except Exception as exc:
                 st.error(f"Delete failed: {exc}")
 
-        archive_path_text = _safe_str(selected_order.get("source_archive_path")).strip()
-        archive_path = Path(archive_path_text) if archive_path_text else None
-        if archive_path and archive_path.exists():
-            with open(archive_path, "rb") as archived_order_file:
-                st.download_button(
-                    "Download Source Order File",
-                    data=archived_order_file.read(),
-                    file_name=archive_path.name,
-                    mime="application/octet-stream",
-                    key="download_order_source",
-                )
+        order_pdf = _get_order_pdf_bytes(selected_order)
+        if order_pdf is not None:
+            file_bytes, file_name = order_pdf
+            st.download_button(
+                "Download Source Order File",
+                data=file_bytes,
+                file_name=file_name,
+                mime="application/octet-stream",
+                key="download_order_source",
+            )
         elif _safe_str(selected_order.get("source_filename")).strip():
             st.caption(f"Source file: {_safe_str(selected_order.get('source_filename')).strip()}")
 

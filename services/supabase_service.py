@@ -6,6 +6,7 @@ from typing import List, Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
 SENT_INVOICE_BUCKET = "sent-invoices"
+ORDER_PDF_BUCKET = "order-pdfs"
 LICENSE_CHANGE_LOG_TABLE = "license_change_log"
 BANK_PAYMENTS_TABLE = "bank_payments"
 BANK_PAYMENT_ALLOCATIONS_TABLE = "bank_payment_allocations"
@@ -617,6 +618,40 @@ def upload_sent_invoice_pdf(file_path: str | Path, storage_path: Optional[str] =
 
 
 def download_sent_invoice_pdf(bucket_name: str, storage_path: str) -> bytes:
+    client = _get_client()
+    return client.storage.from_(bucket_name).download(storage_path)
+
+
+def _order_pdf_storage_path(filename: str) -> str:
+    safe_name = filename.replace("\\", "/").strip("/") or "order.pdf"
+    stamp = datetime.datetime.utcnow().strftime("%Y/%m/%Y%m%d-%H%M%S")
+    return f"{stamp}-{safe_name}"
+
+
+def upload_order_pdf(file_bytes: bytes, filename: str, storage_path: Optional[str] = None) -> Dict[str, str]:
+    client = _get_client()
+    _ensure_storage_bucket(client, ORDER_PDF_BUCKET)
+    target_path = storage_path or _order_pdf_storage_path(filename)
+
+    try:
+        client.storage.from_(ORDER_PDF_BUCKET).remove([target_path])
+    except Exception:
+        pass
+
+    suffix = Path(filename).suffix.lower()
+    content_type = "application/pdf" if suffix == ".pdf" else "application/octet-stream"
+    client.storage.from_(ORDER_PDF_BUCKET).upload(
+        target_path,
+        file_bytes,
+        {"content-type": content_type},
+    )
+    return {
+        "pdf_storage_bucket": ORDER_PDF_BUCKET,
+        "pdf_storage_path": target_path,
+    }
+
+
+def download_order_pdf(bucket_name: str, storage_path: str) -> bytes:
     client = _get_client()
     return client.storage.from_(bucket_name).download(storage_path)
 
