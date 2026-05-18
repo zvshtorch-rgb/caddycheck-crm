@@ -4615,6 +4615,7 @@ elif page == "🏦 Bank Payment":
     st.markdown("Upload SWIFT MT103 bank transfer PDF(s) to auto-extract payment details.")
     uploaded_files = st.file_uploader("Upload bank transfer PDF(s)", type=["pdf"], accept_multiple_files=True)
 
+    parsed_bank_files = []
     if uploaded_files:
         for index, uploaded in enumerate(uploaded_files, start=1):
             file_bytes = uploaded.read()
@@ -4685,6 +4686,221 @@ elif page == "🏦 Bank Payment":
                         "parsed_payload": parsed,
                     },
                 )
+
+            parsed_bank_files.append({
+                "index": index,
+                "name": uploaded.name,
+                "hash": uploaded_hash,
+                "parsed": parsed,
+                "inv_no_key": f"pdf_inv_no_{index}",
+                "pay_date_key": f"pdf_pay_date_{index}",
+            })
+
+        st.markdown("---")
+        if st.button("✅ Save All Parsed Payments", type="primary", key="save_all_parsed_payments"):
+            batch_saved = 0
+            batch_skipped = []
+            batch_errors = []
+            batch_saved_records = []
+
+            for item in parsed_bank_files:
+                try:
+                    item_inv_no = _safe_int(st.session_state.get(item["inv_no_key"], 0), default=0)
+                    item_pay_date = st.session_state.get(item["pay_date_key"], item["parsed"].get("payment_date") or datetime.date.today())
+                    item_payment_context = {
+                        "source_name": item["name"],
+                        "source_kind": "pdf-batch",
+                        "payment_fingerprint": item["hash"],
+                        "instructed_amount": item["parsed"].get("instructed_amount"),
+                        "received_amount": item["parsed"].get("received_amount"),
+                        "fee_amount": (
+                            item["parsed"].get("instructed_amount") - item["parsed"].get("received_amount")
+                            if item["parsed"].get("instructed_amount") is not None and item["parsed"].get("received_amount") is not None
+                            else None
+                        ),
+                        "currency": "EUR",
+                        "raw_text": item["parsed"].get("raw_text"),
+                        "parsed_payload": item["parsed"],
+                    }
+
+                    if item_inv_no <= 0:
+                        # Keep the payment record even when no invoice number is available.
+                        payment_entry = {
+                            "payment_date": item_pay_date.isoformat() if hasattr(item_pay_date, "isoformat") else str(item_pay_date),
+                            "invoice_number": None,
+                            "source_name": item["name"],
+                            "source_kind": "pdf-batch",
+                            "payment_fingerprint": item["hash"],
+                            "instructed_amount": item_payment_context["instructed_amount"],
+                            "received_amount": item_payment_context["received_amount"],
+                            "applied_amount": None,
+                            "fee_amount": item_payment_context["fee_amount"],
+                            "currency": "EUR",
+                            "raw_text": item_payment_context["raw_text"],
+                            "parsed_payload": item_payment_context["parsed_payload"],
+                            "notes": "Auto-saved from batch upload without invoice number.",
+                        }
+                        append_bank_payment_log({**payment_entry, "allocations": []})
+                        batch_saved += 1
+                        batch_saved_records.append(payment_entry)
+                        batch_skipped.append(f"{item['name']}: saved without invoice match")
+                        continue
+
+                    rows = get_invoices_by_number(item_inv_no)
+                    if not rows:
+                        payment_entry = {
+                            "payment_date": item_pay_date.isoformat() if hasattr(item_pay_date, "isoformat") else str(item_pay_date),
+                            "invoice_number": item_inv_no,
+                            "source_name": item["name"],
+                            "source_kind": "pdf-batch",
+                            "payment_fingerprint": item["hash"],
+                            "instructed_amount": item_payment_context["instructed_amount"],
+                            "received_amount": item_payment_context["received_amount"],
+                            "applied_amount": None,
+                            "fee_amount": item_payment_context["fee_amount"],
+                            "currency": "EUR",
+                            "raw_text": item_payment_context["raw_text"],
+                            "parsed_payload": item_payment_context["parsed_payload"],
+                            "notes": "Auto-saved from batch upload but no invoice rows were found.",
+                        }
+                        append_bank_payment_log({**payment_entry, "allocations": []})
+                        batch_saved += 1
+                        batch_saved_records.append(payment_entry)
+                        batch_skipped.append(f"{item['name']}: no invoice rows found")
+                        continue
+
+                    unpaid_rows = [row for row in rows if str(row.get("paid", "No")).strip().lower() != "yes"]
+                    if not unpaid_rows:
+                        payment_entry = {
+                            "payment_date": item_pay_date.isoformat() if hasattr(item_pay_date, "isoformat") else str(item_pay_date),
+                            "invoice_number": item_inv_no,
+                            "source_name": item["name"],
+                            "source_kind": "pdf-batch",
+                            "payment_fingerprint": item["hash"],
+                            "instructed_amount": item_payment_context["instructed_amount"],
+                            "received_amount": item_payment_context["received_amount"],
+                            "applied_amount": None,
+                            "fee_amount": item_payment_context["fee_amount"],
+                            "currency": "EUR",
+                            "raw_text": item_payment_context["raw_text"],
+                            "parsed_payload": item_payment_context["parsed_payload"],
+                            "notes": "Auto-saved from batch upload; invoice rows were already paid.",
+                        }
+                        append_bank_payment_log({**payment_entry, "allocations": []})
+                        batch_saved += 1
+                        batch_saved_records.append(payment_entry)
+                        batch_skipped.append(f"{item['name']}: rows already paid")
+                        continue
+
+                    # Auto-mark every unpaid row for this invoice as paid.
+                    allocation_rows = []
+                    total_applied = 0.0
+                    renewal_links = []
+                    renewal_warnings = []
+                    errors = []
+
+                    for row in unpaid_rows:
+                        proj = row["project_name"]
+                        try:
+                            mark_invoice_row_paid(
+                                db_id=int(row["id"]),
+                                payment_date=item_pay_date,
+                                payment_amount=row.get("payment_amount"),
+                            )
+
+                            amount_applied = _safe_float(row.get("payment_amount"))
+                            total_applied += amount_applied
+                            allocation_rows.append({
+                                "invoice_row_id": int(row["id"]),
+                                "invoice_number": item_inv_no,
+                                "project_name": proj,
+                                "maintenance_year": _safe_str(row.get("maintenance_year")),
+                                "year": _safe_int(row.get("year"), default=0) or None,
+                                "amount_applied": amount_applied,
+                            })
+
+                            try:
+                                sub = get_subscription(proj)
+                                if sub and sub.get("valid_until"):
+                                    current_until = datetime.date.fromisoformat(sub["valid_until"][:10])
+                                    base = max(current_until, item_pay_date)
+                                else:
+                                    base = item_pay_date
+                                try:
+                                    target_until = base.replace(year=base.year + 1)
+                                except ValueError:
+                                    target_until = base.replace(year=base.year + 1, day=28)
+
+                                cameras = _safe_int(row.get("cameras_number"))
+                                upsert_subscription(
+                                    project_name=proj,
+                                    valid_until=target_until,
+                                    cameras_allowed=cameras,
+                                    valid_from=item_pay_date,
+                                )
+                                token = create_renewal_link(
+                                    project_name=proj,
+                                    target_valid_until=target_until,
+                                    cameras_allowed=cameras,
+                                    invoice_number=str(item_inv_no),
+                                    payment_amount=row.get("payment_amount"),
+                                )
+                                renewal_links.append({
+                                    "project": proj,
+                                    "valid_until": target_until,
+                                    "cameras": cameras,
+                                    "token": token,
+                                })
+                            except Exception as renewal_exc:
+                                if (
+                                    _is_missing_supabase_table_error(renewal_exc, "subscriptions")
+                                    or _is_missing_supabase_table_error(renewal_exc, "renewal_links")
+                                ):
+                                    renewal_warnings.append(f"{proj}: renewal tables are not set up yet.")
+                                else:
+                                    raise renewal_exc
+                        except Exception as exc:
+                            errors.append(f"{proj}: {exc}")
+
+                    payment_entry = {
+                        "payment_date": item_pay_date.isoformat() if hasattr(item_pay_date, "isoformat") else str(item_pay_date),
+                        "invoice_number": item_inv_no,
+                        "source_name": item["name"],
+                        "source_kind": "pdf-batch",
+                        "payment_fingerprint": item["hash"],
+                        "instructed_amount": item_payment_context["instructed_amount"],
+                        "received_amount": item_payment_context["received_amount"],
+                        "applied_amount": total_applied,
+                        "fee_amount": item_payment_context["fee_amount"],
+                        "currency": "EUR",
+                        "raw_text": item_payment_context["raw_text"],
+                        "parsed_payload": item_payment_context["parsed_payload"],
+                        "notes": item_payment_context.get("notes"),
+                    }
+
+                    if errors:
+                        batch_skipped.append(f"{item['name']}: " + "; ".join(errors))
+                    if renewal_warnings:
+                        batch_skipped.append(f"{item['name']}: " + "; ".join(renewal_warnings))
+
+                    try:
+                        append_bank_payment_with_allocations(payment_entry, allocation_rows)
+                    except Exception as payment_exc:
+                        append_bank_payment_log({**payment_entry, "allocations": allocation_rows})
+                        batch_skipped.append(f"{item['name']}: saved locally because the bank payment table is not ready yet ({payment_exc})")
+
+                    batch_saved += 1
+                    batch_saved_records.append(payment_entry)
+                except Exception as exc:
+                    batch_skipped.append(f"{item['name']}: {exc}")
+
+            if batch_saved_records:
+                st.cache_data.clear()
+            if batch_saved:
+                st.success(f"Saved {batch_saved} bank payment(s).")
+            if batch_skipped:
+                st.warning("\n".join(batch_skipped))
+            st.rerun()
 
     # ── Manual lookup (no PDF) ────────────────────────────────────────────────
     st.markdown("---")
