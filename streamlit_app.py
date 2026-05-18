@@ -2497,6 +2497,98 @@ elif page == "📦 Orders":
                                     except Exception as exc:
                                         st.error(f"Import failed: {exc}")
 
+        with st.expander("📎 Backfill Source PDFs", expanded=False):
+            st.caption(
+                "Upload one or more PDFs (or a ZIP). Each file is matched to an existing "
+                "order row by source filename or by the order reference / project name in the filename, "
+                "then uploaded to Supabase Storage."
+            )
+            backfill_files = st.file_uploader(
+                "Upload PDFs to attach to existing orders",
+                type=["pdf", "zip"],
+                key="orders_backfill_upload",
+                accept_multiple_files=True,
+            )
+            if backfill_files and st.button("Attach PDFs To Matching Orders", type="primary", key="orders_backfill_btn"):
+                expanded: list[tuple[str, bytes]] = []
+                for uploaded_file in backfill_files:
+                    name = _safe_str(getattr(uploaded_file, "name", "")).strip()
+                    if not name:
+                        continue
+                    data = uploaded_file.getvalue()
+                    if Path(name).suffix.lower() == ".zip":
+                        try:
+                            with zipfile.ZipFile(io.BytesIO(data)) as archive:
+                                for member in archive.infolist():
+                                    if member.is_dir():
+                                        continue
+                                    member_name = Path(member.filename).name
+                                    if Path(member_name).suffix.lower() == ".pdf":
+                                        expanded.append((member_name, archive.read(member)))
+                        except Exception as exc:
+                            st.error(f"Could not read ZIP {name}: {exc}")
+                    elif Path(name).suffix.lower() == ".pdf":
+                        expanded.append((name, data))
+
+                if not expanded:
+                    st.warning("No PDF files found to attach.")
+                else:
+                    def _norm(text: str) -> str:
+                        return re.sub(r"[^a-z0-9]+", "", _safe_str(text).lower())
+
+                    matched_count = 0
+                    skipped: list[str] = []
+                    failed: list[str] = []
+                    used_order_ids: set[int] = set()
+                    for filename, file_bytes in expanded:
+                        stem_norm = _norm(Path(filename).stem)
+                        match_order = None
+                        for order in orders:
+                            order_id = _safe_int(order.get("id"), default=0)
+                            if order_id in used_order_ids:
+                                continue
+                            source_norm = _norm(Path(_safe_str(order.get("source_filename"))).stem)
+                            if source_norm and source_norm == stem_norm:
+                                match_order = order
+                                break
+                        if match_order is None:
+                            for order in orders:
+                                order_id = _safe_int(order.get("id"), default=0)
+                                if order_id in used_order_ids:
+                                    continue
+                                order_ref_norm = _norm(order.get("order_number"))
+                                project_norm = _norm(order.get("project_name"))
+                                if order_ref_norm and order_ref_norm in stem_norm and project_norm and project_norm in stem_norm:
+                                    match_order = order
+                                    break
+                        if match_order is None:
+                            skipped.append(filename)
+                            continue
+                        try:
+                            storage_meta = upload_order_pdf_supabase(file_bytes, filename)
+                            _update_order(
+                                _safe_int(match_order.get("id"), default=0),
+                                orders_source_name,
+                                pdf_storage_bucket=storage_meta.get("pdf_storage_bucket"),
+                                pdf_storage_path=storage_meta.get("pdf_storage_path"),
+                                source_filename=_safe_str(match_order.get("source_filename")).strip() or filename,
+                            )
+                            used_order_ids.add(_safe_int(match_order.get("id"), default=0))
+                            matched_count += 1
+                        except Exception as exc:
+                            failed.append(f"{filename}: {exc}")
+
+                    if matched_count:
+                        load_orders_data.clear()
+                        st.session_state["_flash_success"] = f"Attached {matched_count} PDF(s) to existing orders."
+                        st.session_state["_flash_success_page"] = "📦 Orders"
+                    if skipped:
+                        st.warning("No matching order found for: " + ", ".join(skipped))
+                    if failed:
+                        st.error("Errors:\n" + "\n".join(failed))
+                    if matched_count:
+                        st.rerun()
+
         with st.expander("➕ New Order", expanded=False):
             with st.form("new_order_form"):
                 nc1, nc2, nc3 = st.columns(3)
