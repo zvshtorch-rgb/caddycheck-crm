@@ -5208,6 +5208,24 @@ elif page == "🏦 Bank Payment":
                 link = create_bank_payment_pdf_signed_url_supabase(storage_bucket, storage_path)
             bank_pdf_links[fp_key] = link
 
+        # Build invoice# -> sent monthly invoice PDF signed URL map
+        sent_invoice_rows = load_sent_invoices_log() or []
+        invoice_pdf_links: dict[int, str] = {}
+        for sent_row in sent_invoice_rows:
+            inv_num = _safe_int(sent_row.get("invoice_number"), default=0)
+            if not inv_num or inv_num in invoice_pdf_links:
+                continue
+            sent_bucket = _safe_str(sent_row.get("pdf_storage_bucket")).strip()
+            sent_path = _safe_str(sent_row.get("pdf_storage_path")).strip()
+            if not (sent_bucket and sent_path):
+                continue
+            try:
+                signed = create_sent_invoice_pdf_signed_url_supabase(sent_bucket, sent_path)
+            except Exception:
+                signed = None
+            if signed:
+                invoice_pdf_links[inv_num] = signed
+
         payment_df = pd.DataFrame([
             {
                 "Saved At": _safe_str(row.get("created_at") or row.get("updated_at") or "")[:19].replace("T", " "),
@@ -5219,6 +5237,7 @@ elif page == "🏦 Bank Payment":
                 "Fee (€)": f"€{_safe_float(row.get('fee_amount', 0.0)):,.0f}" if row.get("fee_amount") not in (None, "") else "",
                 "Fingerprint": _safe_str(row.get("payment_fingerprint"))[:12],
                 "Source PDF": bank_pdf_links.get(_safe_str(row.get("payment_fingerprint"))) or "",
+                "Invoice PDF": invoice_pdf_links.get(_safe_int(row.get("invoice_number"), default=0), ""),
             }
             for row in bank_payment_rows
         ])
@@ -5231,6 +5250,11 @@ elif page == "🏦 Bank Payment":
                 "Source PDF": st.column_config.LinkColumn(
                     "Source PDF",
                     help="Click to open the originally uploaded bank transfer PDF.",
+                    display_text="Download",
+                ),
+                "Invoice PDF": st.column_config.LinkColumn(
+                    "Invoice PDF",
+                    help="Click to open the monthly invoice PDF that was paid by this bank transfer.",
                     display_text="Download",
                 ),
             },
