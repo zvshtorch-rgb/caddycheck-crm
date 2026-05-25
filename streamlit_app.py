@@ -3291,32 +3291,6 @@ elif page == "🧾 Invoice Details":
                 except Exception as exc:
                     st.error(f"Failed to remove blank-project invoice rows: {exc}")
 
-        with st.expander("🗑️ Clear Invoice Number", expanded=False):
-            if _is_excel_source(_data_path):
-                st.warning("Invoice clearing is only available when the app is connected to Supabase.")
-            else:
-                st.caption(
-                    "Deletes all rows for one invoice number from Invoice Details. "
-                    "Use this before re-entering a corrected historical invoice or replacing it with a difference invoice."
-                )
-                clear_invoice_number = st.number_input(
-                    "Invoice number to clear",
-                    min_value=1,
-                    step=1,
-                    key="invoice_clear_number",
-                )
-                if st.button("Clear Invoice Number", key="clear_invoice_number_btn", type="secondary"):
-                    try:
-                        cleared = replace_invoice_rows(int(clear_invoice_number), [])
-                        load_data.clear()
-                        st.session_state["_flash_success"] = (
-                            f"Cleared invoice #{int(clear_invoice_number)} from Invoice Details."
-                        )
-                        st.session_state["_flash_success_page"] = "🧾 Invoice Details"
-                        st.rerun()
-                    except Exception as exc:
-                        st.error(f"Failed to clear invoice #{int(clear_invoice_number)}: {exc}")
-
         with st.expander("📥 Import Invoice XLSX", expanded=False):
             if _is_excel_source(_data_path):
                 st.warning("XLSX import is only available when the app is connected to Supabase.")
