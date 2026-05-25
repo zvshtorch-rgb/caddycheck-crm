@@ -12,6 +12,7 @@ BANK_PAYMENT_BUCKET = "bank-payments"
 LICENSE_CHANGE_LOG_TABLE = "license_change_log"
 BANK_PAYMENTS_TABLE = "bank_payments"
 BANK_PAYMENT_ALLOCATIONS_TABLE = "bank_payment_allocations"
+SUPABASE_PAGE_SIZE = 1000
 
 
 def _get_client():
@@ -27,6 +28,30 @@ def _get_client():
     if not url or not key:
         raise RuntimeError("Supabase credentials not configured in st.secrets[supabase]")
     return create_client(url, key)
+
+
+def _select_all_rows(table_name: str, order_column: str = "id") -> list[dict]:
+    client = _get_client()
+    all_rows: list[dict] = []
+    offset = 0
+
+    while True:
+        resp = (
+            client.table(table_name)
+            .select("*")
+            .order(order_column)
+            .range(offset, offset + SUPABASE_PAGE_SIZE - 1)
+            .execute()
+        )
+        batch = resp.data or []
+        if not batch:
+            break
+        all_rows.extend(batch)
+        if len(batch) < SUPABASE_PAGE_SIZE:
+            break
+        offset += SUPABASE_PAGE_SIZE
+
+    return all_rows
 
 
 def _parse_date(val) -> Optional[datetime.datetime]:
@@ -101,10 +126,8 @@ def _normalize_bank_payment_allocation_entry(entry: Dict[str, Any]) -> Dict[str,
 def load_projects() -> list:
     from models.project import Project
     from config.settings import get_project_overrides, canonical_project_name
-    client = _get_client()
-    resp = client.table("projects").select("*").order("project_name").execute()
     projects = []
-    for row in resp.data:
+    for row in _select_all_rows("projects", order_column="project_name"):
         inv_numbers: dict = {}
         for i in range(1, 10):
             v = row.get(f"m{i}y")
@@ -274,10 +297,8 @@ def load_invoices() -> list:
     global _invoice_id_map, _invoice_number_project_id_map
     _invoice_id_map = {}
     _invoice_number_project_id_map = {}
-    client = _get_client()
-    resp = client.table("invoices").select("*").execute()
     invoices = []
-    for row in resp.data:
+    for row in _select_all_rows("invoices"):
         inv = Invoice(
             invoice_number=float(row["invoice_number"]) if row.get("invoice_number") else None,
             project_name=canonical_project_name(row.get("project_name", "")),
