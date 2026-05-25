@@ -4288,59 +4288,25 @@ elif page == "📅 Monthly Invoice":
                     for row in historical_sent_rows
                     if _safe_int(getattr(row, "year", None), default=0) > 0
                 }
-
-                def _infer_month_year_from_pdf_name(file_name: str) -> tuple[str, int]:
-                    import re as _hist_re
-
-                    month_aliases = {
-                        "jan": "January",
-                        "january": "January",
-                        "feb": "February",
-                        "february": "February",
-                        "mar": "March",
-                        "march": "March",
-                        "apr": "April",
-                        "april": "April",
-                        "may": "May",
-                        "jun": "June",
-                        "june": "June",
-                        "jul": "July",
-                        "july": "July",
-                        "aug": "August",
-                        "august": "August",
-                        "sep": "September",
-                        "sept": "September",
-                        "september": "September",
-                        "oct": "October",
-                        "october": "October",
-                        "nov": "November",
-                        "november": "November",
-                        "dec": "December",
-                        "december": "December",
-                    }
-                    tokens = [
-                        token.lower()
-                        for token in _hist_re.split(r"[^a-zA-Z0-9]+", _safe_str(file_name))
-                        if token
-                    ]
-                    parsed_month = ""
-                    parsed_year = 0
-                    for token in tokens:
-                        if not parsed_month and token in month_aliases:
-                            parsed_month = month_aliases[token]
-                        if not parsed_year and token.isdigit() and len(token) == 4:
-                            year_candidate = _safe_int(token, default=0)
-                            if 2015 <= year_candidate <= 2035:
-                                parsed_year = year_candidate
-                    return parsed_month, parsed_year
-
+                project_name_keys = {
+                    _safe_str(getattr(row, "project_name", "")).strip().lower()
+                    for row in historical_sent_rows
+                    if _safe_str(getattr(row, "project_name", "")).strip()
+                }
+                invoice_month_candidates = {
+                    _safe_str(getattr(project, "payment_month", "")).strip()
+                    for project in projects
+                    if _safe_str(getattr(project, "project_name", "")).strip().lower() in project_name_keys
+                    and _safe_str(getattr(project, "payment_month", "")).strip() in MONTH_ORDER
+                }
                 inferred_historical_month = _safe_str(
                     matching_sent_history_entry.get("month") if matching_sent_history_entry else ""
                 ).strip()
                 if inferred_historical_month not in MONTH_ORDER:
-                    inferred_historical_month = st.session_state.get(
-                        "historical_sent_invoice_month",
-                        sel_month,
+                    inferred_historical_month = (
+                        next(iter(invoice_month_candidates))
+                        if len(invoice_month_candidates) == 1
+                        else sel_month
                     )
                 inferred_historical_year = _safe_int(
                     matching_sent_history_entry.get("year") if matching_sent_history_entry else None,
@@ -4412,23 +4378,6 @@ elif page == "📅 Monthly Invoice":
                     type=["pdf"],
                     key="historical_sent_invoice_pdf",
                 )
-                current_historical_pdf_name = _safe_str(
-                    historical_pdf.name if historical_pdf is not None else ""
-                ).strip()
-                last_historical_pdf_name = st.session_state.get(
-                    "_historical_sent_invoice_last_pdf_name",
-                    "",
-                )
-                if current_historical_pdf_name and current_historical_pdf_name != last_historical_pdf_name:
-                    parsed_pdf_month, parsed_pdf_year = _infer_month_year_from_pdf_name(
-                        current_historical_pdf_name
-                    )
-                    if parsed_pdf_month in MONTH_ORDER:
-                        st.session_state["historical_sent_invoice_month"] = parsed_pdf_month
-                    if parsed_pdf_year:
-                        st.session_state["historical_sent_invoice_year"] = int(parsed_pdf_year)
-                    st.session_state["_historical_sent_invoice_last_pdf_name"] = current_historical_pdf_name
-                    st.rerun()
 
                 hm1, hm2 = st.columns([1.2, 1.8])
                 mark_historical_paid = hm1.checkbox(
