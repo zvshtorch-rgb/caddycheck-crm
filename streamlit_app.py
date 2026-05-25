@@ -4300,8 +4300,7 @@ elif page == "📅 Monthly Invoice":
                     and _safe_str(getattr(project, "payment_month", "")).strip() in MONTH_ORDER
                 }
                 inferred_historical_month = _safe_str(
-                    matching_sent_history_entry.get("month") if matching_sent_history_entry else "",
-                    "",
+                    matching_sent_history_entry.get("month") if matching_sent_history_entry else ""
                 ).strip()
                 if inferred_historical_month not in MONTH_ORDER:
                     inferred_historical_month = (
