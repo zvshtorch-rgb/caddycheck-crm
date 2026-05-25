@@ -4352,6 +4352,18 @@ elif page == "📅 Monthly Invoice":
                         if len(invoice_year_candidates) == 1
                         else int(sel_year)
                     )
+                pending_historical_month = st.session_state.pop(
+                    "_historical_sent_invoice_pending_month",
+                    None,
+                )
+                pending_historical_year = st.session_state.pop(
+                    "_historical_sent_invoice_pending_year",
+                    None,
+                )
+                if pending_historical_month in MONTH_ORDER:
+                    st.session_state["historical_sent_invoice_month"] = pending_historical_month
+                if pending_historical_year:
+                    st.session_state["historical_sent_invoice_year"] = int(pending_historical_year)
                 if last_historical_invoice_no != current_historical_invoice_no:
                     st.session_state["historical_sent_invoice_total"] = (
                         float(historical_known_total) if historical_known_total else 0.0
@@ -4424,9 +4436,9 @@ elif page == "📅 Monthly Invoice":
                         current_historical_pdf_name
                     )
                     if parsed_pdf_month in MONTH_ORDER:
-                        st.session_state["historical_sent_invoice_month"] = parsed_pdf_month
+                        st.session_state["_historical_sent_invoice_pending_month"] = parsed_pdf_month
                     if parsed_pdf_year:
-                        st.session_state["historical_sent_invoice_year"] = int(parsed_pdf_year)
+                        st.session_state["_historical_sent_invoice_pending_year"] = int(parsed_pdf_year)
                     st.session_state["_historical_sent_invoice_last_pdf_name"] = current_historical_pdf_name
                     st.rerun()
 
