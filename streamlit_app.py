@@ -4287,6 +4287,21 @@ elif page == "📅 Monthly Invoice":
                 )
                 historical_project_count = len(historical_sent_rows)
 
+                current_historical_invoice_no = int(historical_invoice_no)
+                last_historical_invoice_no = st.session_state.get(
+                    "_historical_sent_invoice_last_invoice_no"
+                )
+                if last_historical_invoice_no != current_historical_invoice_no:
+                    st.session_state["historical_sent_invoice_total"] = (
+                        float(historical_known_total) if historical_known_total else 0.0
+                    )
+                    st.session_state["historical_sent_invoice_subject"] = (
+                        f"Historical invoice #{current_historical_invoice_no}"
+                    )
+                    st.session_state["_historical_sent_invoice_last_invoice_no"] = (
+                        current_historical_invoice_no
+                    )
+
                 hs4, hs5 = st.columns(2)
                 historical_sent_date = hs4.date_input(
                     "Sent Date",
@@ -4308,7 +4323,7 @@ elif page == "📅 Monthly Invoice":
                 )
                 historical_subject = hs7.text_input(
                     "Subject (optional)",
-                    value=f"Historical invoice #{int(historical_invoice_no)}",
+                    value=f"Historical invoice #{current_historical_invoice_no}",
                     key="historical_sent_invoice_subject",
                 )
 
