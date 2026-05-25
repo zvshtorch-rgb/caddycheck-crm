@@ -4244,10 +4244,183 @@ elif page == "📅 Monthly Invoice":
 
             st.markdown("---")
             st.subheader("Sent PDF Invoices")
-            sent_invoice_rows = load_sent_invoices_log()
+            sent_invoice_rows = load_sent_invoices_log() or []
+            from config.settings import get_data_paths
+            import tempfile
+
+            with st.expander("🧾 Register Historical Sent Invoice", expanded=False):
+                st.caption(
+                    "Use this for invoices that were sent manually outside CRM. "
+                    "It stores the PDF in sent-invoice history and can also mark "
+                    "the matching invoice rows as already paid."
+                )
+                hs1, hs2, hs3 = st.columns([1.2, 1.2, 1.6])
+                historical_invoice_no = hs1.number_input(
+                    "Invoice #",
+                    min_value=1,
+                    step=1,
+                    value=max(1, inv_no),
+                    key="historical_sent_invoice_number",
+                )
+                historical_month = hs2.selectbox(
+                    "Month",
+                    MONTH_ORDER,
+                    index=MONTH_ORDER.index(sel_month) if sel_month in MONTH_ORDER else 0,
+                    key="historical_sent_invoice_month",
+                )
+                historical_year = hs3.number_input(
+                    "Year",
+                    min_value=2015,
+                    max_value=2035,
+                    step=1,
+                    value=int(sel_year),
+                    key="historical_sent_invoice_year",
+                )
+
+                historical_sent_rows = [
+                    row for row in invoices
+                    if _safe_int(getattr(row, "invoice_number", None), default=0) == int(historical_invoice_no)
+                ]
+                historical_known_total = sum(
+                    _safe_float(getattr(row, "payment_amount", 0.0), 0.0)
+                    for row in historical_sent_rows
+                )
+                historical_project_count = len(historical_sent_rows)
+
+                hs4, hs5 = st.columns(2)
+                historical_sent_date = hs4.date_input(
+                    "Sent Date",
+                    value=datetime.date.today(),
+                    key="historical_sent_invoice_date",
+                )
+                historical_total_amount = hs5.number_input(
+                    "Total Amount (€)",
+                    min_value=0.0,
+                    step=1.0,
+                    value=float(historical_known_total) if historical_known_total else 0.0,
+                    key="historical_sent_invoice_total",
+                )
+
+                hs6, hs7 = st.columns(2)
+                historical_recipients = hs6.text_input(
+                    "Recipients (optional, comma-separated)",
+                    key="historical_sent_invoice_recipients",
+                )
+                historical_subject = hs7.text_input(
+                    "Subject (optional)",
+                    value=f"Historical invoice #{int(historical_invoice_no)}",
+                    key="historical_sent_invoice_subject",
+                )
+
+                historical_pdf = st.file_uploader(
+                    "Invoice PDF",
+                    type=["pdf"],
+                    key="historical_sent_invoice_pdf",
+                )
+
+                hm1, hm2 = st.columns([1.2, 1.8])
+                mark_historical_paid = hm1.checkbox(
+                    "Mark matching invoice rows as paid",
+                    value=True,
+                    key="historical_sent_invoice_mark_paid",
+                )
+                historical_paid_date = hm2.date_input(
+                    "Paid Date",
+                    value=datetime.date.today(),
+                    key="historical_sent_invoice_paid_date",
+                    disabled=not mark_historical_paid,
+                )
+
+                if historical_sent_rows:
+                    st.caption(
+                        f"Found {historical_project_count} matching invoice row(s) in Invoice Details "
+                        f"with total €{historical_known_total:,.0f}."
+                    )
+                elif mark_historical_paid:
+                    st.caption(
+                        "No matching Invoice Details rows were found yet. The PDF can still be registered, "
+                        "but no invoice rows will be marked paid."
+                    )
+
+                if st.button(
+                    "Register Historical Sent Invoice",
+                    key="register_historical_sent_invoice_btn",
+                    type="primary",
+                ):
+                    if historical_pdf is None:
+                        st.error("Upload the historical invoice PDF first.")
+                    else:
+                        recipients = [
+                            part.strip()
+                            for part in historical_recipients.split(",")
+                            if part.strip()
+                        ]
+                        subject = _safe_str(historical_subject).strip() or (
+                            f"Historical invoice #{int(historical_invoice_no)}"
+                        )
+                        updated_sent_rows = list(sent_invoice_rows)
+                        paid_rows_updated = 0
+                        try:
+                            if mark_historical_paid and historical_sent_rows:
+                                paid_dt = datetime.datetime.combine(
+                                    historical_paid_date,
+                                    datetime.time.min,
+                                )
+                                for existing_invoice in historical_sent_rows:
+                                    existing_invoice.paid = "Yes"
+                                    existing_invoice.payment_date = paid_dt
+                                    paid_rows_updated += 1
+                                _save_invoices(invoices, _data_path)
+
+                            import tempfile as _hist_tempfile
+                            with _hist_tempfile.NamedTemporaryFile(
+                                suffix=".pdf", delete=False
+                            ) as tmp:
+                                tmp.write(historical_pdf.read())
+                                tmp_path = Path(tmp.name)
+                            try:
+                                storage_meta = upload_sent_invoice_pdf_supabase(tmp_path) or {}
+                            finally:
+                                try:
+                                    tmp_path.unlink()
+                                except Exception:
+                                    pass
+
+                            updated_sent_rows.append({
+                                "sent_at": datetime.datetime.combine(
+                                    historical_sent_date,
+                                    datetime.time.min,
+                                ).isoformat(),
+                                "invoice_number": int(historical_invoice_no),
+                                "month": historical_month,
+                                "year": int(historical_year),
+                                "pdf_filename": historical_pdf.name,
+                                "pdf_archive_path": "",
+                                "pdf_storage_bucket": storage_meta.get("pdf_storage_bucket", ""),
+                                "pdf_storage_path": storage_meta.get("pdf_storage_path", ""),
+                                "recipients": recipients,
+                                "cc": [],
+                                "subject": subject,
+                                "project_count": historical_project_count or None,
+                                "total_amount": float(historical_total_amount),
+                                "saved_to_ledger": False,
+                                "ledger_rows_added": None,
+                                "source_name": "historical-manual-entry",
+                            })
+                            save_sent_invoices_log(updated_sent_rows)
+                            load_data.clear()
+                            st.cache_data.clear()
+                            message = (
+                                f"Historical sent invoice #{int(historical_invoice_no)} was registered with PDF"
+                            )
+                            if paid_rows_updated:
+                                message += f" and {paid_rows_updated} invoice row(s) were marked paid"
+                            st.success(message + ".")
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(f"Failed to register historical sent invoice: {exc}")
+
             if sent_invoice_rows:
-                from config.settings import get_data_paths
-                import tempfile
 
                 matching_sent_entry = next(
                     (
