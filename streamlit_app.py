@@ -5226,18 +5226,59 @@ elif page == "🏦 Bank Payment":
             if signed:
                 invoice_pdf_links[inv_num] = signed
 
+        # Build payment_id -> invoice_number map from allocations (covers
+        # rows where the bank_payments.invoice_number is 0 because the
+        # SWIFT parser didn't extract it but the user matched rows manually).
+        payment_invoice_map: dict[int, int] = {}
+        try:
+            all_allocations = load_bank_payment_allocations()
+        except Exception:
+            all_allocations = []
+        for alloc in all_allocations or []:
+            pid = alloc.get("payment_id")
+            inv = _safe_int(alloc.get("invoice_number"), default=0)
+            if pid is None or not inv:
+                continue
+            try:
+                pid_int = int(pid)
+            except Exception:
+                continue
+            payment_invoice_map.setdefault(pid_int, inv)
+
+        def _row_invoice_number(row: dict) -> int:
+            inv = _safe_int(row.get("invoice_number"), default=0)
+            if inv:
+                return inv
+            try:
+                pid = int(row.get("id")) if row.get("id") is not None else None
+            except Exception:
+                pid = None
+            if pid is not None:
+                inv = payment_invoice_map.get(pid, 0)
+                if inv:
+                    return inv
+            for alloc in row.get("allocations", []) or []:
+                inv = _safe_int(alloc.get("invoice_number"), default=0)
+                if inv:
+                    return inv
+            return 0
+
+        def _row_invoice_pdf_link(row: dict) -> str:
+            inv = _row_invoice_number(row)
+            return invoice_pdf_links.get(inv, "") if inv else ""
+
         payment_df = pd.DataFrame([
             {
                 "Saved At": _safe_str(row.get("created_at") or row.get("updated_at") or "")[:19].replace("T", " "),
                 "Payment Date": _safe_str(row.get("payment_date")),
-                "Invoice #": _safe_int(row.get("invoice_number"), default=0),
+                "Invoice #": _row_invoice_number(row),
                 "Source": _safe_str(row.get("source_name")),
                 "Kind": _safe_str(row.get("source_kind")),
                 "Applied (€)": f"€{_safe_float(row.get('applied_amount', 0.0)):,.0f}",
                 "Fee (€)": f"€{_safe_float(row.get('fee_amount', 0.0)):,.0f}" if row.get("fee_amount") not in (None, "") else "",
                 "Fingerprint": _safe_str(row.get("payment_fingerprint"))[:12],
                 "Source PDF": bank_pdf_links.get(_safe_str(row.get("payment_fingerprint"))) or "",
-                "Invoice PDF": invoice_pdf_links.get(_safe_int(row.get("invoice_number"), default=0), ""),
+                "Invoice PDF": _row_invoice_pdf_link(row),
             }
             for row in bank_payment_rows
         ])
