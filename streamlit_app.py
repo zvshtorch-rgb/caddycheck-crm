@@ -1865,8 +1865,15 @@ elif page == "🏗️ Projects":
         st.success(page_flash_success)
 
     def _parse_project_date(value):
-        if value in (None, ""):
+        if value is None or value == "":
             return None
+        # pandas NaT is a subclass of datetime.datetime, so detect and reject it.
+        try:
+            import pandas as _pd
+            if value is _pd.NaT or (hasattr(_pd, "isna") and _pd.isna(value)):
+                return None
+        except Exception:
+            pass
         if isinstance(value, datetime.datetime):
             return value
         if isinstance(value, datetime.date):
