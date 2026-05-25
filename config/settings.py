@@ -2,7 +2,25 @@
 import os
 import json
 import logging
+import datetime
 from pathlib import Path
+
+
+def _json_default(value):
+    """Best-effort JSON serializer for dates, decimals, bytes, etc."""
+    if isinstance(value, (datetime.datetime, datetime.date, datetime.time)):
+        return value.isoformat()
+    if isinstance(value, (bytes, bytearray)):
+        try:
+            return value.decode("utf-8", errors="replace")
+        except Exception:
+            return repr(value)
+    if isinstance(value, set):
+        return list(value)
+    try:
+        return str(value)
+    except Exception:
+        return None
 
 logger = logging.getLogger(__name__)
 
@@ -246,13 +264,13 @@ def _append_local_sent_invoice_log(entry: dict) -> None:
     entries = _load_local_sent_invoices_log()
     entries.append(entry)
     with open(SENT_INVOICES_LOG_FILE, "w", encoding="utf-8") as f:
-        json.dump(entries, f, indent=2)
+        json.dump(entries, f, indent=2, default=_json_default)
 
 
 def _save_local_sent_invoices_log(entries: list) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     with open(SENT_INVOICES_LOG_FILE, "w", encoding="utf-8") as f:
-        json.dump(entries, f, indent=2)
+        json.dump(entries, f, indent=2, default=_json_default)
 
 
 def _load_local_license_change_log() -> list:
@@ -271,13 +289,13 @@ def _append_local_license_change_log(entry: dict) -> None:
     entries = _load_local_license_change_log()
     entries.append(entry)
     with open(LICENSE_CHANGE_LOG_FILE, "w", encoding="utf-8") as f:
-        json.dump(entries, f, indent=2)
+        json.dump(entries, f, indent=2, default=_json_default)
 
 
 def _save_local_license_change_log(entries: list) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     with open(LICENSE_CHANGE_LOG_FILE, "w", encoding="utf-8") as f:
-        json.dump(entries, f, indent=2)
+        json.dump(entries, f, indent=2, default=_json_default)
 
 
 def _load_local_bank_payments_log() -> list:
@@ -296,13 +314,13 @@ def _append_local_bank_payment_log(entry: dict) -> None:
     entries = _load_local_bank_payments_log()
     entries.append(entry)
     with open(BANK_PAYMENTS_LOG_FILE, "w", encoding="utf-8") as f:
-        json.dump(entries, f, indent=2)
+        json.dump(entries, f, indent=2, default=_json_default)
 
 
 def _save_local_bank_payments_log(entries: list) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     with open(BANK_PAYMENTS_LOG_FILE, "w", encoding="utf-8") as f:
-        json.dump(entries, f, indent=2)
+        json.dump(entries, f, indent=2, default=_json_default)
 
 
 def load_sent_invoices_log() -> list:
