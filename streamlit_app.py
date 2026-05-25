@@ -4262,21 +4262,6 @@ elif page == "📅 Monthly Invoice":
                     value=max(1, inv_no),
                     key="historical_sent_invoice_number",
                 )
-                historical_month = hs2.selectbox(
-                    "Month",
-                    MONTH_ORDER,
-                    index=MONTH_ORDER.index(sel_month) if sel_month in MONTH_ORDER else 0,
-                    key="historical_sent_invoice_month",
-                )
-                historical_year = hs3.number_input(
-                    "Year",
-                    min_value=2015,
-                    max_value=2035,
-                    step=1,
-                    value=int(sel_year),
-                    key="historical_sent_invoice_year",
-                )
-
                 historical_sent_rows = [
                     row for row in invoices
                     if _safe_int(getattr(row, "invoice_number", None), default=0) == int(historical_invoice_no)
@@ -4291,6 +4276,49 @@ elif page == "📅 Monthly Invoice":
                 last_historical_invoice_no = st.session_state.get(
                     "_historical_sent_invoice_last_invoice_no"
                 )
+                matching_sent_history_entry = next(
+                    (
+                        row for row in reversed(sent_invoice_rows)
+                        if _safe_int(row.get("invoice_number"), default=0) == current_historical_invoice_no
+                    ),
+                    None,
+                )
+                invoice_year_candidates = {
+                    _safe_int(getattr(row, "year", None), default=0)
+                    for row in historical_sent_rows
+                    if _safe_int(getattr(row, "year", None), default=0) > 0
+                }
+                project_name_keys = {
+                    _safe_str(getattr(row, "project_name", "")).strip().lower()
+                    for row in historical_sent_rows
+                    if _safe_str(getattr(row, "project_name", "")).strip()
+                }
+                invoice_month_candidates = {
+                    _safe_str(getattr(project, "payment_month", "")).strip()
+                    for project in projects
+                    if _safe_str(getattr(project, "project_name", "")).strip().lower() in project_name_keys
+                    and _safe_str(getattr(project, "payment_month", "")).strip() in MONTH_ORDER
+                }
+                inferred_historical_month = _safe_str(
+                    matching_sent_history_entry.get("month") if matching_sent_history_entry else "",
+                    "",
+                ).strip()
+                if inferred_historical_month not in MONTH_ORDER:
+                    inferred_historical_month = (
+                        next(iter(invoice_month_candidates))
+                        if len(invoice_month_candidates) == 1
+                        else sel_month
+                    )
+                inferred_historical_year = _safe_int(
+                    matching_sent_history_entry.get("year") if matching_sent_history_entry else None,
+                    default=0,
+                )
+                if inferred_historical_year <= 0:
+                    inferred_historical_year = (
+                        next(iter(invoice_year_candidates))
+                        if len(invoice_year_candidates) == 1
+                        else int(sel_year)
+                    )
                 if last_historical_invoice_no != current_historical_invoice_no:
                     st.session_state["historical_sent_invoice_total"] = (
                         float(historical_known_total) if historical_known_total else 0.0
@@ -4298,9 +4326,28 @@ elif page == "📅 Monthly Invoice":
                     st.session_state["historical_sent_invoice_subject"] = (
                         f"Historical invoice #{current_historical_invoice_no}"
                     )
+                    st.session_state["historical_sent_invoice_month"] = inferred_historical_month
+                    st.session_state["historical_sent_invoice_year"] = int(inferred_historical_year)
                     st.session_state["_historical_sent_invoice_last_invoice_no"] = (
                         current_historical_invoice_no
                     )
+
+                historical_month = hs2.selectbox(
+                    "Month",
+                    MONTH_ORDER,
+                    index=MONTH_ORDER.index(
+                        st.session_state.get("historical_sent_invoice_month", inferred_historical_month)
+                    ) if st.session_state.get("historical_sent_invoice_month", inferred_historical_month) in MONTH_ORDER else 0,
+                    key="historical_sent_invoice_month",
+                )
+                historical_year = hs3.number_input(
+                    "Year",
+                    min_value=2015,
+                    max_value=2035,
+                    step=1,
+                    value=int(st.session_state.get("historical_sent_invoice_year", inferred_historical_year)),
+                    key="historical_sent_invoice_year",
+                )
 
                 hs4, hs5 = st.columns(2)
                 historical_sent_date = hs4.date_input(
