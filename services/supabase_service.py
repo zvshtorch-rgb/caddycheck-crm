@@ -186,16 +186,25 @@ def upsert_projects(projects: list) -> None:
 
 
 def delete_projects(project_names: list[str]) -> int:
-    """Delete project rows by exact project name and return the number removed."""
-    cleaned = [str(name).strip() for name in project_names if str(name).strip()]
+    """Delete project rows whose canonical name matches the selected project."""
+    from config.settings import canonical_project_name
+
+    cleaned = [canonical_project_name(name) for name in project_names if str(name).strip()]
     if not cleaned:
         return 0
 
     client = _get_client()
     deleted = 0
     for name in cleaned:
-        client.table("projects").delete().eq("project_name", name).execute()
-        deleted += 1
+        resp = client.table("projects").select("project_name").execute()
+        matching_names = {
+            str(row.get("project_name") or "").strip()
+            for row in (resp.data or [])
+            if canonical_project_name(row.get("project_name")) == name
+        }
+        for raw_name in matching_names:
+            client.table("projects").delete().eq("project_name", raw_name).execute()
+            deleted += 1
 
     logger.info("Deleted %d project row(s) from Supabase", deleted)
     return deleted

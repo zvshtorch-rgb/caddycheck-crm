@@ -361,10 +361,10 @@ def delete_projects_from_excel(
     project_names: list[str],
     filepath: Path = None,
 ) -> int:
-    """Delete project rows from the Projects overview sheet by exact project name."""
+    """Delete project rows whose canonical name matches the selected project."""
     if filepath is None:
         filepath = get_data_paths()["projects_file"]
-    cleaned = {str(name).strip() for name in project_names if str(name).strip()}
+    cleaned = {canonical_project_name(name) for name in project_names if str(name).strip()}
     if not cleaned:
         return 0
 
@@ -373,7 +373,7 @@ def delete_projects_from_excel(
     deleted = 0
     for row_idx in range(ws.max_row, 1, -1):
         cell = ws.cell(row=row_idx, column=_PROJ_COL["Project Name"])
-        if _safe_str(cell.value) in cleaned:
+        if canonical_project_name(_safe_str(cell.value)) in cleaned:
             ws.delete_rows(row_idx, 1)
             deleted += 1
 
