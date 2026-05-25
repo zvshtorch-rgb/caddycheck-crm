@@ -194,6 +194,7 @@ from services.supabase_service import (
     update_order as update_order_supabase,
     delete_order as delete_order_supabase,
     download_sent_invoice_pdf as download_sent_invoice_pdf_supabase,
+    upload_sent_invoice_pdf as upload_sent_invoice_pdf_supabase,
     upload_order_pdf as upload_order_pdf_supabase,
     download_order_pdf as download_order_pdf_supabase,
     create_order_pdf_signed_url as create_order_pdf_signed_url_supabase,
@@ -4283,6 +4284,96 @@ elif page == "📅 Monthly Invoice":
                             ),
                         },
                     )
+
+                with st.expander("📎 Backfill Sent Invoice PDFs", expanded=False):
+                    st.caption(
+                        "Upload PDF(s) for monthly invoices that were sent before "
+                        "PDFs were stored in the cloud. The invoice number is read "
+                        "from the filename (e.g. `CC_M-inv_8669_May_2025.pdf`). "
+                        "If a matching sent entry exists without a stored PDF, the "
+                        "file is uploaded and the entry is updated."
+                    )
+                    backfill_files = st.file_uploader(
+                        "Sent invoice PDF(s)",
+                        type=["pdf"],
+                        accept_multiple_files=True,
+                        key="backfill_sent_invoice_pdfs",
+                    )
+                    if backfill_files and st.button(
+                        "Attach to Sent Invoice History",
+                        key="backfill_sent_invoice_btn",
+                        type="primary",
+                    ):
+                        import re as _bf_re
+                        import tempfile as _bf_tempfile
+
+                        attached = 0
+                        skipped = []
+                        errors = []
+                        updated_rows = list(sent_invoice_rows)
+                        for up in backfill_files:
+                            fname = up.name
+                            m = _bf_re.search(r"(\d{4,})", fname)
+                            if not m:
+                                skipped.append(f"{fname}: no invoice number in filename")
+                                continue
+                            target_inv = int(m.group(1))
+                            # find latest matching sent row without storage
+                            target_row = None
+                            for row in reversed(updated_rows):
+                                if _safe_int(row.get("invoice_number"), default=0) != target_inv:
+                                    continue
+                                if _safe_str(row.get("pdf_storage_path", "")).strip():
+                                    continue
+                                target_row = row
+                                break
+                            if target_row is None:
+                                # fallback: any matching invoice number even if already has storage
+                                for row in reversed(updated_rows):
+                                    if _safe_int(row.get("invoice_number"), default=0) == target_inv:
+                                        target_row = row
+                                        break
+                            if target_row is None:
+                                skipped.append(f"{fname}: no sent entry for invoice #{target_inv}")
+                                continue
+                            try:
+                                file_bytes = up.read()
+                                with _bf_tempfile.NamedTemporaryFile(
+                                    suffix=".pdf", delete=False
+                                ) as tmp:
+                                    tmp.write(file_bytes)
+                                    tmp_path = Path(tmp.name)
+                                try:
+                                    meta = upload_sent_invoice_pdf_supabase(tmp_path) or {}
+                                finally:
+                                    try:
+                                        tmp_path.unlink()
+                                    except Exception:
+                                        pass
+                                if meta.get("pdf_storage_bucket") and meta.get("pdf_storage_path"):
+                                    target_row["pdf_storage_bucket"] = meta["pdf_storage_bucket"]
+                                    target_row["pdf_storage_path"] = meta["pdf_storage_path"]
+                                    if not _safe_str(target_row.get("pdf_filename", "")).strip():
+                                        target_row["pdf_filename"] = fname
+                                    attached += 1
+                                else:
+                                    errors.append(f"{fname}: upload returned no storage path")
+                            except Exception as exc:
+                                errors.append(f"{fname}: {exc}")
+
+                        if attached:
+                            try:
+                                save_sent_invoices_log(updated_rows)
+                                st.cache_data.clear()
+                                st.success(f"Attached {attached} PDF(s) to sent invoice history.")
+                            except Exception as exc:
+                                st.error(f"Saved storage but could not update sent invoice log: {exc}")
+                        if skipped:
+                            st.warning("Skipped:\n- " + "\n- ".join(skipped))
+                        if errors:
+                            st.error("Errors:\n- " + "\n- ".join(errors))
+                        if attached:
+                            st.rerun()
 
                 sent_download_options = {
                     f"#{_safe_int(row.get('invoice_number'), default=0)} | {_safe_str(row.get('month', ''))} {_safe_int(row.get('year'), default=0)} | {_safe_str(row.get('pdf_filename', ''))}": row
