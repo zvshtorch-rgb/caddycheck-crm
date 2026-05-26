@@ -3474,7 +3474,7 @@ elif page == "🧾 Invoice Details":
                     options=invoice_year_options,
                 ),
             },
-            key=f"inv_editor_{n_new_inv}",
+            key="inv_editor",
         )
         if st.button("💾 Save Changes", key="save_invoices"):
             invalid_editor_rows = []
@@ -3549,6 +3549,7 @@ elif page == "🧾 Invoice Details":
                 _save_invoices(invoices, _data_path)
                 load_data.clear()
                 st.session_state.pop("add_inv_row", None)
+                st.session_state.pop("inv_editor", None)
                 msg = f"Saved! {new_count} new invoice(s) added." if new_count else "Invoices saved successfully!"
                 st.session_state["_flash_success"] = msg
                 st.session_state["_flash_success_page"] = "🧾 Invoice Details"
