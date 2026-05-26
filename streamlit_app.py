@@ -3205,6 +3205,62 @@ elif page == "🧾 Invoice Details":
 
     st.caption(f"Showing {len(filtered_inv)} of {len(invoices)} invoices — use filters above to narrow results")
 
+    saved_invoice_numbers = sorted(
+        {
+            int(float(inv.invoice_number))
+            for inv in invoices
+            if inv.invoice_number not in (None, "")
+        },
+        reverse=True,
+    )
+
+    with st.expander("🧾 Download Invoice PDF From Ledger", expanded=False):
+        st.caption("Builds a PDF from the saved invoice rows only. This does not change any data in Supabase.")
+        if not saved_invoice_numbers:
+            st.info("No saved invoice numbers were found.")
+        else:
+            default_invoice_number = saved_invoice_numbers[0]
+            if inv_no_search.strip().isdigit():
+                searched_invoice_number = int(inv_no_search.strip())
+                if searched_invoice_number in saved_invoice_numbers:
+                    default_invoice_number = searched_invoice_number
+            selected_invoice_number = st.selectbox(
+                "Saved invoice number",
+                saved_invoice_numbers,
+                index=saved_invoice_numbers.index(default_invoice_number),
+                key="invoice_pdf_from_ledger_number",
+            )
+            pdf_description = st.text_input(
+                "PDF description",
+                value="Iretailcheck - Maintenance Adjustment",
+                key="invoice_pdf_from_ledger_description",
+                help="Only affects the PDF text. It does not change the ledger rows.",
+            )
+            invoice_rows_for_pdf = [
+                inv for inv in invoices
+                if _safe_int(inv.invoice_number) == int(selected_invoice_number)
+            ]
+            if invoice_rows_for_pdf:
+                try:
+                    from services.pdf_service import generate_invoice_pdf_from_rows
+
+                    invoice_pdf_bytes = generate_invoice_pdf_from_rows(
+                        invoice_rows=invoice_rows_for_pdf,
+                        invoice_number=int(selected_invoice_number),
+                        description=_safe_str(pdf_description).strip() or None,
+                    )
+                    st.download_button(
+                        label="Download PDF Invoice",
+                        data=invoice_pdf_bytes,
+                        file_name=f"CC_inv_{int(selected_invoice_number)}.pdf",
+                        mime="application/pdf",
+                        key="download_invoice_pdf_from_ledger",
+                    )
+                except Exception as exc:
+                    st.error(f"PDF generation failed: {exc}")
+            else:
+                st.warning("No saved ledger rows were found for the selected invoice number.")
+
     _invoice_columns = [
         "Invoice #",
         "Project",
