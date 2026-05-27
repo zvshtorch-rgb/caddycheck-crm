@@ -1460,10 +1460,10 @@ def _delete_order(order_id: int, orders_source_name: str) -> None:
     save_orders_records(remaining)
 
 
-def _append_invoice_rows(invoice_number: int, projects, year: int, source_name: str) -> int:
+def _append_invoice_rows(invoice_number: int, projects, year: int, source_name: str, description: str = None) -> int:
     if _is_excel_source(source_name):
-        return _excel_append_invoice(invoice_number=invoice_number, projects=projects, year=year)
-    return _supa_append_invoice(invoice_number=invoice_number, projects=projects, year=year)
+        return _excel_append_invoice(invoice_number=invoice_number, projects=projects, year=year, description=description)
+    return _supa_append_invoice(invoice_number=invoice_number, projects=projects, year=year, description=description)
 
 
 def _push_excel_to_github() -> tuple[bool, str]:
@@ -3270,6 +3270,7 @@ elif page == "🧾 Invoice Details":
         "Payment Date",
         "Paid",
         "Year",
+        "Description",
     ]
 
     invoice_index_map = {id(inv): idx for idx, inv in enumerate(invoices)}
@@ -3286,6 +3287,7 @@ elif page == "🧾 Invoice Details":
                 "Payment Date": i.payment_date.date() if i.payment_date else None,
                 "Paid": _safe_str(i.paid),
                 "Year": _safe_str(_safe_int(i.year) or ""),
+                "Description": _safe_str(i.description) if i.description else "",
             }
             for i in filtered_inv
         ],
@@ -3432,7 +3434,8 @@ elif page == "🧾 Invoice Details":
 
         _empty_inv = {"_invoice_index": None, "Invoice #": None, "Project": "", "Maint. Year": "Y1",
                       "Amount (€)": 0.0, "Cameras": 0,
-                      "Payment Date": None, "Paid": "No", "Year": str(datetime.date.today().year)}
+                      "Payment Date": None, "Paid": "No", "Year": str(datetime.date.today().year),
+                      "Description": "Complementary"}
         n_new_inv = st.session_state.get("add_inv_row", 0)
         if n_new_inv:
             empty_rows = pd.DataFrame([_empty_inv] * n_new_inv)
@@ -3472,6 +3475,9 @@ elif page == "🧾 Invoice Details":
                 "Year": st.column_config.SelectboxColumn(
                     "Year",
                     options=invoice_year_options,
+                ),
+                "Description": st.column_config.TextColumn(
+                    "Description",
                 ),
             },
             key="inv_editor",
@@ -3529,6 +3535,7 @@ elif page == "🧾 Invoice Details":
                         payment_date=None,
                         paid=_safe_str(row.get("Paid", "No")),
                         year=_safe_int(row.get("Year")) or None,
+                        description=_safe_str(row.get("Description", "")).strip() or None,
                     )
                     invoices.append(inv)
                     if inv_no:
@@ -3544,6 +3551,7 @@ elif page == "🧾 Invoice Details":
                     inv.payment_amount = _safe_float(row.get("Amount (€)", 0))
                     inv.cameras_number = _safe_int(row.get("Cameras", 0)) or None
                     inv.year           = _safe_int(row.get("Year")) or None
+                inv.description = _safe_str(row.get("Description", "")).strip() or None
                 inv.payment_date = _parse_invoice_date(row.get("Payment Date"))
             try:
                 _save_invoices(invoices, _data_path)
@@ -3704,6 +3712,7 @@ elif page == "💸 Debt Report":
             "Maint. Year": ", ".join(unique_maint_years),
             "Amount (€)": total_amount,
             "Year": str(max(years)) if years else "",
+            "Description": _safe_str(rows[0].description).strip() if rows else "",
         })
 
     grouped_unpaid_rows.sort(
@@ -4181,7 +4190,13 @@ elif page == "📅 Monthly Invoice":
             st.caption(f"Saves invoice #{inv_no} rows for all {len(month_projects)} project(s) to Invoice Details. If invoice #{inv_no} already exists, its rows are replaced.")
             if st.button("💾 Save Invoice to Ledger", type="primary"):
                 try:
-                    n = _append_invoice_rows(invoice_number=inv_no, projects=month_projects, year=int(sel_year), source_name=_data_path)
+                    n = _append_invoice_rows(
+                        invoice_number=inv_no,
+                        projects=month_projects,
+                        year=int(sel_year),
+                        source_name=_data_path,
+                        description=f"Maintenance Monthly-{sel_month}-{sel_year}",
+                    )
                     st.cache_data.clear()
                     st.session_state["_flash_success"] = (
                         f"Saved invoice #{inv_no} with {n} row(s) to Invoice Details."
@@ -4224,6 +4239,7 @@ elif page == "📅 Monthly Invoice":
                                     projects=month_projects,
                                     year=int(sel_year),
                                     source_name=_data_path,
+                                    description=f"Maintenance Monthly-{sel_month}-{sel_year}",
                                 )
                             out_path = generate_monthly_invoice_pdf(
                                 projects=month_projects,

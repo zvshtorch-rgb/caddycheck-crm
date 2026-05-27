@@ -288,6 +288,7 @@ def _invoice_row(inv) -> Dict[str, Any]:
         "payment_date": inv.payment_date.date().isoformat() if inv.payment_date else None,
         "paid": inv.paid,
         "year": inv.year,
+        "description": inv.description or None,
     }
 
 
@@ -308,6 +309,7 @@ def load_invoices() -> list:
             payment_date=_parse_date(row.get("payment_date")),
             paid=row.get("paid", "No"),
             year=row.get("year"),
+            description=row.get("description"),
         )
         invoices.append(inv)
         key = _invoice_identity(
@@ -375,7 +377,7 @@ def upsert_invoices(invoices: list) -> None:
     logger.info("Updated %d + inserted %d invoices", len(to_update), len(to_insert))
 
 
-def append_invoice_rows(invoice_number: int, projects: list, year: int) -> int:
+def append_invoice_rows(invoice_number: int, projects: list, year: int, description: str = None) -> int:
     from config.settings import canonical_project_name
 
     rows_to_insert = []
@@ -390,6 +392,7 @@ def append_invoice_rows(invoice_number: int, projects: list, year: int) -> int:
             "cameras_number": proj.num_cams,
             "paid": "No",
             "year": year,
+            "description": description or None,
         })
 
     replace_invoice_rows(invoice_number, rows_to_insert)

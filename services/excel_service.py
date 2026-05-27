@@ -159,6 +159,7 @@ def load_invoices(filepath: Path = None) -> List[Invoice]:
             payment_date=_safe_datetime(row.get("Payment Date")),
             paid=_safe_str(row.get("Paid")),
             year=year_int,
+            description=_safe_str(row.get("Description")) or None,
         )
         invoices.append(inv)
 
@@ -288,6 +289,7 @@ _INV_COL = {
     "Payment Date":    6,
     "Paid":            7,
     "Year":            8,
+    "Description":     9,
 }
 
 
@@ -501,6 +503,7 @@ def save_invoices_to_excel(
         _safe_write(ws, row_idx, _INV_COL["Payment Date"],     inv.payment_date)
         _safe_write(ws, row_idx, _INV_COL["Paid"],             inv.paid or None)
         _safe_write(ws, row_idx, _INV_COL["Year"],             inv.year)
+    _safe_write(ws, row_idx, _INV_COL["Description"],       inv.description or None)
 
     # Append brand-new invoices that do not already exist in the sheet.
     for inv in invoices:
@@ -509,7 +512,7 @@ def save_invoices_to_excel(
         if identity in existing_keys:
             continue
 
-        row_data = [None] * 8
+        row_data = [None] * 9
         row_data[_INV_COL["Invoice Number"] - 1] = inv.invoice_number if inv.invoice_number else None
         row_data[_INV_COL["Project name"] - 1] = canonical_name or None
         row_data[_INV_COL["Maintenance Year"] - 1] = inv.maintenance_year or None
@@ -518,6 +521,7 @@ def save_invoices_to_excel(
         row_data[_INV_COL["Payment Date"] - 1] = inv.payment_date
         row_data[_INV_COL["Paid"] - 1] = inv.paid or None
         row_data[_INV_COL["Year"] - 1] = inv.year
+        row_data[_INV_COL["Description"] - 1] = inv.description or None
         ws.append(row_data)
         existing_keys.add(identity)
         logger.info("Appended new invoice row: %s / %s", inv.invoice_number, canonical_name)
@@ -545,6 +549,7 @@ def append_monthly_invoice_rows(
     projects: List[Project],
     year: int,
     filepath: Path = None,
+    description: str = None,
 ) -> int:
     """
     Replace the rows for a monthly invoice batch and then write the current projects.
@@ -577,7 +582,7 @@ def append_monthly_invoice_rows(
         maint_label = proj.get_maintenance_year_label(year)
         amount = proj.get_expected_amount(year)
 
-        row_data = [None] * 8
+        row_data = [None] * 9
         row_data[_INV_COL["Invoice Number"] - 1]    = invoice_number
         row_data[_INV_COL["Project name"] - 1]      = canonical_project_name(proj.project_name)
         row_data[_INV_COL["Maintenance Year"] - 1]  = maint_label
@@ -585,7 +590,7 @@ def append_monthly_invoice_rows(
         row_data[_INV_COL["Cameras number"] - 1]    = proj.num_cams
         row_data[_INV_COL["Paid"] - 1]              = "No"
         row_data[_INV_COL["Year"] - 1]              = year
-
+        row_data[_INV_COL["Description"] - 1]       = description or None
         ws.append(row_data)
         appended += 1
 

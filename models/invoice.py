@@ -16,6 +16,7 @@ class Invoice:
     payment_date: Optional[datetime.datetime]
     paid: str                       # 'Yes', 'No', 'cancelled'
     year: Optional[int]
+    description: Optional[str] = None
 
     def is_paid(self) -> bool:
         return str(self.paid).strip().lower() == "yes"
