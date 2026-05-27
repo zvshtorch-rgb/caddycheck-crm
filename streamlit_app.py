@@ -3280,7 +3280,7 @@ elif page == "🧾 Invoice Details":
             {
                 "_invoice_index": invoice_index_map[id(i)],
                 "Invoice #": _safe_int(i.invoice_number) or None,
-                "Project": _safe_str(i.project_name),
+                "Project": canonical_project_name(_safe_str(i.project_name)),
                 "Maint. Year": _safe_str(i.maintenance_year),
                 "Amount (€)": _safe_float(i.payment_amount),
                 "Cameras": _safe_int(i.cameras_number),
@@ -3415,14 +3415,14 @@ elif page == "🧾 Invoice Details":
 
         invoice_project_options = [""] + sorted(
             {
-                _safe_str(p.project_name).strip()
+                canonical_project_name(_safe_str(p.project_name).strip())
                 for p in projects
-                if _safe_str(p.project_name).strip()
+                if canonical_project_name(_safe_str(p.project_name).strip())
             }
             | {
-                _safe_str(inv.project_name).strip()
+                canonical_project_name(_safe_str(inv.project_name).strip())
                 for inv in invoices
-                if _safe_str(inv.project_name).strip()
+                if canonical_project_name(_safe_str(inv.project_name).strip())
             }
         )
         invoice_paid_options = ["No", "Yes", "cancelled"]
@@ -3688,7 +3688,7 @@ elif page == "💸 Debt Report":
                 invoice_numbers.append(str(int(float(raw_invoice_number))))
             project_name = _safe_str(invoice_row.project_name).strip()
             if project_name:
-                project_names.append(project_name)
+                project_names.append(canonical_project_name(project_name))
             country = _safe_str(_get_country(invoice_row.project_name)).strip()
             if country:
                 countries.append(country)
