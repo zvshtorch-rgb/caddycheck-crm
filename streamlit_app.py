@@ -3417,7 +3417,7 @@ elif page == "🧾 Invoice Details":
                     except Exception as exc:
                         st.error(f"Failed to parse uploaded invoice XLSX: {exc}")
 
-        control_col1, control_col2 = st.columns([1, 1])
+        control_col1, control_col2, _control_spacer = st.columns([1, 1, 3])
         with control_col1:
             if st.button("➕ Add New Invoice", key="btn_add_inv"):
                 st.session_state["add_inv_row"] = st.session_state.get("add_inv_row", 0) + 1
