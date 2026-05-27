@@ -3303,12 +3303,18 @@ elif page == "🧾 Invoice Details":
             for i in filtered_inv
         ],
         columns=["_invoice_index", *_invoice_columns],
-    ).sort_values(
-        ["Year", "Invoice #", "Project"],
-        ascending=[False, False, True],
-        na_position="last",
-        ignore_index=True,
     )
+
+    # Apply dynamic sort (sort controls defined above in CAN_EDIT block, but sort applies to df_inv always)
+    _inv_sort_col = st.session_state.get("inv_sort_column", "Year")
+    _inv_sort_asc = st.session_state.get("inv_sort_order", "Descending") == "Ascending"
+    if _inv_sort_col in df_inv.columns:
+        df_inv = df_inv.sort_values(
+            by=_inv_sort_col,
+            ascending=_inv_sort_asc,
+            na_position="last",
+            kind="mergesort",
+        ).reset_index(drop=True)
 
     def color_paid(val):
         v = str(val).strip().lower()
@@ -3427,6 +3433,11 @@ elif page == "🧾 Invoice Details":
                 st.session_state["add_inv_row"] = st.session_state.get("add_inv_row", 0) + 1
         with control_col2:
             save_invoice_clicked = st.button("💾 Save Changes", key="save_invoices_top")
+
+        inv_sort_col1, inv_sort_col2 = st.columns(2)
+        inv_sort_options = ["Invoice #", "Year", "Project", "Amount (€)", "Cameras", "Maint. Year", "Payment Date", "Paid"]
+        inv_selected_sort = inv_sort_col1.selectbox("Sort by", inv_sort_options, index=1, key="inv_sort_column")
+        inv_selected_order = inv_sort_col2.selectbox("Sort order", ["Descending", "Ascending"], index=0, key="inv_sort_order")
 
         invoice_project_options = [""] + sorted(
             {
