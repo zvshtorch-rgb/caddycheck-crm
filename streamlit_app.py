@@ -2043,8 +2043,12 @@ elif page == "🏗️ Projects":
                 except Exception as exc:
                     st.error(f"Failed to parse uploaded project order: {exc}")
 
-        if st.button("➕ Add New Project", key="btn_add_proj"):
-            st.session_state["add_proj_row"] = 1
+        proj_control_col1, proj_control_col2, _proj_control_spacer = st.columns([1, 1, 3])
+        with proj_control_col1:
+            if st.button("➕ Add New Project", key="btn_add_proj"):
+                st.session_state["add_proj_row"] = 1
+        with proj_control_col2:
+            save_projects_clicked = st.button("💾 Save Changes", key="save_projects_top")
 
         _empty_proj = {"_original_project_name": "", "Project Name": "", "Country": "", "# Cams": 0,
                        "Payment Month": "", "Install Year": "",
@@ -2090,7 +2094,7 @@ elif page == "🏗️ Projects":
             },
             key="proj_editor",
         )
-        if st.button("💾 Save Changes", key="save_projects"):
+        if save_projects_clicked:
             from models.project import Project as ProjectModel
             original_project_map = {
                 _safe_str(p.project_name).strip(): p
