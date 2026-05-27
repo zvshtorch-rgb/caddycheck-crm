@@ -2062,9 +2062,12 @@ elif page == "🏗️ Projects":
                     "Country",
                     options=[""] + countries,
                 ),
-                "Install Year": st.column_config.SelectboxColumn(
+                "Install Year": st.column_config.NumberColumn(
                     "Install Year",
-                    options=install_year_options,
+                    min_value=2014,
+                    max_value=2030,
+                    step=1,
+                    format="%d",
                 ),
                 "Payment Month": st.column_config.SelectboxColumn(
                     "Payment Month",
