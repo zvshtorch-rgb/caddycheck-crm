@@ -3287,7 +3287,7 @@ elif page == "🧾 Invoice Details":
                 "Payment Date": i.payment_date.date() if i.payment_date else None,
                 "Paid": _safe_str(i.paid),
                 "Year": _safe_str(_safe_int(i.year) or ""),
-                "Description": _safe_str(i.description) if i.description else "",
+                "Description": _safe_str(getattr(i, "description", "")) if getattr(i, "description", "") else "",
             }
             for i in filtered_inv
         ],
@@ -3712,7 +3712,7 @@ elif page == "💸 Debt Report":
             "Maint. Year": ", ".join(unique_maint_years),
             "Amount (€)": total_amount,
             "Year": str(max(years)) if years else "",
-            "Description": _safe_str(rows[0].description).strip() if rows else "",
+            "Description": _safe_str(getattr(rows[0], "description", "")).strip() if rows else "",
         })
 
     grouped_unpaid_rows.sort(
