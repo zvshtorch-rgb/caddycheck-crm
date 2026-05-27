@@ -1926,9 +1926,12 @@ elif page == "🏗️ Projects":
     if not df.empty:
         df["Activation Date"] = pd.to_datetime(df["Activation Date"], errors="coerce")
         df["License EOP"] = pd.to_datetime(df["License EOP"], errors="coerce")
-        df["Install Year"] = pd.to_numeric(df["Install Year"], errors="coerce")
         ascending = selected_sort_order == "Ascending"
         sort_column = selected_sort_column
+        if sort_column == "Install Year":
+            # Keep UI values as strings for SelectboxColumn, but sort numerically.
+            df["_sort_install_year"] = pd.to_numeric(df["Install Year"], errors="coerce")
+            sort_column = "_sort_install_year"
         if sort_column in df.columns:
             df = df.sort_values(
                 by=sort_column,
@@ -1936,6 +1939,8 @@ elif page == "🏗️ Projects":
                 na_position="last",
                 kind="mergesort",
             )
+        if "_sort_install_year" in df.columns:
+            df = df.drop(columns=["_sort_install_year"])
         df["Activation Date"] = df["Activation Date"].dt.date
         df["License EOP"] = df["License EOP"].dt.date
 
@@ -2039,7 +2044,7 @@ elif page == "🏗️ Projects":
                     st.error(f"Failed to parse uploaded project order: {exc}")
 
         if st.button("➕ Add New Project", key="btn_add_proj"):
-            st.session_state["add_proj_row"] = st.session_state.get("add_proj_row", 0) + 1
+            st.session_state["add_proj_row"] = 1
 
         _empty_proj = {"_original_project_name": "", "Project Name": "", "Country": "", "# Cams": 0,
                        "Payment Month": "", "Install Year": "",
@@ -2062,12 +2067,9 @@ elif page == "🏗️ Projects":
                     "Country",
                     options=[""] + countries,
                 ),
-                "Install Year": st.column_config.NumberColumn(
+                "Install Year": st.column_config.SelectboxColumn(
                     "Install Year",
-                    min_value=2014,
-                    max_value=2030,
-                    step=1,
-                    format="%d",
+                    options=install_year_options,
                 ),
                 "Payment Month": st.column_config.SelectboxColumn(
                     "Payment Month",
@@ -2086,7 +2088,7 @@ elif page == "🏗️ Projects":
                     format="YYYY-MM-DD",
                 ),
             },
-            key=f"proj_editor_{n_new}",
+            key="proj_editor",
         )
         if st.button("💾 Save Changes", key="save_projects"):
             from models.project import Project as ProjectModel
@@ -2145,6 +2147,7 @@ elif page == "🏗️ Projects":
                 _delete_projects(sorted({name for name in delete_project_names if name}), _data_path)
                 load_data.clear()
                 st.session_state.pop("add_proj_row", None)
+                st.session_state.pop("proj_editor", None)
                 msg = f"Saved! {new_count} new project(s) added." if new_count else "Projects saved successfully!"
                 st.session_state["_flash_success"] = msg
                 st.session_state["_flash_success_page"] = "🏗️ Projects"
