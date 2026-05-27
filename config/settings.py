@@ -45,6 +45,7 @@ ORDERS_FILE = CONFIG_DIR / "orders.json"
 PROJECT_NAME_ALIASES = {
     "ad waaken": "Proxy Waaken",
     "proxy kluisbergen": "AD Kluisbergen",
+    "ad kluisbergen old": "AD Kluisbergen",
 }
 
 # Sheet names
