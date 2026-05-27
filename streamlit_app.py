@@ -1888,7 +1888,7 @@ elif page == "🏗️ Projects":
     col1, col2, col3 = st.columns(3)
     countries = sorted({p.country for p in projects if p.country})
     project_statuses = sorted({p.status for p in projects if p.status})
-    install_year_options = [""] + [str(year) for year in range(datetime.date.today().year + 1, 2014, -1)]
+    install_year_options = [""] + [str(year) for year in range(datetime.date.today().year + 1, 1980, -1)]
     payment_month_options = [""] + MONTH_ORDER
     sel_country = col1.selectbox("Country", ["All"] + countries, key="proj_country")
     sel_status  = col2.selectbox("Status",  ["All", "Active", "Offline"], key="proj_status")
@@ -2264,7 +2264,7 @@ elif page == "📦 Orders":
         for project in projects
         if _safe_str(project.project_name).strip()
     ]
-    install_year_options = [""] + [str(year) for year in range(datetime.date.today().year + 1, 2014, -1)]
+    install_year_options = [""] + [str(year) for year in range(datetime.date.today().year + 1, 1980, -1)]
 
     total_orders = len(orders)
     open_orders = sum(
