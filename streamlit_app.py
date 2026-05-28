@@ -2708,7 +2708,6 @@ elif page == "📦 Orders":
 
         orders_df = pd.DataFrame([
             {
-                "ID": _safe_int(order.get("id"), default=0),
                 "Order": _safe_str(order.get("order_number")),
                 "Project": _safe_str(order.get("project_name")),
                 "Suggested Match": _suggest_best_project_match(order.get("project_name"), project_name_choices)[0],
