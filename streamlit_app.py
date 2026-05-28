@@ -2614,7 +2614,8 @@ elif page == "📦 Orders":
                 nc1, nc2, nc3 = st.columns(3)
                 new_order_number = nc1.text_input("Order reference", key="new_order_number")
                 new_project_name = nc2.text_input("Project name", key="new_order_project")
-                new_country = nc3.text_input("Country", key="new_order_country")
+                new_country_options = [""] + sorted({_safe_str(order.get("country")).strip() for order in orders if _safe_str(order.get("country")).strip()} | {_safe_str(p.country).strip() for p in projects if _safe_str(p.country).strip()})
+                new_country = nc3.selectbox("Country", new_country_options, key="new_order_country")
 
                 nc4, nc5, nc6 = st.columns(3)
                 new_ordered_cameras = nc4.number_input("Ordered cameras", min_value=0, step=1, key="new_order_cameras")
@@ -2826,7 +2827,10 @@ elif page == "📦 Orders":
             uc1, uc2, uc3 = st.columns(3)
             upd_order_number = uc1.text_input("Order reference", value=_safe_str(selected_order.get("order_number")), key=f"upd_order_number{field_key_suffix}")
             upd_project_name = uc2.text_input("Project name", value=_safe_str(selected_order.get("project_name")), key=f"upd_order_project{field_key_suffix}")
-            upd_country = uc3.text_input("Country", value=_safe_str(selected_order.get("country")), key=f"upd_order_country{field_key_suffix}")
+            upd_country_options = [""] + sorted({_safe_str(order.get("country")).strip() for order in orders if _safe_str(order.get("country")).strip()} | {_safe_str(p.country).strip() for p in projects if _safe_str(p.country).strip()})
+            current_country = _safe_str(selected_order.get("country")).strip()
+            upd_country_index = upd_country_options.index(current_country) if current_country in upd_country_options else 0
+            upd_country = uc3.selectbox("Country", upd_country_options, index=upd_country_index, key=f"upd_order_country{field_key_suffix}")
             exact_project_picker_options = [""] + project_name_choices
             exact_project_index = 1 if exact_project_match and exact_project_match in project_name_choices else 0
             upd_project_match = st.selectbox(
