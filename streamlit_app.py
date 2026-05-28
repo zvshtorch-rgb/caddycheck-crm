@@ -2281,6 +2281,10 @@ elif page == "📦 Orders":
         )
 
     project_name_keys = {
+        _normalize_project_name_key(canonical_project_name(project.project_name))
+        for project in projects
+        if _safe_str(project.project_name).strip()
+    } | {
         _normalize_project_name_key(project.project_name)
         for project in projects
         if _safe_str(project.project_name).strip()
