@@ -3230,6 +3230,47 @@ elif page == "🧾 Invoice Details":
     if amt_max > 0:
         filtered_inv = [i for i in filtered_inv if i.payment_amount <= amt_max]
 
+    # Per-invoice summary (for a selected invoice number like 8670)
+    filtered_invoice_numbers = sorted(
+        {
+            int(_safe_int(inv.invoice_number))
+            for inv in filtered_inv
+            if _safe_int(inv.invoice_number)
+        },
+        reverse=True,
+    )
+    if filtered_invoice_numbers:
+        default_summary_invoice = filtered_invoice_numbers[0]
+        if inv_no_search.strip().isdigit():
+            searched_invoice_number = int(inv_no_search.strip())
+            if searched_invoice_number in filtered_invoice_numbers:
+                default_summary_invoice = searched_invoice_number
+
+        selected_summary_invoice = st.selectbox(
+            "Invoice summary",
+            filtered_invoice_numbers,
+            index=filtered_invoice_numbers.index(default_summary_invoice),
+            key="inv_summary_invoice",
+        )
+        summary_rows = [
+            inv for inv in filtered_inv
+            if _safe_int(inv.invoice_number) == int(selected_summary_invoice)
+        ]
+        summary_total_amount = sum(_safe_float(inv.payment_amount) for inv in summary_rows)
+        summary_total_cameras = sum(_safe_int(inv.cameras_number) for inv in summary_rows)
+        summary_project_count = len(
+            {
+                canonical_project_name(_safe_str(inv.project_name).strip())
+                for inv in summary_rows
+                if _safe_str(inv.project_name).strip()
+            }
+        )
+
+        s1, s2, s3 = st.columns(3)
+        s1.metric("Projects in invoice", summary_project_count)
+        s2.metric("Total cameras", summary_total_cameras)
+        s3.metric("Total amount", f"€{summary_total_amount:,.0f}")
+
     # Summary row
     total_all_f    = sum(i.payment_amount for i in filtered_inv)
     total_paid_f   = sum(i.payment_amount for i in filtered_inv if i.is_paid())
