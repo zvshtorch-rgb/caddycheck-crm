@@ -3543,13 +3543,21 @@ elif page == "🧾 Invoice Details":
             if label and label not in invoice_maint_options:
                 invoice_maint_options.append(label)
 
+        next_invoice_number = _get_next_invoice_number(invoices, _data_path)
+
         _empty_inv = {"_invoice_index": None, "Invoice #": None, "Project": "", "Maint. Year": "Y1",
                       "Amount (€)": 0.0, "Cameras": 0,
                       "Payment Date": None, "Paid": "No", "Year": str(datetime.date.today().year),
                       "Description": "Complementary"}
         n_new_inv = st.session_state.get("add_inv_row", 0)
         if n_new_inv:
-            empty_rows = pd.DataFrame([_empty_inv] * n_new_inv)
+            empty_rows = pd.DataFrame([
+                {
+                    **_empty_inv,
+                    "Invoice #": next_invoice_number + row_offset,
+                }
+                for row_offset in range(n_new_inv)
+            ])
             df_inv_edit = pd.concat([empty_rows, df_inv.reset_index(drop=True)], ignore_index=True)
         else:
             df_inv_edit = df_inv.reset_index(drop=True)
