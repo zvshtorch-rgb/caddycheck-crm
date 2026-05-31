@@ -4470,13 +4470,16 @@ elif page == "📅 Monthly Invoice":
                             ) or ""
                         except Exception:
                             signed_url = ""
+                    sent_at_text = _safe_str(row.get("sent_at", "")).replace("T", " ")[:19]
+                    sent_month = _safe_str(row.get("month", "")).strip()
+                    sent_year = _safe_int(row.get("year"), default=0)
                     sent_history_rows.append({
                         "Invoice #": _safe_int(row.get("invoice_number"), default=0),
-                        "Month": _safe_str(row.get("month", "")),
-                        "Year": _safe_int(row.get("year"), default=0),
+                        "Type": "Monthly Invoice",
+                        "For Month": f"{sent_month} {sent_year}".strip(),
+                        "Sent At": sent_at_text,
                         "Total (€)": _safe_float(row.get("total_amount", 0.0), 0.0),
                         "Filename": _safe_str(row.get("pdf_filename", "")),
-                        "Sent At": _safe_str(row.get("sent_at", "")),
                         "Source PDF": signed_url,
                     })
                 if sent_history_rows:
