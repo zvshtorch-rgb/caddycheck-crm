@@ -3786,6 +3786,21 @@ elif page == "💸 Debt Report":
     paid_trial_total_amt = sum(i.payment_amount for i in all_unpaid if _is_paid_trial_category(i))
     y2_total_amt = sum(i.payment_amount for i in all_unpaid if _is_maintenance_category(i))
 
+    sent_invoice_rows = load_sent_invoices_log()
+    sent_invoice_map = {}
+    for row in sent_invoice_rows:
+        invoice_number = _safe_int(row.get("invoice_number"), default=0)
+        if not invoice_number:
+            continue
+        sent_at_text = _safe_str(row.get("sent_at", "")).replace("T", " ")[:19]
+        current_row = sent_invoice_map.get(invoice_number)
+        if current_row is None or sent_at_text >= _safe_str(current_row.get("Sent At", "")):
+            sent_invoice_map[invoice_number] = {
+                "Type": "Monthly Invoice",
+                "For Month": f"{_safe_str(row.get('month', '')).strip()} {_safe_int(row.get('year'), default=0)}".strip(),
+                "Sent At": sent_at_text,
+            }
+
     from collections import defaultdict
 
     grouped_unpaid: dict[tuple, list] = defaultdict(list)
@@ -3838,6 +3853,7 @@ elif page == "💸 Debt Report":
             "Maint. Year": ", ".join(unique_maint_years),
             "Amount (€)": total_amount,
             "Year": str(max(years)) if years else "",
+            **sent_invoice_map.get(_safe_int(invoice_numbers[0], default=0), {"Type": "", "For Month": "", "Sent At": ""}),
             "Description": _safe_str(getattr(rows[0], "description", "")).strip() if rows else "",
         })
 
