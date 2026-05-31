@@ -3364,10 +3364,18 @@ elif page == "🧾 Invoice Details":
                 if _safe_str(value).strip()
             }
         )
+        invoice_numbers = sorted(
+            {
+                _safe_int(value)
+                for value in table_df.get("Invoice #", [])
+                if _safe_int(value)
+            }
+        )
+        summary_invoice_number = invoice_numbers[0] if len(invoice_numbers) == 1 else ""
 
         summary_row_df = pd.DataFrame([
             {
-                "Invoice #": "",
+                "Invoice #": summary_invoice_number,
                 "Project": f"TOTAL ({total_projects} projects)",
                 "Maint. Year": "",
                 "Amount (€)": total_amount,
