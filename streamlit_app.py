@@ -3375,23 +3375,19 @@ elif page == "🧾 Invoice Details":
 
         summary_row_df = pd.DataFrame([
             {
-                "Invoice #": summary_invoice_number,
+                "Invoice #": str(summary_invoice_number) if summary_invoice_number else "",
                 "Project": f"TOTAL ({total_projects} projects)",
                 "Maint. Year": "",
-                "Amount (€)": total_amount,
-                "Cameras": total_cameras,
+                "Amount (€)": f"{total_amount:,.0f}",
+                "Cameras": str(total_cameras),
                 "Payment Date": "",
                 "Paid": "",
                 "Year": "",
                 "Description": "",
             }
         ])
-        summary_row_display = summary_row_df.style.set_properties(
-            subset=["Invoice #", "Amount (€)", "Cameras"],
-            **{"text-align": "left"},
-        )
         st.dataframe(
-            summary_row_display,
+            summary_row_df,
             use_container_width=True,
             hide_index=True,
             height=70,
