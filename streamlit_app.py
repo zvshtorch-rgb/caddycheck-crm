@@ -3386,8 +3386,12 @@ elif page == "🧾 Invoice Details":
                 "Description": "",
             }
         ])
+        summary_row_display = summary_row_df.style.set_properties(
+            subset=["Invoice #", "Amount (€)", "Cameras"],
+            **{"text-align": "left"},
+        )
         st.dataframe(
-            summary_row_df,
+            summary_row_display,
             use_container_width=True,
             hide_index=True,
             height=70,
@@ -3662,8 +3666,13 @@ elif page == "🧾 Invoice Details":
             except Exception as e:
                 st.error(f"Save failed: {e}")
     else:
+        df_inv_display = (
+            df_inv.style
+            .map(color_paid, subset=["Paid"])
+            .set_properties(subset=["Invoice #", "Amount (€)", "Cameras", "Year"], **{"text-align": "left"})
+        )
         st.dataframe(
-            df_inv.style.map(color_paid, subset=["Paid"]),
+            df_inv_display,
             use_container_width=True,
             height=550,
         )
