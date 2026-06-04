@@ -3099,17 +3099,25 @@ elif page == "🔐 Licenses":
 
     st.markdown("---")
     st.subheader("All Project Licenses")
+    license_table_columns = [
+        "Project",
+        "Country",
+        "Cameras",
+        "Project Status",
+        "License EOP",
+        "License Status",
+    ]
     license_table_df = pd.DataFrame([
         {
-            "Project": row["Project"],
-            "Country": row["Country"],
-            "Cameras": row["Cameras"],
-            "Project Status": row["Status"],
-            "License EOP": row["License EOP"],
-            "License Status": row["License Status"],
+            "Project": row.get("Project", ""),
+            "Country": row.get("Country", ""),
+            "Cameras": row.get("Cameras", 0),
+            "Project Status": row.get("Status", ""),
+            "License EOP": row.get("License EOP", ""),
+            "License Status": row.get("License Status", ""),
         }
         for row in filtered_license_rows
-    ])
+    ], columns=license_table_columns)
 
     def color_license_status(value):
         key = str(value).strip().lower()
@@ -3125,8 +3133,16 @@ elif page == "🔐 Licenses":
             return "color: #5D6D7E; font-weight: bold"
         return ""
 
+    if "License Status" in license_table_df.columns:
+        license_table_display = license_table_df.style.map(
+            color_license_status,
+            subset=["License Status"],
+        )
+    else:
+        license_table_display = license_table_df
+
     st.dataframe(
-        license_table_df.style.map(color_license_status, subset=["License Status"]),
+        license_table_display,
         use_container_width=True,
         hide_index=True,
         height=480,
@@ -3723,7 +3739,11 @@ elif page == "💸 Debt Report":
         fc1, fc2, fc3, fc4 = st.columns(4)
         debt_years    = sorted({inv.year for inv in invoices if inv.year}, reverse=True)
         dsel_year     = fc1.selectbox("Year", ["All"] + [str(y) for y in debt_years], key="dr_year")
-        debt_countries = sorted({p.country for p in projects if p.country})
+        debt_countries = sorted({
+            _safe_str(country).strip()
+            for country in ([p.country for p in projects] + [ds.country for ds in debt_summaries])
+            if _safe_str(country).strip()
+        })
         dsel_country  = fc2.selectbox("Country", ["All"] + debt_countries, key="dr_country")
         dsel_search   = fc3.text_input("Search project", key="dr_search")
         dsel_debt_type = fc4.selectbox(
@@ -3747,18 +3767,133 @@ elif page == "💸 Debt Report":
         s = _re.sub(r'\s*\([^)]*\)', '', s).strip()          # strip "(coplementary)" etc.
         s = _ud.normalize('NFKD', s).encode('ascii', 'ignore').decode('ascii')  # strip accents
         return _re.sub(r'\s+', ' ', s).strip().lower()
-    proj_country_map = {_norm(p.project_name): p.country for p in projects}
-    ds_country_map   = {_norm(ds.project_name): ds.country for ds in debt_summaries}
+    proj_country_map = {}
+    for p in projects:
+        key = _norm(canonical_project_name(p.project_name))
+        if not key:
+            continue
+        country = _normalize_country(_safe_str(p.country).strip())
+        # Keep first non-empty country when duplicate normalized project names exist.
+        if country and not _safe_str(proj_country_map.get(key, "")).strip():
+            proj_country_map[key] = country
+        elif key not in proj_country_map:
+            proj_country_map[key] = country
+
+    ds_country_map = {}
+    for ds in debt_summaries:
+        key = _norm(canonical_project_name(ds.project_name))
+        if not key:
+            continue
+        country = _normalize_country(_safe_str(ds.country).strip())
+        if country and not _safe_str(ds_country_map.get(key, "")).strip():
+            ds_country_map[key] = country
+        elif key not in ds_country_map:
+            ds_country_map[key] = country
+
+    orders_country_map = {}
+    try:
+        orders_rows, _orders_source_name = load_orders_data(_data_path)
+    except Exception:
+        orders_rows = []
+    for order in orders_rows:
+        key = _norm(canonical_project_name(_safe_str(order.get("project_name")).strip()))
+        if not key:
+            continue
+        country = _normalize_country(_safe_str(order.get("country")).strip())
+        if country and not _safe_str(orders_country_map.get(key, "")).strip():
+            orders_country_map[key] = country
+        elif key not in orders_country_map:
+            orders_country_map[key] = country
+
+    # Deterministic overrides for known project-name variants that may not match
+    # project/order master data exactly.
+    manual_country_overrides = {
+        _norm("intermarche heusy"): "Belgium",
+        _norm("intermarché heusy"): "Belgium",
+    }
+
+    merged_country_map = {}
+    for source_map in (proj_country_map, ds_country_map, orders_country_map):
+        for key, country in source_map.items():
+            existing = _safe_str(merged_country_map.get(key, "")).strip()
+            candidate = _safe_str(country).strip()
+            if candidate and not existing:
+                merged_country_map[key] = candidate
+            elif key not in merged_country_map:
+                merged_country_map[key] = candidate
+
+    def _infer_country_from_project_name(name: str) -> str:
+        key = _norm(canonical_project_name(name))
+        if not key:
+            return ""
+        if "luxemb" in key:
+            return "Luxembourg"
+        if any(token in key for token in ("edeka", "rewe", "germany", "deutschland")):
+            return "Germany"
+        if any(token in key for token in ("belg", "belgium")):
+            return "Belgium"
+        return ""
+
     def _get_country(name):
-        k = _norm(name)
-        result = proj_country_map.get(k) or ds_country_map.get(k)
+        k = _norm(canonical_project_name(name))
+        if not k:
+            return ""
+        manual_country = _safe_str(manual_country_overrides.get(k, "")).strip()
+        if manual_country:
+            return manual_country
+        result = proj_country_map.get(k) or ds_country_map.get(k) or orders_country_map.get(k)
         if result:
             return result
-        # Partial match: invoice name starts with a known project name or vice versa
-        for proj_k, country in proj_country_map.items():
-            if proj_k and k and (k.startswith(proj_k) or proj_k.startswith(k)):
-                return country
-        return ""
+
+        # Relaxed partial match handles suffixes/prefixes/noise in imported names.
+        for source_map in (proj_country_map, ds_country_map, orders_country_map):
+            for proj_k, country in source_map.items():
+                if not proj_k or not _safe_str(country).strip():
+                    continue
+                if (
+                    k.startswith(proj_k)
+                    or proj_k.startswith(k)
+                    or (k in proj_k)
+                    or (proj_k in k)
+                ):
+                    return country
+
+        # Token overlap fallback for long names with small textual differences.
+        k_tokens = {token for token in k.split(" ") if token}
+        best_country = ""
+        best_overlap = 0
+        if k_tokens:
+            for source_map in (proj_country_map, ds_country_map, orders_country_map):
+                for proj_k, country in source_map.items():
+                    if not _safe_str(country).strip():
+                        continue
+                    proj_tokens = {token for token in proj_k.split(" ") if token}
+                    overlap = len(k_tokens.intersection(proj_tokens))
+                    if overlap > best_overlap and overlap >= 2:
+                        best_overlap = overlap
+                        best_country = country
+        if best_country:
+            return best_country
+
+        # Final fuzzy fallback for renamed/edited invoice project labels.
+        from difflib import SequenceMatcher
+
+        best_ratio = 0.0
+        best_fuzzy_country = ""
+        compact_k = k.replace(" ", "")
+        for proj_k, country in merged_country_map.items():
+            country_text = _safe_str(country).strip()
+            if not proj_k or not country_text:
+                continue
+            ratio = SequenceMatcher(None, k, proj_k).ratio()
+            compact_ratio = SequenceMatcher(None, compact_k, proj_k.replace(" ", "")).ratio()
+            candidate_ratio = max(ratio, compact_ratio)
+            if candidate_ratio > best_ratio:
+                best_ratio = candidate_ratio
+                best_fuzzy_country = country_text
+        if best_ratio >= 0.86:
+            return best_fuzzy_country
+        return _infer_country_from_project_name(name)
 
     if dsel_country != "All":
         debt_inv = [i for i in debt_inv if _get_country(i.project_name) == dsel_country]
@@ -3770,6 +3905,23 @@ elif page == "💸 Debt Report":
         debt_inv = [i for i in debt_inv if _is_paid_trial_category(i)]
     elif dsel_debt_type == "Maintenance (Y2+)":
         debt_inv = [i for i in debt_inv if _is_maintenance_category(i)]
+
+    # Build invoice-level country hints from known rows.
+    invoice_country_votes: dict[int, dict[str, int]] = {}
+    for inv in debt_inv:
+        inv_no = _safe_int(inv.invoice_number, default=0)
+        if not inv_no:
+            continue
+        country = _normalize_country(_safe_str(_get_country(inv.project_name)).strip())
+        if not country:
+            continue
+        bucket = invoice_country_votes.setdefault(inv_no, {})
+        bucket[country] = bucket.get(country, 0) + 1
+
+    invoice_country_hint: dict[int, str] = {}
+    for inv_no, votes in invoice_country_votes.items():
+        if votes:
+            invoice_country_hint[inv_no] = max(votes.items(), key=lambda item: item[1])[0]
 
     # ── Summary metrics ───────────────────────────────────────────────────────
     total_debt_amt  = sum(i.payment_amount for i in debt_inv)
@@ -3816,6 +3968,7 @@ elif page == "💸 Debt Report":
         grouped_unpaid[invoice_key].append(invoice_row)
 
     grouped_unpaid_rows = []
+    unmapped_project_names = set()
     for invoice_key, rows in grouped_unpaid.items():
         invoice_numbers = []
         project_names = []
@@ -3830,9 +3983,15 @@ elif page == "💸 Debt Report":
             project_name = _safe_str(invoice_row.project_name).strip()
             if project_name:
                 project_names.append(canonical_project_name(project_name))
-            country = _safe_str(_get_country(invoice_row.project_name)).strip()
+            country = _normalize_country(_safe_str(_get_country(invoice_row.project_name)).strip())
+            if not country:
+                invoice_number_hint = _safe_int(invoice_row.invoice_number, default=0)
+                if invoice_number_hint:
+                    country = _safe_str(invoice_country_hint.get(invoice_number_hint, "")).strip()
             if country:
                 countries.append(country)
+            elif project_name:
+                unmapped_project_names.add(project_name)
             maint_year = _safe_str(invoice_row.maintenance_year).strip()
             if maint_year:
                 maint_years.append(maint_year)
@@ -3909,6 +4068,16 @@ elif page == "💸 Debt Report":
         csv_detail = detail_df.to_csv(index=False).encode("utf-8")
         st.download_button("⬇️ Download Detail CSV", csv_detail,
                            file_name="debt_detail.csv", mime="text/csv")
+
+        if unmapped_project_names:
+            with st.expander("Country Mapping Warnings", expanded=False):
+                st.caption("These unpaid invoice project names could not be mapped to a country.")
+                st.dataframe(
+                    pd.DataFrame({"Unmapped Project Name": sorted(unmapped_project_names)}),
+                    use_container_width=True,
+                    hide_index=True,
+                    height=min(280, 40 + 28 * len(unmapped_project_names)),
+                )
     else:
         st.success("No unpaid invoices match the current filters.")
 
@@ -3923,7 +4092,15 @@ elif page == "💸 Debt Report":
         if i.invoice_number:
             proj_debt[key]["inv_nos"].add(str(int(i.invoice_number)))
         proj_debt[key]["total"]   += i.payment_amount
-        proj_debt[key]["country"]  = _get_country(i.project_name)
+        resolved_country = _normalize_country(_safe_str(_get_country(i.project_name)).strip())
+        if not resolved_country:
+            invoice_number_hint = _safe_int(i.invoice_number, default=0)
+            if invoice_number_hint:
+                resolved_country = _safe_str(invoice_country_hint.get(invoice_number_hint, "")).strip()
+        if not resolved_country:
+            resolved_country = _infer_country_from_project_name(i.project_name)
+        if resolved_country and not _safe_str(proj_debt[key]["country"]).strip():
+            proj_debt[key]["country"] = resolved_country
 
     summary_rows = [{
         "Project Name":    name,
@@ -3972,7 +4149,15 @@ elif page == "💸 Debt Report":
                     if i.invoice_number:
                         pd_[i.project_name]["inv_nos"].add(str(int(i.invoice_number)))
                     pd_[i.project_name]["total"]   += i.payment_amount
-                    pd_[i.project_name]["country"]  = _get_country(i.project_name)
+                    resolved_country = _normalize_country(_safe_str(_get_country(i.project_name)).strip())
+                    if not resolved_country:
+                        invoice_number_hint = _safe_int(i.invoice_number, default=0)
+                        if invoice_number_hint:
+                            resolved_country = _safe_str(invoice_country_hint.get(invoice_number_hint, "")).strip()
+                    if not resolved_country:
+                        resolved_country = _infer_country_from_project_name(i.project_name)
+                    if resolved_country and not _safe_str(pd_[i.project_name]["country"]).strip():
+                        pd_[i.project_name]["country"] = resolved_country
                 return sorted(pd_.items(), key=lambda x: -x[1]["total"])
 
             def _make_section_table(rows, rl_colors):
