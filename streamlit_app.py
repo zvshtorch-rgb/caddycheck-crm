@@ -179,12 +179,13 @@ from config.settings import (
     save_sent_invoices_log,
     load_license_change_log,
     append_license_change_log,
+    save_project_change_log,
     load_orders_records,
     save_orders_records,
 )
 
 try:
-    from config.settings import load_project_change_log, append_project_change_log
+    from config.settings import load_project_change_log, append_project_change_log, save_project_change_log
 except Exception:
     # Backward-compatible fallback: keep app startup alive if Cloud deploy
     # temporarily runs mixed code versions during rollout.
@@ -192,6 +193,9 @@ except Exception:
         return []
 
     def append_project_change_log(entry: dict) -> None:
+        return None
+
+    def save_project_change_log(entries: list) -> None:
         return None
 from services.supabase_service import (
     load_projects,
@@ -2350,12 +2354,14 @@ elif page == "🏗️ Projects":
             for row in project_change_rows:
                 changed_at = _parse_optional_datetime(row.get("changed_at"))
                 log_rows.append({
+                    "id": row.get("id"),
                     "Changed At": changed_at.strftime("%Y-%m-%d %H:%M") if changed_at else _safe_str(row.get("changed_at")),
                     "Project": _safe_str(row.get("project_name")),
                     "Country": _safe_str(row.get("country")),
                     "Field": _safe_str(row.get("field_name")),
                     "Old Value": _safe_str(row.get("old_value")),
                     "New Value": _safe_str(row.get("new_value")),
+                    "Description": _safe_str(row.get("notes")),
                     "Source": _safe_str(row.get("source_name")),
                 })
 
@@ -2384,12 +2390,69 @@ elif page == "🏗️ Projects":
                     | project_change_df["New Value"].str.lower().str.contains(needle, na=False)
                 ]
 
-            st.dataframe(
-                project_change_df,
+            display_df = project_change_df[[
+                "Changed At",
+                "Project",
+                "Country",
+                "Field",
+                "Old Value",
+                "New Value",
+                "Description",
+                "Source",
+            ]]
+
+            editable_df = st.data_editor(
+                display_df,
                 use_container_width=True,
                 hide_index=True,
                 height=280,
+                disabled=[
+                    "Changed At",
+                    "Project",
+                    "Country",
+                    "Field",
+                    "Old Value",
+                    "New Value",
+                    "Source",
+                ],
+                key="project_change_log_editor",
             )
+
+            if st.button("💾 Save Log Descriptions", key="save_project_change_log_desc"):
+                edited_rows = editable_df.to_dict("records")
+                notes_by_key = {
+                    (
+                        _safe_str(row.get("Changed At")),
+                        _safe_str(row.get("Project")),
+                        _safe_str(row.get("Field")),
+                        _safe_str(row.get("Old Value")),
+                        _safe_str(row.get("New Value")),
+                    ): _safe_str(row.get("Description"))
+                    for row in edited_rows
+                }
+
+                updated_entries = []
+                for raw_entry in project_change_rows:
+                    raw_changed = _parse_optional_datetime(raw_entry.get("changed_at"))
+                    changed_label = raw_changed.strftime("%Y-%m-%d %H:%M") if raw_changed else _safe_str(raw_entry.get("changed_at"))
+                    lookup_key = (
+                        _safe_str(changed_label),
+                        _safe_str(raw_entry.get("project_name")),
+                        _safe_str(raw_entry.get("field_name")),
+                        _safe_str(raw_entry.get("old_value")),
+                        _safe_str(raw_entry.get("new_value")),
+                    )
+                    updated_entry = dict(raw_entry)
+                    if lookup_key in notes_by_key:
+                        updated_entry["notes"] = notes_by_key[lookup_key]
+                    updated_entries.append(updated_entry)
+
+                try:
+                    save_project_change_log(updated_entries)
+                    st.success("Project change log descriptions saved.")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Failed to save log descriptions: {exc}")
         else:
             st.info("No project changes are logged yet.")
     else:
