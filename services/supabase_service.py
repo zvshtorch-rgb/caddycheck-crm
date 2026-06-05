@@ -10,6 +10,7 @@ SENT_INVOICE_BUCKET = "sent-invoices"
 ORDER_PDF_BUCKET = "order-pdfs"
 BANK_PAYMENT_BUCKET = "bank-payments"
 LICENSE_CHANGE_LOG_TABLE = "license_change_log"
+PROJECT_CHANGE_LOG_TABLE = "project_change_log"
 BANK_PAYMENTS_TABLE = "bank_payments"
 BANK_PAYMENT_ALLOCATIONS_TABLE = "bank_payment_allocations"
 SUPABASE_PAGE_SIZE = 1000
@@ -76,6 +77,24 @@ def _normalize_license_change_log_entry(entry: Dict[str, Any]) -> Dict[str, Any]
     normalized["action"] = str(entry.get("action") or "").strip() or "Updated"
     normalized["updated_by"] = str(entry.get("updated_by") or "").strip() or None
     normalized["source_name"] = str(entry.get("source_name") or "").strip() or None
+    normalized["notes"] = str(entry.get("notes") or "").strip() or None
+    normalized["updated_at"] = datetime.datetime.utcnow().isoformat()
+    return normalized
+
+
+def _normalize_project_change_log_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
+    normalized: Dict[str, Any] = {}
+    if entry.get("id") not in (None, ""):
+        normalized["id"] = int(entry["id"])
+
+    normalized["changed_at"] = str(entry.get("changed_at") or datetime.datetime.utcnow().isoformat())
+    normalized["project_name"] = str(entry.get("project_name") or "").strip() or None
+    normalized["country"] = str(entry.get("country") or "").strip() or None
+    normalized["field_name"] = str(entry.get("field_name") or "").strip() or "unknown"
+    normalized["old_value"] = str(entry.get("old_value") or "").strip() or None
+    normalized["new_value"] = str(entry.get("new_value") or "").strip() or None
+    normalized["source_name"] = str(entry.get("source_name") or "").strip() or None
+    normalized["updated_by"] = str(entry.get("updated_by") or "").strip() or None
     normalized["notes"] = str(entry.get("notes") or "").strip() or None
     normalized["updated_at"] = datetime.datetime.utcnow().isoformat()
     return normalized
@@ -1044,6 +1063,47 @@ def save_license_change_log(entries: List[Dict[str, Any]]) -> None:
         if existing_id is None or int(existing_id) in keep_ids:
             continue
         client.table(LICENSE_CHANGE_LOG_TABLE).delete().eq("id", int(existing_id)).execute()
+
+
+# ── Project change log ───────────────────────────────────────────────────────
+
+def load_project_change_log() -> List[dict]:
+    client = _get_client()
+    resp = client.table(PROJECT_CHANGE_LOG_TABLE).select("*").order("changed_at", desc=True).execute()
+    return resp.data or []
+
+
+def append_project_change_log(entry: Dict[str, Any]) -> dict:
+    client = _get_client()
+    row = _normalize_project_change_log_entry(entry)
+    resp = client.table(PROJECT_CHANGE_LOG_TABLE).insert(row).execute()
+    return resp.data[0] if resp.data else {}
+
+
+def save_project_change_log(entries: List[Dict[str, Any]]) -> None:
+    client = _get_client()
+    existing_rows = client.table(PROJECT_CHANGE_LOG_TABLE).select("id").execute().data or []
+    keep_ids: set[int] = set()
+
+    for entry in entries:
+        row = _normalize_project_change_log_entry(entry)
+        row_id = row.pop("id", None)
+        if row_id is not None:
+            resp = client.table(PROJECT_CHANGE_LOG_TABLE).update(row).eq("id", row_id).execute()
+            keep_ids.add(row_id)
+            if resp.data:
+                continue
+        resp = client.table(PROJECT_CHANGE_LOG_TABLE).insert(row).execute()
+        if resp.data:
+            saved_id = resp.data[0].get("id")
+            if saved_id is not None:
+                keep_ids.add(int(saved_id))
+
+    for existing in existing_rows:
+        existing_id = existing.get("id")
+        if existing_id is None or int(existing_id) in keep_ids:
+            continue
+        client.table(PROJECT_CHANGE_LOG_TABLE).delete().eq("id", int(existing_id)).execute()
 
 
 # ── Subscriptions ──────────────────────────────────────────────────────────────

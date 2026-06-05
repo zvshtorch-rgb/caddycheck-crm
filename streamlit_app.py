@@ -177,6 +177,8 @@ from config.settings import (
     save_sent_invoices_log,
     load_license_change_log,
     append_license_change_log,
+    load_project_change_log,
+    append_project_change_log,
     load_orders_records,
     save_orders_records,
 )
@@ -1930,6 +1932,45 @@ elif page == "🏗️ Projects":
         except Exception:
             return None
 
+    def _normalize_project_change_value(field_name: str, value) -> str:
+        if field_name == "num_cams":
+            return str(_safe_int(value, default=0))
+        if field_name == "payment_month":
+            return normalize_month(_safe_str(value).strip())
+        if field_name == "status":
+            return _safe_str(value).strip()
+        return _safe_str(value).strip()
+
+    def _build_project_change_entries(before_map: dict, after_projects: list, source_name: str) -> list[dict]:
+        tracked_fields = {
+            "status": "Status",
+            "num_cams": "# Cams",
+            "payment_month": "Payment Month",
+        }
+        entries: list[dict] = []
+        for project in after_projects:
+            project_name = _safe_str(getattr(project, "project_name", "")).strip()
+            if not project_name:
+                continue
+            before_project = before_map.get(project_name)
+            if before_project is None:
+                continue
+            for field_name, label in tracked_fields.items():
+                old_value = _normalize_project_change_value(field_name, getattr(before_project, field_name, ""))
+                new_value = _normalize_project_change_value(field_name, getattr(project, field_name, ""))
+                if old_value == new_value:
+                    continue
+                entries.append({
+                    "project_name": project_name,
+                    "country": _safe_str(getattr(project, "country", "")).strip() or None,
+                    "field_name": label,
+                    "old_value": old_value or None,
+                    "new_value": new_value or None,
+                    "source_name": source_name,
+                    "notes": "Updated via Projects page",
+                })
+        return entries
+
     # Filters
     col1, col2, col3 = st.columns(3)
     countries = sorted({p.country for p in projects if p.country})
@@ -2147,6 +2188,10 @@ elif page == "🏗️ Projects":
                 for p in projects
                 if _safe_str(p.project_name).strip()
             }
+            before_projects_map = {
+                name: copy.deepcopy(project)
+                for name, project in original_project_map.items()
+            }
             visible_original_names = {
                 _safe_str(p.project_name).strip()
                 for p in filtered
@@ -2192,9 +2237,16 @@ elif page == "🏗️ Projects":
             ]
             projects[:] = remaining_projects + projects_to_save
             try:
+                project_change_entries = _build_project_change_entries(
+                    before_projects_map,
+                    projects_to_save,
+                    _data_path,
+                )
                 _save_projects(projects, _data_path)
                 _rename_invoice_project_names(renamed_projects, _data_path)
                 _delete_projects(sorted({name for name in delete_project_names if name}), _data_path)
+                for entry in project_change_entries:
+                    append_project_change_log(entry)
                 load_data.clear()
                 st.session_state.pop("add_proj_row", None)
                 st.session_state.pop("proj_editor", None)
@@ -2278,6 +2330,57 @@ elif page == "🏗️ Projects":
                             st.rerun()
                     except Exception as e:
                         st.error(f"Merge/rename failed: {e}")
+
+        st.markdown("---")
+        st.subheader("Project Change Log")
+        project_change_rows = load_project_change_log()
+        if project_change_rows:
+            log_rows = []
+            for row in project_change_rows:
+                changed_at = _parse_optional_datetime(row.get("changed_at"))
+                log_rows.append({
+                    "Changed At": changed_at.strftime("%Y-%m-%d %H:%M") if changed_at else _safe_str(row.get("changed_at")),
+                    "Project": _safe_str(row.get("project_name")),
+                    "Country": _safe_str(row.get("country")),
+                    "Field": _safe_str(row.get("field_name")),
+                    "Old Value": _safe_str(row.get("old_value")),
+                    "New Value": _safe_str(row.get("new_value")),
+                    "Source": _safe_str(row.get("source_name")),
+                })
+
+            project_change_df = pd.DataFrame(log_rows)
+            pcf1, pcf2, pcf3, pcf4 = st.columns(4)
+            field_options = ["All"] + sorted({row["Field"] for row in log_rows if row["Field"]})
+            country_options = ["All"] + sorted({row["Country"] for row in log_rows if row["Country"]})
+            selected_field = pcf1.selectbox("Field", field_options, key="project_change_field")
+            selected_country = pcf2.selectbox("Country", country_options, key="project_change_country")
+            selected_project_search = pcf3.text_input("Search project", key="project_change_search")
+            selected_value_search = pcf4.text_input("Search value", key="project_change_value_search")
+
+            if selected_field != "All":
+                project_change_df = project_change_df[project_change_df["Field"] == selected_field]
+            if selected_country != "All":
+                project_change_df = project_change_df[project_change_df["Country"] == selected_country]
+            if selected_project_search.strip():
+                needle = selected_project_search.strip().lower()
+                project_change_df = project_change_df[
+                    project_change_df["Project"].str.lower().str.contains(needle, na=False)
+                ]
+            if selected_value_search.strip():
+                needle = selected_value_search.strip().lower()
+                project_change_df = project_change_df[
+                    project_change_df["Old Value"].str.lower().str.contains(needle, na=False)
+                    | project_change_df["New Value"].str.lower().str.contains(needle, na=False)
+                ]
+
+            st.dataframe(
+                project_change_df,
+                use_container_width=True,
+                hide_index=True,
+                height=280,
+            )
+        else:
+            st.info("No project changes are logged yet.")
     else:
         st.dataframe(
             df.style.map(color_status, subset=["Status"]) if "Status" in df.columns and len(df) > 0 else df,
