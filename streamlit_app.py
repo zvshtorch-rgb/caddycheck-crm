@@ -177,11 +177,20 @@ from config.settings import (
     save_sent_invoices_log,
     load_license_change_log,
     append_license_change_log,
-    load_project_change_log,
-    append_project_change_log,
     load_orders_records,
     save_orders_records,
 )
+
+try:
+    from config.settings import load_project_change_log, append_project_change_log
+except Exception:
+    # Backward-compatible fallback: keep app startup alive if Cloud deploy
+    # temporarily runs mixed code versions during rollout.
+    def load_project_change_log() -> list:
+        return []
+
+    def append_project_change_log(entry: dict) -> None:
+        return None
 from services.supabase_service import (
     load_projects,
     load_invoices,
