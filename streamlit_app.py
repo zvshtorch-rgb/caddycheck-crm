@@ -1642,6 +1642,7 @@ if page == "📊 Dashboard":
     total_unpaid = sum(i.payment_amount for i in f_inv if i.is_unpaid())
     total_income = total_paid + total_unpaid
     active_count = sum(1 for p in f_proj if p.is_active())
+    projection_year = 2026
 
     # Monthly/yearly ref year
     if sel_year != "All":
@@ -1654,6 +1655,30 @@ if page == "📊 Dashboard":
         i.payment_amount for i in f_inv
         if i.is_paid() and i.year == ref_year
     )
+
+    current_month_start = datetime.date.today().replace(day=1)
+    trailing_12_month_start = _add_months(current_month_start, -11)
+    trailing_12_month_paid = sum(
+        i.payment_amount
+        for i in invoices
+        if i.is_paid()
+        and i.payment_date
+        and trailing_12_month_start <= i.payment_date.date() <= datetime.date.today()
+        and (sel_country == "All" or proj_country.get(i.project_name.lower().strip(), "") == sel_country)
+    )
+    avg_monthly_paid_last_12m = trailing_12_month_paid / 12.0
+
+    projected_maintenance_rows = []
+    projected_maintenance_income_2026 = 0.0
+    for month_name in MONTH_ORDER:
+        month_projects = get_monthly_invoice_projects(f_proj, month_name, projection_year)
+        month_amount = sum(project.get_expected_amount(projection_year) for project in month_projects)
+        projected_maintenance_income_2026 += month_amount
+        projected_maintenance_rows.append({
+            "Month": month_name,
+            "Projects": len(month_projects),
+            "Expected Income (€)": month_amount,
+        })
 
     def _project_start_year(project) -> Optional[int]:
         if project.activation_date:
@@ -1672,13 +1697,25 @@ if page == "📊 Dashboard":
         if p.is_active() and start_year is not None and start_year <= ref_year:
             total_cams += _safe_int(p.num_cams)
 
-    c1, c2, c3, c4, c5, c6 = st.columns(6)
-    with c1: card("Total Income",            f"€{total_income:,.0f}", "card-income")
-    with c2: card("Total Paid",              f"€{total_paid:,.0f}",   "card-paid")
-    with c3: card("Total Debt",              f"€{total_unpaid:,.0f}", "card-debt")
-    with c4: card(f"Yearly Income ({ref_year})",  f"€{yearly_val:,.0f}",  "card-yearly")
-    with c5: card("Active Projects",         str(active_count),       "card-projects")
-    with c6: card("Total Cameras",           str(total_cams),         "card-cameras")
+    top_row = st.columns(4)
+    bottom_row = st.columns(4)
+    with top_row[0]: card("Total Income", f"€{total_income:,.0f}", "card-income")
+    with top_row[1]: card("Total Paid", f"€{total_paid:,.0f}", "card-paid")
+    with top_row[2]: card("Total Debt", f"€{total_unpaid:,.0f}", "card-debt")
+    with top_row[3]: card(f"Yearly Income ({ref_year})", f"€{yearly_val:,.0f}", "card-yearly")
+    with bottom_row[0]: card("Active Projects", str(active_count), "card-projects")
+    with bottom_row[1]: card("Total Cameras", str(total_cams), "card-cameras")
+    with bottom_row[2]: card(f"Projected Maint. {projection_year}", f"€{projected_maintenance_income_2026:,.0f}", "card-income")
+    with bottom_row[3]: card("Avg Monthly Paid (12M)", f"€{avg_monthly_paid_last_12m:,.0f}", "card-yearly")
+
+    with st.expander(f"Projected Maintenance Income ({projection_year})", expanded=False):
+        st.caption("Based on active monthly-maintenance projects and their expected invoice amount for 2026.")
+        st.dataframe(
+            pd.DataFrame(projected_maintenance_rows),
+            use_container_width=True,
+            hide_index=True,
+            height=320,
+        )
 
     st.markdown("---")
 
@@ -1874,6 +1911,20 @@ if page == "📊 Dashboard":
             color_discrete_sequence=["#2980B9"],
             markers=True,
         )
+        if metric in ("Income (Paid)", "Income (All)"):
+            df_line["moving_average"] = df_line["value"].rolling(window=3, min_periods=1).mean()
+            fig.add_trace(
+                go.Scatter(
+                    x=df_line["date"],
+                    y=df_line["moving_average"],
+                    mode="lines",
+                    name="3M Moving Avg",
+                    line={"color": "#E67E22", "width": 3},
+                )
+            )
+            fig.update_layout(showlegend=True)
+        else:
+            fig.update_layout(showlegend=False)
         fig.update_traces(hovertemplate="<b>%{x|%b %Y}</b><br>" + y_label + ": %{y:,.0f}<extra></extra>")
         fig.update_layout(height=380)
 
