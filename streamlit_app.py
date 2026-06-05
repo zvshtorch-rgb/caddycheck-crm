@@ -1616,7 +1616,6 @@ if page == "📊 Dashboard":
     total_unpaid = sum(i.payment_amount for i in f_inv if i.is_unpaid())
     total_income = total_paid + total_unpaid
     active_count = sum(1 for p in f_proj if p.is_active())
-    total_cams   = sum(p.num_cams for p in f_proj)
 
     # Monthly/yearly ref year
     if sel_year != "All":
@@ -1629,6 +1628,23 @@ if page == "📊 Dashboard":
         i.payment_amount for i in f_inv
         if i.is_paid() and i.year == ref_year
     )
+
+    def _project_start_year(project) -> Optional[int]:
+        if project.activation_date:
+            if isinstance(project.activation_date, datetime.datetime):
+                return project.activation_date.year
+            return int(project.activation_date.year)
+        if project.installation_year:
+            return int(project.installation_year)
+        return None
+
+    # Keep card semantics in sync with "Total Cameras" trend:
+    # active cameras accumulated up to the reference year.
+    total_cams = 0
+    for p in f_proj:
+        start_year = _project_start_year(p)
+        if p.is_active() and start_year is not None and start_year <= ref_year:
+            total_cams += _safe_int(p.num_cams)
 
     c1, c2, c3, c4, c5, c6 = st.columns(6)
     with c1: card("Total Income",            f"€{total_income:,.0f}", "card-income")
