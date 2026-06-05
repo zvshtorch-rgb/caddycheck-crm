@@ -3105,6 +3105,9 @@ elif page == "🔐 Licenses":
                     "source_name": _data_path,
                 })
                 load_data.clear()
+                # Reset License Status filter to "All" so the updated project is visible
+                # (it may move from "Expired" to "Active" and would otherwise be hidden).
+                st.session_state["license_status"] = "All"
                 st.session_state["_flash_success"] = (
                     f"License EOP updated for {selected_project.project_name}: {target_license_date.strftime('%Y-%m-%d')}"
                 )
