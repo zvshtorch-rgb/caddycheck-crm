@@ -212,6 +212,15 @@ ORDER_STATUS_OPTIONS = [
 ]
 
 TICKET_SUBCATEGORY_OPTIONS = ["PushOut", "TopDown", "BackTray", "License"]
+TICKET_TITLE_OPTIONS = [
+    "Detection improvement",
+    "License Problem",
+    "Milestone connection",
+    "DB corruption",
+    "Camera mounting",
+    "ROI of the detector not optimal",
+]
+TICKET_CAMERA_OPTIONS = [""] + [f"K{i}B" for i in range(1, 11)] + [f"K{i}TD" for i in range(1, 11)]
 
 SUPPORTED_ORDER_FILE_SUFFIXES = {".pdf", ".xlsx", ".xlsm", ".xls", ".csv"}
 from services.excel_service import (
@@ -4986,6 +4995,22 @@ elif page == "🎫 Tickets":
 
     st.title("🎫 Support Tickets")
 
+    def _append_camera_to_title(base_title: str, camera_name: str) -> str:
+        cleaned_title = _safe_str(base_title).strip()
+        cleaned_camera = _safe_str(camera_name).strip().upper()
+        if not cleaned_title:
+            return ""
+        if not cleaned_camera:
+            return cleaned_title
+        if cleaned_camera in cleaned_title.upper():
+            return cleaned_title
+        return f"{cleaned_title} - {cleaned_camera}"
+
+    def _extract_camera_from_title(title: str) -> str:
+        text = _safe_str(title).strip().upper()
+        match = re.search(r"\bK(10|[1-9])(B|TD)\b", text)
+        return match.group(0) if match else ""
+
     # ── Summary metrics ───────────────────────────────────────────────────────
     all_tickets = get_tickets()
     open_count     = sum(1 for t in all_tickets if t["status"] == "Open")
@@ -5006,17 +5031,27 @@ elif page == "🎫 Tickets":
             with st.form("new_ticket_form"):
                 project_names = sorted({p.project_name for p in projects})
                 t_project  = st.selectbox("Project", project_names, key="nt_proj")
-                t_title    = st.text_input("Title", key="nt_title")
+                t_title_choice = st.selectbox("Title", TICKET_TITLE_OPTIONS, index=0, key="nt_title_choice")
+                t_title_custom = st.text_input("Custom title (optional)", key="nt_title_custom")
+                t_camera_name = st.selectbox("Camera Name", TICKET_CAMERA_OPTIONS, index=0, key="nt_camera_name")
                 t_desc     = st.text_area("Description", height=100, key="nt_desc")
                 t_subcategory = st.selectbox("Sub-category", TICKET_SUBCATEGORY_OPTIONS, index=0, key="nt_subcat")
                 t_priority = st.selectbox("Priority", ["Low", "Medium", "High", "Critical"], index=1, key="nt_prio")
                 submitted  = st.form_submit_button("Create Ticket", type="primary")
             if submitted:
-                if not t_title.strip():
+                selected_title = _safe_str(t_title_custom).strip() or _safe_str(t_title_choice).strip()
+                ticket_title = _append_camera_to_title(selected_title, t_camera_name)
+                if not ticket_title:
                     st.error("Title is required.")
                 else:
                     try:
-                        ticket = create_ticket(t_project, t_title.strip(), t_desc.strip(), t_priority, t_subcategory)
+                        ticket = create_ticket(
+                            t_project,
+                            ticket_title,
+                            t_desc.strip(),
+                            t_priority,
+                            t_subcategory,
+                        )
                         st.success(f"Ticket {ticket.get('ticket_number', '')} created!")
                         st.rerun()
                     except Exception as e:
@@ -5107,6 +5142,31 @@ elif page == "🎫 Tickets":
                                           index=["Low", "Medium", "High", "Critical"].index(sel_ticket["priority"])
                                           if sel_ticket["priority"] in ["Low", "Medium", "High", "Critical"] else 1,
                                           key="upd_prio")
+            current_ticket_title = _safe_str(sel_ticket.get("title")).strip()
+            current_camera = _extract_camera_from_title(current_ticket_title)
+            clean_title_for_selection = re.sub(r"\s*-\s*K(10|[1-9])(B|TD)\s*$", "", current_ticket_title, flags=re.IGNORECASE).strip()
+            if clean_title_for_selection in TICKET_TITLE_OPTIONS:
+                upd_title_choice = st.selectbox(
+                    "Title",
+                    TICKET_TITLE_OPTIONS,
+                    index=TICKET_TITLE_OPTIONS.index(clean_title_for_selection),
+                    key="upd_title_choice",
+                )
+                upd_title_custom = st.text_input("Custom title (optional)", value="", key="upd_title_custom")
+            else:
+                upd_title_choice = st.selectbox("Title", TICKET_TITLE_OPTIONS, index=0, key="upd_title_choice")
+                upd_title_custom = st.text_input(
+                    "Custom title (optional)",
+                    value=clean_title_for_selection,
+                    key="upd_title_custom",
+                )
+            upd_camera_index = TICKET_CAMERA_OPTIONS.index(current_camera) if current_camera in TICKET_CAMERA_OPTIONS else 0
+            upd_camera_name = st.selectbox(
+                "Camera Name",
+                TICKET_CAMERA_OPTIONS,
+                index=upd_camera_index,
+                key="upd_camera_name",
+            )
             new_subcategory = st.selectbox(
                 "Sub-category",
                 TICKET_SUBCATEGORY_OPTIONS,
@@ -5121,7 +5181,16 @@ elif page == "🎫 Tickets":
 
         if upd_btn:
             try:
-                update_ticket(sel_ticket["id"], status=new_status, priority=new_priority, subcategory=new_subcategory, notes=new_notes)
+                resolved_title = _safe_str(upd_title_custom).strip() or _safe_str(upd_title_choice).strip()
+                resolved_title = _append_camera_to_title(resolved_title, upd_camera_name)
+                update_ticket(
+                    sel_ticket["id"],
+                    title=resolved_title,
+                    status=new_status,
+                    priority=new_priority,
+                    subcategory=new_subcategory,
+                    notes=new_notes,
+                )
                 st.success("Ticket updated!")
                 st.rerun()
             except Exception as e:
