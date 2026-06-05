@@ -170,6 +170,7 @@ def _is_maintenance_category(invoice) -> bool:
 
 from config.settings import (
     MONTH_ORDER,
+    normalize_month,
     canonical_project_name,
     get_email_config,
     save_email_config,
