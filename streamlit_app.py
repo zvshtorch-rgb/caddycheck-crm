@@ -1,6 +1,7 @@
 """CaddyCheck CRM — Streamlit web app (role-based access)."""
 import datetime
 import calendar
+import copy
 import io
 import logging
 import re
