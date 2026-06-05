@@ -1722,9 +1722,28 @@ if page == "📊 Dashboard":
     cc1, cc2, cc3, cc4 = st.columns([2, 2, 1, 1])
     if st.session_state.get("ch_metric") == "Cameras":
         st.session_state["ch_metric"] = "Total Cameras"
+    project_change_log_rows = load_project_change_log()
+
+    def _project_closed_events() -> list[dict]:
+        events = []
+        for row in project_change_log_rows:
+            if _safe_str(row.get("field_name")).strip().lower() != "status":
+                continue
+            if _safe_str(row.get("new_value")).strip().lower() != "offline":
+                continue
+            changed_at = _parse_optional_datetime(row.get("changed_at"))
+            if changed_at is None:
+                continue
+            events.append({
+                "project_name": _safe_str(row.get("project_name")).strip(),
+                "changed_at": changed_at,
+            })
+        return events
+
+    closed_project_events = _project_closed_events()
     metric     = cc1.selectbox(
         "Show",
-        ["Income (Paid)", "Income (All)", "Active Projects", "Total Cameras", "Added Cameras"],
+        ["Income (Paid)", "Income (All)", "Active Projects", "Total Cameras", "Added Cameras", "Closed Projects"],
         key="ch_metric",
     )
     resolution = cc2.selectbox("Resolution", ["Yearly", "Monthly"], key="ch_res")
@@ -1771,6 +1790,12 @@ if page == "📊 Dashboard":
                 v = sum(i.payment_amount for i in invoices if i.year == yr)
             elif metric == "Active Projects":
                 v = sum(1 for p in projects if p.installation_year and p.installation_year <= yr and p.is_active())
+            elif metric == "Closed Projects":
+                v = len({
+                    event["project_name"]
+                    for event in closed_project_events
+                    if event["changed_at"].year == yr and event["project_name"]
+                })
             elif metric == "Added Cameras":
                 v = sum(
                     p.num_cams
@@ -1816,6 +1841,14 @@ if page == "📊 Dashboard":
                         and i.payment_date.year == monthly_year and i.payment_date.month == mo)
             elif metric == "Active Projects":
                 v = sum(1 for p in projects if p.installation_year and p.installation_year <= monthly_year and p.is_active())
+            elif metric == "Closed Projects":
+                v = len({
+                    event["project_name"]
+                    for event in closed_project_events
+                    if event["changed_at"].year == monthly_year
+                    and event["changed_at"].month == mo
+                    and event["project_name"]
+                })
             elif metric == "Added Cameras":
                 v = sum(
                     p.num_cams
