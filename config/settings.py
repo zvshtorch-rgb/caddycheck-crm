@@ -42,6 +42,19 @@ LICENSE_CHANGE_LOG_FILE = CONFIG_DIR / "license_change_log.json"
 PROJECT_CHANGE_LOG_FILE = CONFIG_DIR / "project_change_log.json"
 BANK_PAYMENTS_LOG_FILE = CONFIG_DIR / "bank_payments_log.json"
 ORDERS_FILE = CONFIG_DIR / "orders.json"
+EXCHANGE_RATES_FILE = CONFIG_DIR / "exchange_rates.json"
+
+DEFAULT_EUR_TO_ILS_RATES = {
+    2018: 4.22,
+    2019: 3.95,
+    2020: 4.03,
+    2021: 3.84,
+    2022: 3.49,
+    2023: 4.02,
+    2024: 4.01,
+    2025: 4.03,
+    2026: 4.05,
+}
 
 PROJECT_NAME_ALIASES = {
     "ad waaken": "Proxy Waaken",
@@ -239,6 +252,37 @@ def save_email_config(config: dict) -> None:
     safe_config.pop("smtp_password", None)
     with open(EMAIL_CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(safe_config, f, indent=2)
+
+
+def get_eur_to_ils_rates() -> dict[int, float]:
+    """Load yearly EUR to ILS exchange rates, merging saved values over defaults."""
+    rates = {int(year): float(value) for year, value in DEFAULT_EUR_TO_ILS_RATES.items()}
+    if EXCHANGE_RATES_FILE.exists():
+        try:
+            with open(EXCHANGE_RATES_FILE, "r", encoding="utf-8") as f:
+                raw_rates = json.load(f)
+            if isinstance(raw_rates, dict):
+                for year, value in raw_rates.items():
+                    try:
+                        rates[int(year)] = float(value)
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+    return dict(sorted(rates.items()))
+
+
+def save_eur_to_ils_rates(rates: dict[int, float]) -> None:
+    """Persist yearly EUR to ILS exchange rates."""
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    normalized_rates = {}
+    for year, value in rates.items():
+        try:
+            normalized_rates[str(int(year))] = float(value)
+        except Exception:
+            continue
+    with open(EXCHANGE_RATES_FILE, "w", encoding="utf-8") as f:
+        json.dump(dict(sorted(normalized_rates.items())), f, indent=2)
 
 
 def _is_missing_supabase_table_error(exc: Exception, table_name: str) -> bool:

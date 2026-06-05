@@ -174,6 +174,8 @@ from config.settings import (
     canonical_project_name,
     get_email_config,
     save_email_config,
+    get_eur_to_ils_rates,
+    save_eur_to_ils_rates,
     load_sent_invoices_log,
     append_sent_invoice_log,
     save_sent_invoices_log,
@@ -1596,7 +1598,7 @@ if page == "📊 Dashboard":
 
     # ── Filters ───────────────────────────────────────────────────────────────
     with st.expander("Filters", expanded=True):
-        col1, col2, col3, col4 = st.columns(4)
+        col1, col2, col3, col4, col5 = st.columns(5)
         years = sorted({inv.year for inv in invoices if inv.year}, reverse=True)
         year_opts = ["All"] + [str(y) for y in years]
         sel_year   = col1.selectbox("Year",    year_opts)
@@ -1604,6 +1606,7 @@ if page == "📊 Dashboard":
         countries  = sorted({p.country for p in projects if p.country})
         sel_country= col3.selectbox("Country", ["All"] + countries)
         sel_status = col4.selectbox("Status",  ["All", "Paid", "Unpaid", "Cancelled"])
+        dashboard_currency = col5.selectbox("Currency", ["EUR", "ILS"], index=0)
 
     # ── Filter invoices ───────────────────────────────────────────────────────
     proj_country = {p.project_name.lower(): p.country for p in projects}
@@ -1636,11 +1639,9 @@ if page == "📊 Dashboard":
 
     f_inv  = filter_invoices(invoices)
     f_proj = filter_projects(projects)
+    eur_to_ils_rates = get_eur_to_ils_rates()
 
     # ── Summary cards ─────────────────────────────────────────────────────────
-    total_paid   = sum(i.payment_amount for i in f_inv if i.is_paid())
-    total_unpaid = sum(i.payment_amount for i in f_inv if i.is_unpaid())
-    total_income = total_paid + total_unpaid
     active_count = sum(1 for p in f_proj if p.is_active())
     projection_year = 2026
 
@@ -1651,15 +1652,58 @@ if page == "📊 Dashboard":
         paid_years = [i.year for i in f_inv if i.is_paid() and i.year]
         ref_year = max(paid_years) if paid_years else datetime.datetime.now().year
 
+    money_label = "EUR (€)" if dashboard_currency == "EUR" else "ILS (₪)"
+    money_symbol = "€" if dashboard_currency == "EUR" else "₪"
+
+    def _resolve_rate_year(year: Optional[int]) -> Optional[int]:
+        if not eur_to_ils_rates:
+            return None
+        if year is None:
+            return max(eur_to_ils_rates)
+        year = int(year)
+        if year in eur_to_ils_rates:
+            return year
+        prior_years = [rate_year for rate_year in eur_to_ils_rates if rate_year <= year]
+        if prior_years:
+            return max(prior_years)
+        return min(eur_to_ils_rates)
+
+    def _convert_amount(amount: float, year: Optional[int]) -> float:
+        amount = _safe_float(amount)
+        if dashboard_currency == "EUR":
+            return amount
+        rate_year = _resolve_rate_year(year)
+        rate = _safe_float(eur_to_ils_rates.get(rate_year), default=1.0)
+        return amount * (rate if rate > 0 else 1.0)
+
+    def _invoice_rate_year(invoice, prefer_payment_date: bool = False) -> int:
+        if prefer_payment_date and invoice.payment_date:
+            return int(invoice.payment_date.year)
+        if invoice.year:
+            return int(invoice.year)
+        if invoice.payment_date:
+            return int(invoice.payment_date.year)
+        return ref_year
+
+    def _invoice_display_amount(invoice, prefer_payment_date: bool = False) -> float:
+        return _convert_amount(invoice.payment_amount, _invoice_rate_year(invoice, prefer_payment_date=prefer_payment_date))
+
+    def _format_money(amount: float) -> str:
+        return f"{money_symbol}{amount:,.0f}"
+
+    total_paid = sum(_invoice_display_amount(i) for i in f_inv if i.is_paid())
+    total_unpaid = sum(_invoice_display_amount(i) for i in f_inv if i.is_unpaid())
+    total_income = total_paid + total_unpaid
+
     yearly_val = sum(
-        i.payment_amount for i in f_inv
+        _invoice_display_amount(i) for i in f_inv
         if i.is_paid() and i.year == ref_year
     )
 
     current_month_start = datetime.date.today().replace(day=1)
     trailing_12_month_start = _add_months(current_month_start, -11)
     trailing_12_month_paid = sum(
-        i.payment_amount
+        _invoice_display_amount(i, prefer_payment_date=True)
         for i in invoices
         if i.is_paid()
         and i.payment_date
@@ -1672,12 +1716,13 @@ if page == "📊 Dashboard":
     projected_maintenance_income_2026 = 0.0
     for month_name in MONTH_ORDER:
         month_projects = get_monthly_invoice_projects(f_proj, month_name, projection_year)
-        month_amount = sum(project.get_expected_amount(projection_year) for project in month_projects)
+        month_amount_eur = sum(project.get_expected_amount(projection_year) for project in month_projects)
+        month_amount = _convert_amount(month_amount_eur, projection_year)
         projected_maintenance_income_2026 += month_amount
         projected_maintenance_rows.append({
             "Month": month_name,
             "Projects": len(month_projects),
-            "Expected Income (€)": month_amount,
+            f"Expected Income ({money_symbol})": month_amount,
         })
 
     def _project_start_year(project) -> Optional[int]:
@@ -1699,17 +1744,17 @@ if page == "📊 Dashboard":
 
     top_row = st.columns(4)
     bottom_row = st.columns(4)
-    with top_row[0]: card("Total Income", f"€{total_income:,.0f}", "card-income")
-    with top_row[1]: card("Total Paid", f"€{total_paid:,.0f}", "card-paid")
-    with top_row[2]: card("Total Debt", f"€{total_unpaid:,.0f}", "card-debt")
-    with top_row[3]: card(f"Yearly Income ({ref_year})", f"€{yearly_val:,.0f}", "card-yearly")
+    with top_row[0]: card("Total Income", _format_money(total_income), "card-income")
+    with top_row[1]: card("Total Paid", _format_money(total_paid), "card-paid")
+    with top_row[2]: card("Total Debt", _format_money(total_unpaid), "card-debt")
+    with top_row[3]: card(f"Yearly Income ({ref_year})", _format_money(yearly_val), "card-yearly")
     with bottom_row[0]: card("Active Projects", str(active_count), "card-projects")
     with bottom_row[1]: card("Total Cameras", str(total_cams), "card-cameras")
-    with bottom_row[2]: card(f"Projected Maint. {projection_year}", f"€{projected_maintenance_income_2026:,.0f}", "card-income")
-    with bottom_row[3]: card("Avg Monthly Paid (12M)", f"€{avg_monthly_paid_last_12m:,.0f}", "card-yearly")
+    with bottom_row[2]: card(f"Projected Maint. {projection_year}", _format_money(projected_maintenance_income_2026), "card-income")
+    with bottom_row[3]: card("Avg Monthly Paid (12M)", _format_money(avg_monthly_paid_last_12m), "card-yearly")
 
     with st.expander(f"Projected Maintenance Income ({projection_year})", expanded=False):
-        st.caption("Based on active monthly-maintenance projects and their expected invoice amount for 2026.")
+        st.caption(f"Based on active monthly-maintenance projects and their expected invoice amount for {projection_year}. Values are shown in {dashboard_currency}.")
         st.dataframe(
             pd.DataFrame(projected_maintenance_rows),
             use_container_width=True,
@@ -1806,7 +1851,7 @@ if page == "📊 Dashboard":
         to_yr = monthly_year
 
     is_income = metric.startswith("Income")
-    y_label   = "EUR (€)" if is_income else "Count"
+    y_label   = money_label if is_income else "Count"
 
     def _project_start_date(project):
         if project.activation_date:
@@ -1822,9 +1867,9 @@ if page == "📊 Dashboard":
         for yr in range(from_yr, to_yr + 1):
             labels.append(str(yr))
             if metric == "Income (Paid)":
-                v = sum(i.payment_amount for i in invoices if i.is_paid() and i.year == yr)
+                v = sum(_convert_amount(i.payment_amount, yr) for i in invoices if i.is_paid() and i.year == yr)
             elif metric == "Income (All)":
-                v = sum(i.payment_amount for i in invoices if i.year == yr)
+                v = sum(_convert_amount(i.payment_amount, yr) for i in invoices if i.year == yr)
             elif metric == "Active Projects":
                 v = sum(1 for p in projects if p.installation_year and p.installation_year <= yr and p.is_active())
             elif metric == "Closed Projects":
@@ -1869,11 +1914,11 @@ if page == "📊 Dashboard":
         for mo in range(1, 13):
             month_end = datetime.date(monthly_year, mo, calendar.monthrange(monthly_year, mo)[1])
             if metric == "Income (Paid)":
-                v = sum(i.payment_amount for i in invoices
+                v = sum(_convert_amount(i.payment_amount, monthly_year) for i in invoices
                         if i.is_paid() and i.payment_date
                         and i.payment_date.year == monthly_year and i.payment_date.month == mo)
             elif metric == "Income (All)":
-                v = sum(i.payment_amount for i in invoices
+                v = sum(_convert_amount(i.payment_amount, monthly_year) for i in invoices
                         if i.payment_date
                         and i.payment_date.year == monthly_year and i.payment_date.month == mo)
             elif metric == "Active Projects":
@@ -5244,6 +5289,42 @@ elif page == "⚙️ Settings":
                     st.error(msg)
             except Exception as e:
                 st.error(str(e))
+
+        st.markdown("---")
+        st.subheader("Historical EUR to ILS Rates")
+        st.caption("Dashboard and Trends use these yearly rates when Currency is set to ILS.")
+
+        rates_df = pd.DataFrame([
+            {"Year": int(year), "EUR to ILS": float(rate)}
+            for year, rate in get_eur_to_ils_rates().items()
+        ])
+        edited_rates_df = st.data_editor(
+            rates_df,
+            use_container_width=True,
+            hide_index=True,
+            num_rows="dynamic",
+            key="eur_to_ils_rates_editor",
+            column_config={
+                "Year": st.column_config.NumberColumn("Year", min_value=2000, max_value=2100, step=1, format="%d"),
+                "EUR to ILS": st.column_config.NumberColumn("EUR to ILS", min_value=0.0, step=0.01, format="%.4f"),
+            },
+        )
+
+        if st.button("Save EUR to ILS Rates", type="primary"):
+            try:
+                normalized_rates = {}
+                for row in edited_rates_df.to_dict(orient="records"):
+                    year = _safe_int(row.get("Year"), default=0)
+                    rate = _safe_float(row.get("EUR to ILS"), default=0.0)
+                    if year and rate > 0:
+                        normalized_rates[int(year)] = float(rate)
+                if not normalized_rates:
+                    raise ValueError("Add at least one valid year/rate pair.")
+                save_eur_to_ils_rates(normalized_rates)
+                st.success("EUR to ILS rates saved.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Could not save exchange rates: {e}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
