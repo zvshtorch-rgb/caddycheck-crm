@@ -414,6 +414,8 @@ def load_data():
         projects = load_projects_excel()
         invoices = load_invoices_excel()
         source_name = "Excel (local fallback)"
+    for project in projects:
+        project.status = _normalize_project_status(getattr(project, "status", ""))
     debt_summaries = compute_debt_summaries(projects, invoices)
     yearly_summary = get_yearly_summary(invoices)
     return projects, invoices, debt_summaries, yearly_summary, source_name
@@ -1785,7 +1787,7 @@ if page == "📊 Dashboard":
         "# Cams":          _safe_int(p.num_cams),
         "Payment Month":   _safe_str(p.payment_month),
         "Install Year":    _safe_str(p.installation_year),
-        "Status":          _safe_str(p.status),
+        "Status":          _normalize_project_status(_safe_str(p.status)),
     } for p in sorted_proj])
     proj_display_df = proj_df.copy()
     if len(proj_display_df) > 0:
