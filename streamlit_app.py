@@ -6335,7 +6335,7 @@ elif page == "🏦 Bank Payment":
             )
             credit_no_invoice_link = st.checkbox(
                 "Do not link credit to an invoice number",
-                value=False,
+                value=True,
                 key="credit_no_invoice_link",
                 help="When enabled, the credit is recorded as a standalone credit entry.",
             )
