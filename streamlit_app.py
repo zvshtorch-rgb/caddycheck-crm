@@ -3403,7 +3403,7 @@ elif page == "🔐 Licenses":
             new_license_date = st.date_input(
                 "New License EOP",
                 value=_add_months(today, 12),
-                key="license_new_date",
+                key="license_new_date_from_today",
             )
             if current_license_date:
                 st.caption(f"Current License EOP: {current_license_date.strftime('%Y-%m-%d')}")
