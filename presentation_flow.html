@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>CaddyCheck CRM – System Flow</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    /* ── SLIDES ── */
+    .slide {
+      display: none;
+      position: absolute;
+      inset: 0;
+      padding: 60px 80px;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      animation: fadeIn 0.4s ease;
+    }
+    .slide.active { display: flex; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+
+    /* ── TITLE SLIDE ── */
+    .slide-title { background: linear-gradient(135deg, #1e3a5f 0%, #0f172a 100%); }
+    .slide-title h1 { font-size: 3rem; font-weight: 700; color: #38bdf8; text-align: center; }
+    .slide-title p  { font-size: 1.3rem; color: #94a3b8; margin-top: 16px; text-align: center; }
+    .badge { background: #1e40af; color: #bfdbfe; padding: 6px 18px; border-radius: 20px; font-size: 0.9rem; margin-top: 28px; }
+
+    /* ── GENERAL SLIDE HEADER ── */
+    h2 { font-size: 1.9rem; font-weight: 700; color: #38bdf8; margin-bottom: 32px; text-align: center; }
+    h3 { font-size: 1.1rem; font-weight: 600; color: #7dd3fc; margin-bottom: 10px; }
+
+    /* ── OVERVIEW CARDS ── */
+    .cards { display: flex; gap: 24px; flex-wrap: wrap; justify-content: center; width: 100%; }
+    .card {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 16px;
+      padding: 28px 24px;
+      flex: 1;
+      min-width: 180px;
+      max-width: 220px;
+      text-align: center;
+      transition: transform 0.2s;
+    }
+    .card:hover { transform: translateY(-4px); }
+    .card .icon { font-size: 2.6rem; margin-bottom: 12px; }
+    .card .label { font-size: 1.1rem; font-weight: 600; color: #e2e8f0; }
+    .card .desc { font-size: 0.82rem; color: #94a3b8; margin-top: 6px; line-height: 1.5; }
+
+    /* ── FLOW DIAGRAM ── */
+    .flow { display: flex; align-items: center; justify-content: center; gap: 0; flex-wrap: nowrap; width: 100%; }
+    .flow-box {
+      background: #1e293b;
+      border: 2px solid #334155;
+      border-radius: 14px;
+      padding: 20px 22px;
+      text-align: center;
+      min-width: 140px;
+    }
+    .flow-box .icon { font-size: 2rem; }
+    .flow-box .name { font-size: 0.95rem; font-weight: 600; margin-top: 6px; color: #e2e8f0; }
+    .flow-box .sub  { font-size: 0.75rem; color: #64748b; margin-top: 3px; }
+    .arrow { font-size: 2rem; color: #38bdf8; padding: 0 10px; }
+    .arrow-label { display: flex; flex-direction: column; align-items: center; padding: 0 6px; }
+    .arrow-label span { font-size: 0.7rem; color: #7dd3fc; margin-top: 2px; white-space: nowrap; }
+
+    /* ── STEP LIST ── */
+    .steps { width: 100%; max-width: 760px; }
+    .step {
+      display: flex;
+      align-items: flex-start;
+      gap: 18px;
+      background: #1e293b;
+      border-left: 4px solid #38bdf8;
+      border-radius: 10px;
+      padding: 16px 20px;
+      margin-bottom: 14px;
+    }
+    .step-num {
+      background: #0ea5e9;
+      color: #0f172a;
+      font-weight: 700;
+      font-size: 1rem;
+      border-radius: 50%;
+      width: 30px; height: 30px;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+    }
+    .step-text strong { color: #7dd3fc; font-size: 1rem; }
+    .step-text p { font-size: 0.85rem; color: #94a3b8; margin-top: 3px; line-height: 1.5; }
+
+    /* ── TABLE ── */
+    table { width: 100%; max-width: 760px; border-collapse: collapse; }
+    th { background: #1e3a5f; color: #7dd3fc; padding: 12px 16px; text-align: left; font-size: 0.9rem; }
+    td { padding: 12px 16px; border-bottom: 1px solid #1e293b; font-size: 0.88rem; color: #cbd5e1; }
+    tr:hover td { background: #1e293b; }
+
+    /* ── CODE BLOCK ── */
+    .code-block {
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 10px;
+      padding: 20px 24px;
+      font-family: 'Consolas', monospace;
+      font-size: 0.88rem;
+      line-height: 1.8;
+      color: #a5f3fc;
+      max-width: 700px;
+      width: 100%;
+    }
+    .code-block .comment { color: #475569; }
+    .code-block .key    { color: #f472b6; }
+    .code-block .val    { color: #86efac; }
+
+    /* ── SECRETS HIGHLIGHT ── */
+    .secret-note {
+      background: #422006;
+      border: 1px solid #d97706;
+      border-radius: 10px;
+      padding: 14px 20px;
+      margin-top: 20px;
+      font-size: 0.87rem;
+      color: #fde68a;
+      max-width: 700px;
+      width: 100%;
+      text-align: center;
+    }
+
+    /* ── NAVIGATION ── */
+    .nav {
+      position: fixed;
+      bottom: 28px;
+      right: 36px;
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      z-index: 100;
+    }
+    .nav button {
+      background: #1e40af;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 22px;
+      font-size: 0.95rem;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .nav button:hover { background: #2563eb; }
+    .nav button:disabled { background: #1e293b; color: #475569; cursor: not-allowed; }
+    .slide-counter {
+      font-size: 0.85rem;
+      color: #64748b;
+    }
+
+    /* ── PROGRESS BAR ── */
+    .progress {
+      position: fixed;
+      top: 0; left: 0;
+      height: 4px;
+      background: #38bdf8;
+      transition: width 0.3s ease;
+      z-index: 200;
+    }
+  </style>
+</head>
+<body>
+
+<div class="progress" id="progress"></div>
+
+<!-- ══════════════════════════════════════════════ -->
+<!-- SLIDE 1 – TITLE                                -->
+<!-- ══════════════════════════════════════════════ -->
+<div class="slide slide-title active">
+  <h1>CaddyCheck CRM</h1>
+  <p>System Architecture & Data Flow</p>
+  <div class="badge">Streamlit · Supabase · GitHub · Streamlit Cloud</div>
+</div>
+
+<!-- ══════════════════════════════════════════════ -->
+<!-- SLIDE 2 – THE 4 LAYERS                         -->
+<!-- ══════════════════════════════════════════════ -->
+<div class="slide">
+  <h2>The 4 Layers at a Glance</h2>
+  <div class="cards">
+    <div class="card">
+      <div class="icon">🖥️</div>
+      <div class="label">Streamlit</div>
+      <div class="desc">Web UI + business logic. Runs in the browser, reads &amp; writes data.</div>
+    </div>
+    <div class="card">
+      <div class="icon">🗄️</div>
+      <div class="label">Supabase</div>
+      <div class="desc">PostgreSQL database + file storage buckets. All persistent data lives here.</div>
+    </div>
+    <div class="card">
+      <div class="icon">🐙</div>
+      <div class="label">GitHub</div>
+      <div class="desc">Source code repository. Triggers automatic redeploy on every push.</div>
+    </div>
+    <div class="card">
+      <div class="icon">☁️</div>
+      <div class="label">Streamlit Cloud</div>
+      <div class="desc">Hosts the app publicly. Injects secrets, installs dependencies, serves users.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════ -->
+<!-- SLIDE 3 – RUNTIME DATA FLOW                    -->
+<!-- ══════════════════════════════════════════════ -->
+<div class="slide">
+  <h2>Runtime Data Flow</h2>
+  <div class="flow">
+    <div class="flow-box">
+      <div class="icon">👤</div>
+      <div class="name">User</div>
+      <div class="sub">Browser</div>
+    </div>
+    <div class="arrow-label">
+      <div class="arrow">→</div>
+      <span>interacts</span>
+    </div>
+    <div class="flow-box">
+      <div class="icon">🖥️</div>
+      <div class="name">streamlit_app.py</div>
+      <div class="sub">UI / Pages</div>
+    </div>
+    <div class="arrow-label">
+      <div class="arrow">→</div>
+      <span>calls</span>
+    </div>
+    <div class="flow-box">
+      <div class="icon">⚙️</div>
+      <div class="name">supabase_service.py</div>
+      <div class="sub">services/</div>
+    </div>
+    <div class="arrow-label">
+      <div class="arrow">⇄</div>
+      <span>SQL + Storage</span>
+    </div>
+    <div class="flow-box">
+      <div class="icon">🗄️</div>
+      <div class="name">Supabase</div>
+      <div class="sub">DB + Buckets</div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════ -->
+<!-- SLIDE 4 – WHAT IS STORED IN SUPABASE           -->
+<!-- ══════════════════════════════════════════════ -->
+<div class="slide">
+  <h2>What Lives in Supabase?</h2>
+  <table>
+    <tr><th>Table / Bucket</th><th>Contents</th></tr>
+    <tr><td>projects</td><td>Customer / project records</td></tr>
+    <tr><td>invoices</td><td>Invoice headers &amp; line items</td></tr>
+    <tr><td>subscriptions</td><td>Recurring subscription data</td></tr>
+    <tr><td>orders</td><td>Order records</td></tr>
+    <tr><td>bank_payments</td><td>Bank transfer records</td></tr>
+    <tr><td>sent_invoices</td><td>History of sent invoices</td></tr>
+    <tr><td>license_change_log</td><td>Audit log of license changes</td></tr>
+    <tr><td>sent-invoices (bucket)</td><td>PDF invoice files</td></tr>
+    <tr><td>order-pdfs (bucket)</td><td>Order PDF files</td></tr>
+    <tr><td>bank-payments (bucket)</td><td>Bank payment PDF files</td></tr>
+  </table>
+</div>
+
+<!-- ══════════════════════════════════════════════ -->
+<!-- SLIDE 5 – DEPLOYMENT FLOW                      -->
+<!-- ══════════════════════════════════════════════ -->
+<div class="slide">
+  <h2>Deployment Flow</h2>
+  <div class="flow" style="flex-direction: column; gap: 0;">
+    <div style="display:flex; align-items:center; gap:0; justify-content:center;">
+      <div class="flow-box">
+        <div class="icon">💻</div>
+        <div class="name">Local Code</div>
+        <div class="sub">f:\caddycheck-crm</div>
+      </div>
+      <div class="arrow-label">
+        <div class="arrow">→</div>
+        <span>git push</span>
+      </div>
+      <div class="flow-box">
+        <div class="icon">🐙</div>
+        <div class="name">GitHub Repo</div>
+        <div class="sub">main branch</div>
+      </div>
+      <div class="arrow-label">
+        <div class="arrow">→</div>
+        <span>auto-detects push</span>
+      </div>
+      <div class="flow-box">
+        <div class="icon">☁️</div>
+        <div class="name">Streamlit Cloud</div>
+        <div class="sub">redeploys app</div>
+      </div>
+      <div class="arrow-label">
+        <div class="arrow">→</div>
+        <span>serves</span>
+      </div>
+      <div class="flow-box">
+        <div class="icon">🌐</div>
+        <div class="name">Live App</div>
+        <div class="sub">Public URL</div>
+      </div>
+    </div>
+  </div>
+  <div class="secret-note" style="margin-top:36px;">
+    ⚠️ Secrets (Supabase URL &amp; keys) are set in <strong>Streamlit Cloud dashboard</strong> — never committed to Git.
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════ -->
+<!-- SLIDE 6 – HOW SECRETS WORK                     -->
+<!-- ══════════════════════════════════════════════ -->
+<div class="slide">
+  <h2>How Secrets Are Handled</h2>
+  <div class="code-block">
+    <span class="comment"># Local development: .streamlit/secrets.toml (NOT in Git)</span><br>
+    <span class="key">[supabase]</span><br>
+    url &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;= <span class="val">"https://xxxx.supabase.co"</span><br>
+    service_role_key = <span class="val">"eyJ..."</span>
+  </div>
+  <div class="code-block" style="margin-top:16px;">
+    <span class="comment"># supabase_service.py reads them at runtime:</span><br>
+    cfg = st.secrets.get(<span class="val">"supabase"</span>, {})<br>
+    url = cfg.get(<span class="val">"url"</span>, <span class="val">""</span>)<br>
+    key = cfg.get(<span class="val">"service_role_key"</span>, cfg.get(<span class="val">"anon_key"</span>, <span class="val">""</span>))
+  </div>
+  <div class="secret-note">
+    On Streamlit Cloud, the same values are entered in <strong>App Settings → Secrets</strong> (UI, not a file).
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════ -->
+<!-- SLIDE 7 – STEP-BY-STEP FULL LIFECYCLE          -->
+<!-- ══════════════════════════════════════════════ -->
+<div class="slide">
+  <h2>Full Lifecycle – Step by Step</h2>
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div class="step-text">
+        <strong>Developer writes code locally</strong>
+        <p>Edits streamlit_app.py, services/, ui/ etc. on their machine.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div class="step-text">
+        <strong>git push → GitHub</strong>
+        <p>Code is pushed to the GitHub repository (no data, no secrets).</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div class="step-text">
+        <strong>Streamlit Cloud detects the push</strong>
+        <p>Automatically pulls the new code, installs requirements_streamlit.txt, restarts the app.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div class="step-text">
+        <strong>User opens the app URL</strong>
+        <p>Streamlit renders the UI; the app connects to Supabase using injected secrets.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">5</div>
+      <div class="step-text">
+        <strong>Data read/write goes to Supabase</strong>
+        <p>All projects, invoices, PDFs, and logs are stored and retrieved from Supabase — not from Git.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════ -->
+<!-- SLIDE 8 – KEY PRINCIPLE                        -->
+<!-- ══════════════════════════════════════════════ -->
+<div class="slide">
+  <h2>Key Principle</h2>
+  <div class="cards" style="gap:32px;">
+    <div class="card" style="max-width:300px;">
+      <div class="icon">🐙</div>
+      <div class="label">Git = Code</div>
+      <div class="desc" style="font-size:0.95rem; margin-top:12px; color:#e2e8f0;">
+        Source code, UI, business logic, migrations.<br><br>
+        <span style="color:#ef4444;">NOT data, NOT secrets.</span>
+      </div>
+    </div>
+    <div class="card" style="max-width:300px;">
+      <div class="icon">🗄️</div>
+      <div class="label">Supabase = Data</div>
+      <div class="desc" style="font-size:0.95rem; margin-top:12px; color:#e2e8f0;">
+        All persistent data: customers, invoices, PDFs, logs.<br><br>
+        <span style="color:#ef4444;">NOT code, NOT deployments.</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════ -->
+<!-- NAVIGATION                                     -->
+<!-- ══════════════════════════════════════════════ -->
+<div class="nav">
+  <button id="prev" onclick="changeSlide(-1)" disabled>◀ Prev</button>
+  <span class="slide-counter" id="counter">1 / 8</span>
+  <button id="next" onclick="changeSlide(1)">Next ▶</button>
+</div>
+
+<script>
+  const slides = document.querySelectorAll('.slide');
+  const total = slides.length;
+  let current = 0;
+
+  function changeSlide(dir) {
+    slides[current].classList.remove('active');
+    current = Math.max(0, Math.min(total - 1, current + dir));
+    slides[current].classList.add('active');
+    document.getElementById('counter').textContent = (current + 1) + ' / ' + total;
+    document.getElementById('prev').disabled = current === 0;
+    document.getElementById('next').disabled = current === total - 1;
+    document.getElementById('progress').style.width = ((current + 1) / total * 100) + '%';
+  }
+
+  // Keyboard navigation
+  document.addEventListener('keydown', e => {
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') changeSlide(1);
+    if (e.key === 'ArrowLeft'  || e.key === 'ArrowUp')   changeSlide(-1);
+  });
+
+  // Init progress bar
+  document.getElementById('progress').style.width = (1 / total * 100) + '%';
+</script>
+</body>
+</html>

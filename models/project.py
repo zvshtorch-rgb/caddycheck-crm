@@ -52,4 +52,4 @@ class Project:
         return f"Y{self.get_maintenance_year(invoice_year)}"
 
     def is_active(self) -> bool:
-        return str(self.status).strip().lower() == "active"
+        return str(self.status).strip().lower() in {"active", "installed"}

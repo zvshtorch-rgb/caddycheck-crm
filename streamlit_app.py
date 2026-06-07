@@ -230,6 +230,8 @@ ORDER_STATUS_OPTIONS = [
     "Cancelled",
 ]
 
+PROJECT_STATUS_OPTIONS = ORDER_STATUS_OPTIONS.copy()
+
 TICKET_SUBCATEGORY_OPTIONS = ["PushOut", "TopDown", "BackTray", "License"]
 TICKET_TITLE_OPTIONS = [
     "Detection improvement",
@@ -514,8 +516,8 @@ def _add_months(base_date: datetime.date, months: int) -> datetime.date:
 
 def _license_status(project, today: Optional[datetime.date] = None) -> str:
     today = today or datetime.date.today()
-    if str(getattr(project, "status", "")).strip().lower() == "offline":
-        return "Offline"
+    if _normalize_project_status(getattr(project, "status", "")).lower() == "cancelled":
+        return "Cancelled"
     license_date = _project_license_date(project)
     if license_date is None:
         return "Missing"
@@ -1104,7 +1106,7 @@ def _parse_single_project_order_pdf(file_bytes: bytes, filename: str, raw_df: Op
         "payment_month": "",
         "installation_year": activation_date.year if activation_date else None,
         "activation_date": activation_date,
-        "status": "Active",
+        "status": "New",
         "license_eop": None,
     }]
 
@@ -1159,7 +1161,7 @@ def _parse_uploaded_project_order(file_bytes: bytes, filename: str) -> tuple[dic
             install_year = activation_date.year
 
         payment_month = normalize_month(_safe_str(raw_df.iat[row_idx, columns["payment_month"]]).strip()) if "payment_month" in columns else ""
-        status = _safe_str(raw_df.iat[row_idx, columns["status"]]).strip() if "status" in columns else "Active"
+        status = _safe_str(raw_df.iat[row_idx, columns["status"]]).strip() if "status" in columns else "New"
 
         rows.append({
             "project_name": project_name,
@@ -1175,7 +1177,7 @@ def _parse_uploaded_project_order(file_bytes: bytes, filename: str) -> tuple[dic
             "payment_month": payment_month,
             "installation_year": install_year,
             "activation_date": activation_date,
-            "status": status or "Active",
+            "status": _normalize_project_status(status or "New"),
             "license_eop": _parse_optional_datetime(raw_df.iat[row_idx, columns["license_eop"]]) if "license_eop" in columns else None,
         })
 
@@ -1384,6 +1386,18 @@ def _normalize_order_status(value: str) -> str:
     return cleaned
 
 
+def _normalize_project_status(value: str) -> str:
+    cleaned = _safe_str(value).strip()
+    if not cleaned:
+        return "New"
+    if cleaned.lower() == "offline":
+        return "Cancelled"
+    for option in PROJECT_STATUS_OPTIONS:
+        if option.lower() == cleaned.lower():
+            return option
+    return cleaned
+
+
 def _normalize_country(value: str) -> str:
     """Normalize country codes and names to full country names."""
     cleaned = _safe_str(value).strip()
@@ -1428,9 +1442,7 @@ def _serialize_order_value(value):
 
 def _project_status_from_order_status(order_status: str) -> str:
     normalized = _normalize_order_status(order_status)
-    if normalized in {"Active", "Installed"}:
-        return "Active"
-    return "Offline"
+    return _normalize_project_status(normalized)
 
 
 @st.cache_data(ttl=300)
@@ -1811,7 +1823,7 @@ if page == "📊 Dashboard":
         for row in project_change_log_rows:
             if _safe_str(row.get("field_name")).strip().lower() != "status":
                 continue
-            if _safe_str(row.get("new_value")).strip().lower() != "offline":
+            if _normalize_project_status(row.get("new_value", "")).lower() != "cancelled":
                 continue
             changed_at = _parse_optional_datetime(row.get("changed_at"))
             if changed_at is None:
@@ -2118,20 +2130,18 @@ elif page == "🏗️ Projects":
     # Filters
     col1, col2, col3 = st.columns(3)
     countries = sorted({p.country for p in projects if p.country})
-    project_statuses = sorted({p.status for p in projects if p.status})
+    project_statuses = sorted({_normalize_project_status(p.status) for p in projects if p.status})
     install_year_options = [""] + [str(year) for year in range(2030, 2013, -1)]
     payment_month_options = [""] + MONTH_ORDER
     sel_country = col1.selectbox("Country", ["All"] + countries, key="proj_country")
-    sel_status  = col2.selectbox("Status",  ["All", "Active", "Offline"], key="proj_status")
+    sel_status  = col2.selectbox("Status",  ["All"] + PROJECT_STATUS_OPTIONS, key="proj_status")
     search      = col3.text_input("Search project name", key="proj_search")
 
     filtered = projects
     if sel_country != "All":
         filtered = [p for p in filtered if p.country == sel_country]
-    if sel_status == "Active":
-        filtered = [p for p in filtered if p.is_active()]
-    elif sel_status == "Offline":
-        filtered = [p for p in filtered if not p.is_active()]
+    if sel_status != "All":
+        filtered = [p for p in filtered if _normalize_project_status(p.status) == sel_status]
     if search:
         filtered = [p for p in filtered if search.lower() in p.project_name.lower()]
 
@@ -2150,7 +2160,7 @@ elif page == "🏗️ Projects":
         "Payment Month":   _safe_str(p.payment_month),
         "Install Year":    _safe_str(p.installation_year),
         "Activation Date": p.activation_date.date() if p.activation_date else None,
-        "Status":          _safe_str(p.status),
+        "Status":          _normalize_project_status(_safe_str(p.status)),
         "License EOP":     p.license_eop.date() if p.license_eop else None,
     } for p in filtered])
 
@@ -2283,7 +2293,7 @@ elif page == "🏗️ Projects":
 
         _empty_proj = {"_original_project_name": "", "Project Name": "", "Country": "", "# Cams": 0,
                        "Payment Month": "", "Install Year": "",
-                       "Activation Date": None, "Status": "Active", "License EOP": None}
+                       "Activation Date": None, "Status": "New", "License EOP": None}
         n_new = st.session_state.get("add_proj_row", 0)
         if n_new:
             empty_rows = pd.DataFrame([_empty_proj] * n_new)
@@ -2316,7 +2326,7 @@ elif page == "🏗️ Projects":
                 ),
                 "Status": st.column_config.SelectboxColumn(
                     "Status",
-                    options=([""] + project_statuses) if project_statuses else ["", "Active", "Offline"],
+                    options=[""] + PROJECT_STATUS_OPTIONS,
                 ),
                 "License EOP": st.column_config.DateColumn(
                     "License EOP",
@@ -2364,7 +2374,7 @@ elif page == "🏗️ Projects":
                 p.num_cams          = _safe_int(row.get("# Cams", 0))
                 p.payment_month     = _safe_str(row.get("Payment Month", ""))
                 p.installation_year = _safe_int(row.get("Install Year")) or None
-                p.status            = _safe_str(row.get("Status", ""))
+                p.status            = _normalize_project_status(row.get("Status", ""))
                 p.activation_date   = _parse_project_date(row.get("Activation Date"))
                 p.license_eop       = _parse_project_date(row.get("License EOP"))
                 projects_to_save.append(p)
@@ -3350,7 +3360,7 @@ elif page == "🔐 Licenses":
         )
         license_status = lf2.selectbox(
             "License Status",
-            ["All", "Active", "Update Next Month", "Expired", "Missing", "Offline"],
+            ["All", "Active", "Update Next Month", "Expired", "Missing", "Cancelled"],
             key="license_status",
         )
         license_search = lf3.text_input("Search project", key="license_search")
@@ -3362,7 +3372,7 @@ elif page == "🔐 Licenses":
         and (not license_search.strip() or license_search.lower() in row["Project"].lower())
     ]
 
-    st.subheader(f"Projects Needing Update in {calendar.month_name[next_month]} {next_month_year} (offline excluded)")
+    st.subheader(f"Projects Needing Update in {calendar.month_name[next_month]} {next_month_year} (cancelled excluded)")
     if next_month_rows:
         st.dataframe(
             pd.DataFrame(next_month_rows)[["Project", "Country", "Cameras", "License EOP", "Status"]],
@@ -3371,7 +3381,7 @@ elif page == "🔐 Licenses":
             height=220,
         )
     else:
-        st.info(f"No non-offline projects currently expire in {calendar.month_name[next_month]} {next_month_year}.")
+        st.info(f"No non-cancelled projects currently expire in {calendar.month_name[next_month]} {next_month_year}.")
 
     if CAN_EDIT and license_rows:
         st.markdown("---")
@@ -3463,7 +3473,7 @@ elif page == "🔐 Licenses":
             return "color: #E74C3C; font-weight: bold"
         if key == "missing":
             return "color: #7F8C8D; font-weight: bold"
-        if key == "offline":
+        if key == "cancelled":
             return "color: #5D6D7E; font-weight: bold"
         return ""
 
