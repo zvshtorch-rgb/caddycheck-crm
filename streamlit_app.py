@@ -3715,7 +3715,7 @@ elif page == "🧾 Invoice Details":
     )
 
     # Apply dynamic sort (sort controls defined above in CAN_EDIT block, but sort applies to df_inv always)
-    _inv_sort_col = st.session_state.get("inv_sort_column", "Year")
+    _inv_sort_col = st.session_state.get("inv_sort_column", "Invoice #")
     _inv_sort_asc = st.session_state.get("inv_sort_order", "Descending") == "Ascending"
     if _inv_sort_col in df_inv.columns:
         df_inv = df_inv.sort_values(
@@ -3903,7 +3903,7 @@ elif page == "🧾 Invoice Details":
 
         inv_sort_col1, inv_sort_col2 = st.columns(2)
         inv_sort_options = ["Invoice #", "Year", "Project", "Amount (€)", "Cameras", "Maint. Year", "Payment Date", "Paid"]
-        inv_selected_sort = inv_sort_col1.selectbox("Sort by", inv_sort_options, index=1, key="inv_sort_column")
+        inv_selected_sort = inv_sort_col1.selectbox("Sort by", inv_sort_options, index=0, key="inv_sort_column")
         inv_selected_order = inv_sort_col2.selectbox("Sort order", ["Descending", "Ascending"], index=0, key="inv_sort_order")
 
         invoice_project_options = [""] + sorted(
