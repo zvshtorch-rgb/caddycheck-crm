@@ -3402,7 +3402,7 @@ elif page == "🔐 Licenses":
             base_license_date = current_license_date or today
             new_license_date = st.date_input(
                 "New License EOP",
-                value=_add_months(base_license_date, 12),
+                value=_add_months(today, 12),
                 key="license_new_date",
             )
             if current_license_date:
