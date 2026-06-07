@@ -6324,19 +6324,31 @@ elif page == "🏦 Bank Payment":
             credit_inv = c1.number_input("Invoice #", min_value=0, step=1, key="credit_inv")
             credit_project = c2.text_input("Project", key="credit_project")
             credit_amount = c3.number_input("Credit Amount (€)", min_value=0.0, step=1.0, key="credit_amount")
+            credit_whole_invoice = st.checkbox(
+                "Credit whole invoice (single entry)",
+                value=True,
+                key="credit_whole_invoice",
+                help="When enabled, project can be left empty and one credit row is created for the full invoice amount.",
+            )
             credit_note = st.text_input("Note", value="Duplicate transaction credit", key="credit_note")
             if st.button("Create Credit", type="primary", key="create_credit"):
-                if credit_inv <= 0 or not _safe_str(credit_project).strip() or credit_amount <= 0:
-                    st.error("Invoice #, Project, and positive amount are required.")
+                resolved_project = _safe_str(credit_project).strip()
+                if credit_whole_invoice and not resolved_project:
+                    resolved_project = f"INVOICE#{int(credit_inv)}-CREDIT"
+
+                if credit_inv <= 0 or credit_amount <= 0:
+                    st.error("Invoice # and positive amount are required.")
+                elif not resolved_project:
+                    st.error("Project is required unless whole-invoice credit is enabled.")
                 else:
                     insert_invoice_adjustment_row(
                         invoice_number=int(credit_inv),
-                        project_name=_safe_str(credit_project).strip(),
+                        project_name=resolved_project,
                         maintenance_year="Credit",
                         payment_amount=-abs(_safe_float(credit_amount)),
                         year=datetime.date.today().year,
                         invoice_type="Complementary",
-                        description=_safe_str(credit_note).strip(),
+                        description=_safe_str(credit_note).strip() or f"Whole invoice credit INV#{int(credit_inv)}",
                     )
                     st.cache_data.clear()
                     st.success("Credit row created.")
