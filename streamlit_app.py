@@ -6333,25 +6333,41 @@ elif page == "🏦 Bank Payment":
                 key="credit_whole_invoice",
                 help="When enabled, project can be left empty and one credit row is created for the full invoice amount.",
             )
+            credit_no_invoice_link = st.checkbox(
+                "Do not link credit to an invoice number",
+                value=False,
+                key="credit_no_invoice_link",
+                help="When enabled, the credit is recorded as a standalone credit entry.",
+            )
             credit_note = st.text_input("Note", value="Duplicate transaction credit", key="credit_note")
             if st.button("Create Credit", type="primary", key="create_credit"):
                 resolved_project = _safe_str(credit_project).strip()
+                effective_invoice_number = None if credit_no_invoice_link else int(credit_inv)
                 if credit_whole_invoice and not resolved_project:
-                    resolved_project = f"INVOICE#{int(credit_inv)}-CREDIT"
+                    if effective_invoice_number:
+                        resolved_project = f"INVOICE#{effective_invoice_number}-CREDIT"
+                    else:
+                        resolved_project = "UNLINKED-INVOICE-CREDIT"
 
-                if credit_inv <= 0 or credit_amount <= 0:
-                    st.error("Invoice # and positive amount are required.")
+                if credit_amount <= 0:
+                    st.error("Positive amount is required.")
+                elif not credit_no_invoice_link and credit_inv <= 0:
+                    st.error("Invoice # is required unless no-invoice-link is enabled.")
                 elif not resolved_project:
                     st.error("Project is required unless whole-invoice credit is enabled.")
                 else:
                     insert_invoice_adjustment_row(
-                        invoice_number=int(credit_inv),
+                        invoice_number=effective_invoice_number,
                         project_name=resolved_project,
                         maintenance_year="Credit",
                         payment_amount=-abs(_safe_float(credit_amount)),
                         year=datetime.date.today().year,
                         invoice_type="Complementary",
-                        description=_safe_str(credit_note).strip() or f"Whole invoice credit INV#{int(credit_inv)}",
+                        description=_safe_str(credit_note).strip() or (
+                            f"Whole invoice credit INV#{effective_invoice_number}"
+                            if effective_invoice_number else
+                            "Standalone credit entry"
+                        ),
                     )
                     st.cache_data.clear()
                     st.success("Credit row created.")
