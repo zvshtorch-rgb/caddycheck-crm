@@ -6384,7 +6384,32 @@ elif page == "🏦 Bank Payment":
                     project_filter = st.selectbox("Credit Project Filter", ["All"] + target_projects, key="credit_filter_project")
                     credit_rows = load_unpaid_credit_rows(None if project_filter == "All" else project_filter)
                     available_credit = abs(sum(_safe_float(r.get("payment_amount", 0.0)) for r in credit_rows))
+                    target_unpaid_total = sum(_safe_float(r.get("payment_amount", 0.0)) for r in target_rows)
+                    planned_apply = min(available_credit, target_unpaid_total)
+                    expected_remaining = max(0.0, target_unpaid_total - planned_apply)
                     st.caption(f"Available credit: €{available_credit:,.2f}")
+                    prev_c1, prev_c2, prev_c3 = st.columns(3)
+                    prev_c1.metric("Target Invoice Unpaid", f"€{target_unpaid_total:,.2f}")
+                    prev_c2.metric("Will Apply", f"€{planned_apply:,.2f}")
+                    prev_c3.metric("Expected Remaining", f"€{expected_remaining:,.2f}")
+                    with st.expander("Preview per row", expanded=False):
+                        running_credit = planned_apply
+                        preview_rows = []
+                        for row in target_rows:
+                            row_amt = _safe_float(row.get("payment_amount", 0.0))
+                            row_apply = min(row_amt, max(0.0, running_credit))
+                            row_after = row_amt - row_apply
+                            preview_rows.append({
+                                "Project": _safe_str(row.get("project_name")),
+                                "Maint. Year": _safe_str(row.get("maintenance_year")),
+                                "Before (€)": row_amt,
+                                "Apply (€)": row_apply,
+                                "After (€)": row_after,
+                            })
+                            running_credit -= row_apply
+                            if running_credit <= 0:
+                                running_credit = 0.0
+                        st.dataframe(pd.DataFrame(preview_rows), use_container_width=True, hide_index=True)
                     if st.button("Apply Credit", type="primary", key="apply_credit"):
                         if available_credit <= 0:
                             st.error("No available credit rows found.")
