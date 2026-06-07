@@ -3684,6 +3684,9 @@ elif page == "🧾 Invoice Details":
         "Payment Date",
         "Paid",
         "Year",
+        "Type",
+        "For Month",
+        "Sent At",
         "Description",
     ]
 
@@ -3701,6 +3704,9 @@ elif page == "🧾 Invoice Details":
                 "Payment Date": i.payment_date.date() if i.payment_date else None,
                 "Paid": _safe_str(i.paid),
                 "Year": _safe_str(_safe_int(i.year) or ""),
+                "Type": "",
+                "For Month": "",
+                "Sent At": "",
                 "Description": _safe_str(getattr(i, "description", "")) if getattr(i, "description", "") else "",
             }
             for i in filtered_inv
@@ -3797,6 +3803,18 @@ elif page == "🧾 Invoice Details":
                 _safe_str(row.get("Paid", "")).strip() not in ("", "No"),
                 _safe_str(row.get("Year", "")).strip(),
             ])
+
+        def _normalize_invoice_type(value: object) -> str:
+            raw_value = _safe_str(value).strip().lower()
+            if not raw_value:
+                return ""
+            if raw_value in {"monthly", "monthly invoice"}:
+                return "Monthly"
+            if raw_value in {"complementary", "complimentary"}:
+                return "Complementary"
+            if raw_value in {"new installation", "new installation invoice"}:
+                return "New installation"
+            return _safe_str(value).strip()
 
         blank_project_invoices = [inv for inv in invoices if not _safe_str(inv.project_name).strip()]
         if blank_project_invoices:
@@ -3901,7 +3919,7 @@ elif page == "🧾 Invoice Details":
             }
         )
         invoice_paid_options = ["No", "Yes", "cancelled"]
-        invoice_type_options = ["", "monthly", "complementary"]
+        invoice_type_options = ["", "Monthly", "Complementary", "New installation"]
         invoice_for_month_options = [""] + [
             f"{month_name} {year}"
             for year in range(datetime.date.today().year + 1, 2011, -1)
@@ -4037,6 +4055,9 @@ elif page == "🧾 Invoice Details":
                         payment_date=None,
                         paid=_safe_str(row.get("Paid", "No")),
                         year=_safe_int(row.get("Year")) or None,
+                        invoice_type=_normalize_invoice_type(row.get("Type", "")),
+                        for_month=_safe_str(row.get("For Month", "")).strip(),
+                        sent_at=_safe_str(row.get("Sent At", "")).strip(),
                         description=_safe_str(row.get("Description", "")).strip() or None,
                     )
                     invoices.append(inv)
@@ -4053,6 +4074,12 @@ elif page == "🧾 Invoice Details":
                     inv.payment_amount = _safe_float(row.get("Amount (€)", 0))
                     inv.cameras_number = _safe_int(row.get("Cameras", 0)) or None
                     inv.year           = _safe_int(row.get("Year")) or None
+                row_type = _normalize_invoice_type(row.get("Type", ""))
+                row_for_month = _safe_str(row.get("For Month", "")).strip()
+                row_sent_at = _safe_str(row.get("Sent At", "")).strip()
+                inv.invoice_type = row_type
+                inv.for_month = row_for_month
+                inv.sent_at = row_sent_at
                 inv.description = _safe_str(row.get("Description", "")).strip() or None
                 inv.payment_date = _parse_invoice_date(row.get("Payment Date"))
             try:
@@ -4314,7 +4341,7 @@ elif page == "💸 Debt Report":
         current_row = sent_invoice_map.get(invoice_number)
         if current_row is None or sent_at_text >= _safe_str(current_row.get("Sent At", "")):
             sent_invoice_map[invoice_number] = {
-                "Type": "monthly",
+                "Type": "Monthly",
                 "For Month": f"{_safe_str(row.get('month', '')).strip()} {_safe_int(row.get('year'), default=0)}".strip(),
                 "Sent At": sent_at_text,
             }
@@ -5042,7 +5069,7 @@ elif page == "📅 Monthly Invoice":
                     sent_year = _safe_int(row.get("year"), default=0)
                     sent_history_rows.append({
                         "Invoice #": _safe_int(row.get("invoice_number"), default=0),
-                        "Type": "monthly",
+                        "Type": "Monthly",
                         "For Month": f"{sent_month} {sent_year}".strip(),
                         "Sent At": sent_at_text,
                         "Total (€)": _safe_float(row.get("total_amount", 0.0), 0.0),

@@ -16,6 +16,9 @@ class Invoice:
     payment_date: Optional[datetime.datetime]
     paid: str                       # 'Yes', 'No', 'cancelled'
     year: Optional[int]
+    invoice_type: str = ""
+    for_month: str = ""
+    sent_at: str = ""
     description: Optional[str] = None
 
     def is_paid(self) -> bool:

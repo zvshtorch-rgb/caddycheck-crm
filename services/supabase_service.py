@@ -307,6 +307,9 @@ def _invoice_row(inv) -> Dict[str, Any]:
         "payment_date": inv.payment_date.date().isoformat() if inv.payment_date else None,
         "paid": inv.paid,
         "year": inv.year,
+        "invoice_type": getattr(inv, "invoice_type", "") or None,
+        "for_month": getattr(inv, "for_month", "") or None,
+        "sent_at": getattr(inv, "sent_at", "") or None,
         "description": inv.description or None,
     }
 
@@ -328,6 +331,9 @@ def load_invoices() -> list:
             payment_date=_parse_date(row.get("payment_date")),
             paid=row.get("paid", "No"),
             year=row.get("year"),
+            invoice_type=str(row.get("invoice_type") or ""),
+            for_month=str(row.get("for_month") or ""),
+            sent_at=str(row.get("sent_at") or ""),
             description=row.get("description"),
         )
         invoices.append(inv)
