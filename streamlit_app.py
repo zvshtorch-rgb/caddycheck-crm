@@ -4335,8 +4335,8 @@ elif page == "💸 Debt Report":
             invoice_country_hint[inv_no] = max(votes.items(), key=lambda item: item[1])[0]
 
     # ── Summary metrics ───────────────────────────────────────────────────────
-    total_debt_amt  = sum(i.payment_amount for i in debt_inv)
-    proj_with_debt  = len({i.project_name for i in debt_inv})
+    # Metrics are based on the base unpaid set (year/country/search), not the
+    # debt-type filter used for the detail table.
     all_unpaid = [i for i in invoices if i.is_unpaid()]
     if dsel_year != "All":
         all_unpaid = [i for i in all_unpaid if i.year == int(dsel_year)]
@@ -4344,6 +4344,9 @@ elif page == "💸 Debt Report":
         all_unpaid = [i for i in all_unpaid if _get_country(i.project_name) == dsel_country]
     if dsel_search.strip():
         all_unpaid = [i for i in all_unpaid if dsel_search.lower() in i.project_name.lower()]
+
+    total_debt_amt  = sum(i.payment_amount for i in all_unpaid)
+    proj_with_debt  = len({i.project_name for i in all_unpaid})
 
     y1_total_amt = sum(i.payment_amount for i in all_unpaid if _is_new_installation_category(i))
     paid_trial_total_amt = sum(i.payment_amount for i in all_unpaid if _is_paid_trial_category(i))
