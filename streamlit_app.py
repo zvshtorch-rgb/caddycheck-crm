@@ -4418,6 +4418,10 @@ elif page == "💸 Debt Report":
         unique_project_names = sorted({name for name in project_names if name})
         unique_countries = sorted({country for country in countries if country})
         unique_maint_years = sorted({label for label in maint_years if label})
+        is_credit_row = (
+            len(unique_maint_years) == 1
+            and unique_maint_years[0].strip().lower() == "credit"
+        )
         row_type = ""
         row_for_month = ""
         row_sent_at = ""
@@ -4451,7 +4455,7 @@ elif page == "💸 Debt Report":
         grouped_unpaid_rows.append({
             "Invoice #": invoice_numbers[0] if invoice_numbers else "—",
             "Project Name": unique_project_names[0] if len(unique_project_names) <= 1 else f"{unique_project_names[0]} (+{len(unique_project_names) - 1} more)",
-            "Projects": len(unique_project_names),
+            "Projects": "" if is_credit_row else len(unique_project_names),
             "Country": ", ".join(unique_countries),
             "Maint. Year": ", ".join(unique_maint_years),
             "Amount (€)": total_amount,
