@@ -3795,14 +3795,30 @@ elif page == "🧾 Invoice Details":
 
         def _invoice_row_has_values(row) -> bool:
             return any([
-                row.get("Invoice #") not in (None, ""),
                 _safe_str(row.get("Maint. Year", "")).strip(),
                 _safe_float(row.get("Amount (€)", 0)) != 0,
                 _safe_int(row.get("Cameras", 0)) != 0,
                 row.get("Payment Date") not in (None, ""),
                 _safe_str(row.get("Paid", "")).strip() not in ("", "No"),
                 _safe_str(row.get("Year", "")).strip(),
+                _safe_str(row.get("Type", "")).strip(),
+                _safe_str(row.get("For Month", "")).strip(),
+                _safe_str(row.get("Sent At", "")).strip(),
+                _safe_str(row.get("Description", "")).strip(),
             ])
+
+        def _is_blank_placeholder_row(row) -> bool:
+            return (
+                not _safe_str(row.get("Project", "")).strip()
+                and not _safe_str(row.get("Description", "")).strip()
+                and not _safe_str(row.get("Type", "")).strip()
+                and not _safe_str(row.get("For Month", "")).strip()
+                and not _safe_str(row.get("Sent At", "")).strip()
+                and _safe_float(row.get("Amount (€)", 0)) == 0
+                and _safe_int(row.get("Cameras", 0)) == 0
+                and row.get("Payment Date") in (None, "")
+                and _safe_str(row.get("Paid", "")).strip() in ("", "No")
+            )
 
         def _normalize_invoice_type(value: object) -> str:
             raw_value = _safe_str(value).strip().lower()
@@ -4006,6 +4022,8 @@ elif page == "🧾 Invoice Details":
             invalid_editor_rows = []
             for row_idx, row in edited_inv.iterrows():
                 project = _safe_str(row.get("Project", "")).strip()
+                if not project and _is_blank_placeholder_row(row):
+                    continue
                 if not project and _invoice_row_has_values(row):
                     invalid_editor_rows.append(row_idx + 1)
 
