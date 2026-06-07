@@ -3704,9 +3704,9 @@ elif page == "🧾 Invoice Details":
                 "Payment Date": i.payment_date.date() if i.payment_date else None,
                 "Paid": _safe_str(i.paid),
                 "Year": _safe_str(_safe_int(i.year) or ""),
-                "Type": "",
-                "For Month": "",
-                "Sent At": "",
+                "Type": _safe_str(getattr(i, "invoice_type", "")).strip() or _safe_str(getattr(i, "_type", "")).strip(),
+                "For Month": _safe_str(getattr(i, "for_month", "")).strip() or _safe_str(getattr(i, "_for_month", "")).strip(),
+                "Sent At": _safe_str(getattr(i, "sent_at", "")).replace("T", " ")[:19] or _safe_str(getattr(i, "_sent_at", "")).replace("T", " ")[:19],
                 "Description": _safe_str(getattr(i, "description", "")) if getattr(i, "description", "") else "",
             }
             for i in filtered_inv
@@ -4397,6 +4397,26 @@ elif page == "💸 Debt Report":
         unique_project_names = sorted({name for name in project_names if name})
         unique_countries = sorted({country for country in countries if country})
         unique_maint_years = sorted({label for label in maint_years if label})
+        row_type = _safe_str(getattr(rows[0], "invoice_type", "")).strip() if rows else ""
+        row_for_month = _safe_str(getattr(rows[0], "for_month", "")).strip() if rows else ""
+        row_sent_at = _safe_str(getattr(rows[0], "sent_at", "")).replace("T", " ")[:19] if rows else ""
+        if row_type.lower() in {"monthly", "monthly invoice"}:
+            row_type = "Monthly"
+        elif row_type.lower() in {"complementary", "complimentary"}:
+            row_type = "Complementary"
+        elif row_type.lower() in {"new installation", "new installation invoice"}:
+            row_type = "New installation"
+        invoice_meta = {
+            "Type": row_type,
+            "For Month": row_for_month,
+            "Sent At": row_sent_at,
+        }
+        if not any(invoice_meta.values()):
+            invoice_meta = sent_invoice_map.get(
+                _safe_int(invoice_numbers[0], default=0),
+                {"Type": "", "For Month": "", "Sent At": ""},
+            )
+
         grouped_unpaid_rows.append({
             "Invoice #": invoice_numbers[0] if invoice_numbers else "—",
             "Project Name": unique_project_names[0] if len(unique_project_names) <= 1 else f"{unique_project_names[0]} (+{len(unique_project_names) - 1} more)",
@@ -4405,7 +4425,7 @@ elif page == "💸 Debt Report":
             "Maint. Year": ", ".join(unique_maint_years),
             "Amount (€)": total_amount,
             "Year": str(max(years)) if years else "",
-            **sent_invoice_map.get(_safe_int(invoice_numbers[0], default=0), {"Type": "", "For Month": "", "Sent At": ""}),
+            **invoice_meta,
             "Description": _safe_str(getattr(rows[0], "description", "")).strip() if rows else "",
         })
 
