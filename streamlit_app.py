@@ -4397,9 +4397,19 @@ elif page == "💸 Debt Report":
         unique_project_names = sorted({name for name in project_names if name})
         unique_countries = sorted({country for country in countries if country})
         unique_maint_years = sorted({label for label in maint_years if label})
-        row_type = _safe_str(getattr(rows[0], "invoice_type", "")).strip() if rows else ""
-        row_for_month = _safe_str(getattr(rows[0], "for_month", "")).strip() if rows else ""
-        row_sent_at = _safe_str(getattr(rows[0], "sent_at", "")).replace("T", " ")[:19] if rows else ""
+        row_type = ""
+        row_for_month = ""
+        row_sent_at = ""
+        row_description = ""
+        for invoice_row in rows:
+            if not row_type:
+                row_type = _safe_str(getattr(invoice_row, "invoice_type", "")).strip()
+            if not row_for_month:
+                row_for_month = _safe_str(getattr(invoice_row, "for_month", "")).strip()
+            if not row_sent_at:
+                row_sent_at = _safe_str(getattr(invoice_row, "sent_at", "")).replace("T", " ")[:19]
+            if not row_description:
+                row_description = _safe_str(getattr(invoice_row, "description", "")).strip()
         if row_type.lower() in {"monthly", "monthly invoice"}:
             row_type = "Monthly"
         elif row_type.lower() in {"complementary", "complimentary"}:
@@ -4426,7 +4436,7 @@ elif page == "💸 Debt Report":
             "Amount (€)": total_amount,
             "Year": str(max(years)) if years else "",
             **invoice_meta,
-            "Description": _safe_str(getattr(rows[0], "description", "")).strip() if rows else "",
+            "Description": row_description,
         })
 
     grouped_unpaid_rows.sort(
