@@ -511,6 +511,77 @@ def mark_invoice_row_paid(
     logger.info("Marked invoice row id=%d as paid (date=%s)", db_id, payment_date)
 
 
+def update_invoice_row(
+    db_id: int,
+    *,
+    payment_amount: Optional[float] = None,
+    paid: Optional[str] = None,
+    payment_date: Optional[datetime.date] = None,
+    description: Optional[str] = None,
+) -> None:
+    """Update selected fields for a single invoice row by DB id."""
+    client = _get_client()
+    fields: Dict[str, Any] = {}
+    if payment_amount is not None:
+        fields["payment_amount"] = payment_amount
+    if paid is not None:
+        fields["paid"] = paid
+    if payment_date is not None:
+        fields["payment_date"] = payment_date.isoformat()
+    if description is not None:
+        fields["description"] = description
+    if not fields:
+        return
+    client.table("invoices").update(fields).eq("id", db_id).execute()
+
+
+def insert_invoice_adjustment_row(
+    *,
+    invoice_number: Optional[int],
+    project_name: str,
+    maintenance_year: str,
+    payment_amount: float,
+    year: Optional[int],
+    description: Optional[str] = None,
+    invoice_type: Optional[str] = None,
+    for_month: Optional[str] = None,
+) -> dict:
+    """Insert an adjustment row (positive/negative) into invoices."""
+    client = _get_client()
+    row: Dict[str, Any] = {
+        "invoice_number": str(int(invoice_number)) if invoice_number else None,
+        "project_name": str(project_name or "").strip() or None,
+        "maintenance_year": str(maintenance_year or "").strip() or None,
+        "payment_amount": float(payment_amount),
+        "cameras_number": None,
+        "payment_date": None,
+        "paid": "No",
+        "year": int(year) if year not in (None, "") else None,
+        "invoice_type": str(invoice_type or "").strip() or None,
+        "for_month": str(for_month or "").strip() or None,
+        "sent_at": None,
+        "description": str(description or "").strip() or None,
+    }
+    resp = client.table("invoices").insert(row).execute()
+    return resp.data[0] if resp.data else {}
+
+
+def load_unpaid_credit_rows(project_name: Optional[str] = None) -> List[dict]:
+    """Return unpaid negative invoice rows that can be used as credit."""
+    client = _get_client()
+    query = (
+        client.table("invoices")
+        .select("*")
+        .neq("paid", "Yes")
+        .lt("payment_amount", 0)
+        .order("id", desc=False)
+    )
+    if project_name:
+        query = query.eq("project_name", str(project_name).strip())
+    resp = query.execute()
+    return resp.data or []
+
+
 def get_next_invoice_number() -> int:
     """Return max invoice_number + 1 from the invoices table."""
     client = _get_client()

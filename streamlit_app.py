@@ -5665,6 +5665,7 @@ elif page == "🏦 Bank Payment":
         get_invoices_by_number, mark_invoice_row_paid,
         get_subscription, upsert_subscription, create_renewal_link,
         append_bank_payment_with_allocations, load_bank_payments, load_bank_payment_allocations,
+        update_invoice_row, insert_invoice_adjustment_row, load_unpaid_credit_rows,
         upload_bank_payment_pdf as upload_bank_payment_pdf_supabase,
         create_bank_payment_pdf_signed_url as create_bank_payment_pdf_signed_url_supabase,
     )
@@ -6231,6 +6232,186 @@ elif page == "🏦 Bank Payment":
             "Payment Date", value=datetime.date.today(), key="manual_date",
         )
         _render_invoice_lookup(manual_inv_no, manual_date, key_prefix="manual")
+
+    with st.expander("🧮 Adjustments & Credits", expanded=False):
+        st.caption("Handle partial transactions, duplicate payments (credit), and applying available credit.")
+
+        tab_partial, tab_credit, tab_apply = st.tabs(["Partial", "Create Credit", "Apply Credit"])
+
+        with tab_partial:
+            p1, p2 = st.columns(2)
+            partial_inv = p1.number_input("Invoice #", min_value=0, step=1, key="partial_inv")
+            partial_date = p2.date_input("Payment Date", value=datetime.date.today(), key="partial_date")
+            if partial_inv > 0:
+                partial_rows = [r for r in get_invoices_by_number(int(partial_inv)) if _safe_str(r.get("paid", "No")).lower() != "yes"]
+                if partial_rows:
+                    partial_df = pd.DataFrame([
+                        {
+                            "id": int(r["id"]),
+                            "Project": _safe_str(r.get("project_name")),
+                            "Maint. Year": _safe_str(r.get("maintenance_year")),
+                            "Original (€)": _safe_float(r.get("payment_amount", 0.0)),
+                            "Paid Now (€)": _safe_float(r.get("payment_amount", 0.0)),
+                        }
+                        for r in partial_rows
+                    ])
+                    edited_partial = st.data_editor(
+                        partial_df,
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "id": None,
+                            "Paid Now (€)": st.column_config.NumberColumn("Paid Now (€)", step=1.0, format="%.2f"),
+                        },
+                        key="partial_editor",
+                    )
+                    if st.button("Apply Partial Payment", type="primary", key="apply_partial_payment"):
+                        alloc_rows = []
+                        for _, row in edited_partial.iterrows():
+                            old_amt = _safe_float(row.get("Original (€)", 0.0))
+                            paid_now = max(0.0, _safe_float(row.get("Paid Now (€)", 0.0)))
+                            if old_amt <= 0 or paid_now <= 0:
+                                continue
+                            paid_now = min(old_amt, paid_now)
+                            remaining = old_amt - paid_now
+                            update_invoice_row(
+                                int(row["id"]),
+                                payment_amount=paid_now,
+                                paid="Yes",
+                                payment_date=partial_date,
+                                description=f"Partial settled: paid €{paid_now:,.2f} of €{old_amt:,.2f}",
+                            )
+                            if remaining > 0.005:
+                                insert_invoice_adjustment_row(
+                                    invoice_number=int(partial_inv),
+                                    project_name=_safe_str(row.get("Project")),
+                                    maintenance_year=_safe_str(row.get("Maint. Year")),
+                                    payment_amount=remaining,
+                                    year=datetime.date.today().year,
+                                    invoice_type="Complementary",
+                                    description=f"Remaining debt after partial payment INV#{int(partial_inv)}",
+                                )
+                            alloc_rows.append({
+                                "invoice_row_id": int(row["id"]),
+                                "invoice_number": int(partial_inv),
+                                "project_name": _safe_str(row.get("Project")),
+                                "maintenance_year": _safe_str(row.get("Maint. Year")),
+                                "year": datetime.date.today().year,
+                                "amount_applied": paid_now,
+                            })
+                        if alloc_rows:
+                            append_bank_payment_with_allocations(
+                                {
+                                    "payment_date": partial_date.isoformat(),
+                                    "invoice_number": int(partial_inv),
+                                    "source_name": f"partial-{int(partial_inv)}",
+                                    "source_kind": "manual-partial",
+                                    "payment_fingerprint": hashlib.sha256(
+                                        f"partial|{int(partial_inv)}|{partial_date.isoformat()}|{len(alloc_rows)}".encode("utf-8")
+                                    ).hexdigest(),
+                                    "currency": "EUR",
+                                    "applied_amount": sum(_safe_float(r.get("amount_applied", 0.0)) for r in alloc_rows),
+                                    "notes": "Partial payment applied from Adjustments & Credits",
+                                },
+                                alloc_rows,
+                            )
+                            st.cache_data.clear()
+                            st.success("Partial payment applied and remaining debt row created.")
+                            st.rerun()
+
+        with tab_credit:
+            c1, c2, c3 = st.columns(3)
+            credit_inv = c1.number_input("Invoice #", min_value=0, step=1, key="credit_inv")
+            credit_project = c2.text_input("Project", key="credit_project")
+            credit_amount = c3.number_input("Credit Amount (€)", min_value=0.0, step=1.0, key="credit_amount")
+            credit_note = st.text_input("Note", value="Duplicate transaction credit", key="credit_note")
+            if st.button("Create Credit", type="primary", key="create_credit"):
+                if credit_inv <= 0 or not _safe_str(credit_project).strip() or credit_amount <= 0:
+                    st.error("Invoice #, Project, and positive amount are required.")
+                else:
+                    insert_invoice_adjustment_row(
+                        invoice_number=int(credit_inv),
+                        project_name=_safe_str(credit_project).strip(),
+                        maintenance_year="Credit",
+                        payment_amount=-abs(_safe_float(credit_amount)),
+                        year=datetime.date.today().year,
+                        invoice_type="Complementary",
+                        description=_safe_str(credit_note).strip(),
+                    )
+                    st.cache_data.clear()
+                    st.success("Credit row created.")
+                    st.rerun()
+
+        with tab_apply:
+            a1, a2 = st.columns(2)
+            apply_inv = a1.number_input("Target Invoice #", min_value=0, step=1, key="apply_inv")
+            apply_date = a2.date_input("Apply Date", value=datetime.date.today(), key="apply_date")
+            if apply_inv > 0:
+                target_rows = [r for r in get_invoices_by_number(int(apply_inv)) if _safe_str(r.get("paid", "No")).lower() != "yes" and _safe_float(r.get("payment_amount", 0.0)) > 0]
+                if target_rows:
+                    target_projects = sorted({str(r.get("project_name", "")).strip() for r in target_rows if str(r.get("project_name", "")).strip()})
+                    project_filter = st.selectbox("Credit Project Filter", ["All"] + target_projects, key="credit_filter_project")
+                    credit_rows = load_unpaid_credit_rows(None if project_filter == "All" else project_filter)
+                    available_credit = abs(sum(_safe_float(r.get("payment_amount", 0.0)) for r in credit_rows))
+                    st.caption(f"Available credit: €{available_credit:,.2f}")
+                    if st.button("Apply Credit", type="primary", key="apply_credit"):
+                        if available_credit <= 0:
+                            st.error("No available credit rows found.")
+                        else:
+                            remaining_credit = available_credit
+                            alloc_rows = []
+                            for row in target_rows:
+                                if remaining_credit <= 0:
+                                    break
+                                row_amt = _safe_float(row.get("payment_amount", 0.0))
+                                use_amt = min(row_amt, remaining_credit)
+                                new_amt = row_amt - use_amt
+                                update_invoice_row(
+                                    int(row["id"]),
+                                    payment_amount=new_amt,
+                                    paid="Yes" if new_amt <= 0.005 else "No",
+                                    payment_date=apply_date if new_amt <= 0.005 else None,
+                                    description=f"Credit applied €{use_amt:,.2f}",
+                                )
+                                alloc_rows.append({
+                                    "invoice_row_id": int(row["id"]),
+                                    "invoice_number": int(apply_inv),
+                                    "project_name": _safe_str(row.get("project_name")),
+                                    "maintenance_year": _safe_str(row.get("maintenance_year")),
+                                    "year": _safe_int(row.get("year"), default=0) or None,
+                                    "amount_applied": use_amt,
+                                })
+                                remaining_credit -= use_amt
+
+                            consumed = available_credit - remaining_credit
+                            if consumed > 0.005:
+                                insert_invoice_adjustment_row(
+                                    invoice_number=int(apply_inv),
+                                    project_name=(project_filter if project_filter != "All" else _safe_str(target_rows[0].get("project_name"))),
+                                    maintenance_year="Credit",
+                                    payment_amount=-consumed,
+                                    year=datetime.date.today().year,
+                                    invoice_type="Complementary",
+                                    description=f"Credit consumed for INV#{int(apply_inv)}",
+                                )
+                                append_bank_payment_with_allocations(
+                                    {
+                                        "payment_date": apply_date.isoformat(),
+                                        "invoice_number": int(apply_inv),
+                                        "source_name": f"credit-apply-{int(apply_inv)}",
+                                        "source_kind": "credit-apply",
+                                        "payment_fingerprint": hashlib.sha256(
+                                            f"credit|{int(apply_inv)}|{apply_date.isoformat()}|{consumed:.2f}".encode("utf-8")
+                                        ).hexdigest(),
+                                        "currency": "EUR",
+                                        "applied_amount": consumed,
+                                        "notes": "Credit applied to unpaid rows",
+                                    },
+                                    alloc_rows,
+                                )
+                                st.cache_data.clear()
+                                st.success(f"Applied €{consumed:,.2f} credit.")
+                                st.rerun()
 
     st.markdown("---")
     st.subheader("Saved Bank Payments")
