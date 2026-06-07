@@ -3901,6 +3901,12 @@ elif page == "🧾 Invoice Details":
             }
         )
         invoice_paid_options = ["No", "Yes", "cancelled"]
+        invoice_type_options = ["", "monthly", "complementary"]
+        invoice_for_month_options = [""] + [
+            f"{month_name} {year}"
+            for year in range(datetime.date.today().year + 1, 2011, -1)
+            for month_name in MONTH_ORDER
+        ]
         invoice_year_options = [""] + [str(year) for year in range(datetime.date.today().year + 1, 2012, -1)]
         invoice_maint_options = []
         for label in maint_years + [f"Y{i}" for i in range(1, 11)] + ["Paid Trial-0.5Y"]:
@@ -3960,11 +3966,13 @@ elif page == "🧾 Invoice Details":
                     "Year",
                     options=invoice_year_options,
                 ),
-                "Type": st.column_config.TextColumn(
+                "Type": st.column_config.SelectboxColumn(
                     "Type",
+                    options=invoice_type_options,
                 ),
-                "For Month": st.column_config.TextColumn(
+                "For Month": st.column_config.SelectboxColumn(
                     "For Month",
+                    options=invoice_for_month_options,
                 ),
                 "Sent At": st.column_config.TextColumn(
                     "Sent At",
