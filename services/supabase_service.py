@@ -314,6 +314,14 @@ def _invoice_row(inv) -> Dict[str, Any]:
     }
 
 
+def _strip_invoice_metadata_columns(row: Dict[str, Any]) -> Dict[str, Any]:
+    cleaned = dict(row)
+    cleaned.pop("invoice_type", None)
+    cleaned.pop("for_month", None)
+    cleaned.pop("sent_at", None)
+    return cleaned
+
+
 def load_invoices() -> list:
     from models.invoice import Invoice
     from config.settings import canonical_project_name
@@ -385,14 +393,37 @@ def upsert_invoices(invoices: list) -> None:
         else:
             to_insert.append(row)
 
+    metadata_columns_supported = True
     if to_update:
         batch_size = 50
         for i in range(0, len(to_update), batch_size):
-            client.table("invoices").upsert(to_update[i:i+batch_size]).execute()
+            batch = to_update[i:i+batch_size]
+            try:
+                client.table("invoices").upsert(batch).execute()
+            except Exception as exc:
+                if metadata_columns_supported and any(col in str(exc) for col in ["invoice_type", "for_month", "sent_at"]):
+                    metadata_columns_supported = False
+                    logger.warning("Invoice metadata columns are missing in Supabase; retrying without them.")
+                    fallback_batch = [_strip_invoice_metadata_columns(row) for row in batch]
+                    client.table("invoices").upsert(fallback_batch).execute()
+                else:
+                    raise
     if to_insert:
         batch_size = 50
         for i in range(0, len(to_insert), batch_size):
-            client.table("invoices").insert(to_insert[i:i+batch_size]).execute()
+            batch = to_insert[i:i+batch_size]
+            if not metadata_columns_supported:
+                batch = [_strip_invoice_metadata_columns(row) for row in batch]
+            try:
+                client.table("invoices").insert(batch).execute()
+            except Exception as exc:
+                if metadata_columns_supported and any(col in str(exc) for col in ["invoice_type", "for_month", "sent_at"]):
+                    metadata_columns_supported = False
+                    logger.warning("Invoice metadata columns are missing in Supabase; retrying inserts without them.")
+                    fallback_batch = [_strip_invoice_metadata_columns(row) for row in batch]
+                    client.table("invoices").insert(fallback_batch).execute()
+                else:
+                    raise
 
     if duplicate_count:
         logger.warning(
