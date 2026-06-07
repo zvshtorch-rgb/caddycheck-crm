@@ -3910,7 +3910,8 @@ elif page == "🧾 Invoice Details":
         _empty_inv = {"_invoice_index": None, "Invoice #": None, "Project": "", "Maint. Year": "Y1",
                       "Amount (€)": 0.0, "Cameras": 0,
                       "Payment Date": None, "Paid": "No", "Year": str(datetime.date.today().year),
-                      "Description": "Complementary"}
+                      "Type": "", "For Month": "", "Sent At": "",
+                      "Description": ""}
         n_new_inv = st.session_state.get("add_inv_row", 0)
         if n_new_inv:
             empty_rows = pd.DataFrame([
@@ -3956,6 +3957,15 @@ elif page == "🧾 Invoice Details":
                 "Year": st.column_config.SelectboxColumn(
                     "Year",
                     options=invoice_year_options,
+                ),
+                "Type": st.column_config.TextColumn(
+                    "Type",
+                ),
+                "For Month": st.column_config.TextColumn(
+                    "For Month",
+                ),
+                "Sent At": st.column_config.TextColumn(
+                    "Sent At",
                 ),
                 "Description": st.column_config.TextColumn(
                     "Description",
@@ -4294,7 +4304,7 @@ elif page == "💸 Debt Report":
         current_row = sent_invoice_map.get(invoice_number)
         if current_row is None or sent_at_text >= _safe_str(current_row.get("Sent At", "")):
             sent_invoice_map[invoice_number] = {
-                "Type": "Monthly Invoice",
+                "Type": "monthly",
                 "For Month": f"{_safe_str(row.get('month', '')).strip()} {_safe_int(row.get('year'), default=0)}".strip(),
                 "Sent At": sent_at_text,
             }
@@ -5022,7 +5032,7 @@ elif page == "📅 Monthly Invoice":
                     sent_year = _safe_int(row.get("year"), default=0)
                     sent_history_rows.append({
                         "Invoice #": _safe_int(row.get("invoice_number"), default=0),
-                        "Type": "Monthly Invoice",
+                        "Type": "monthly",
                         "For Month": f"{sent_month} {sent_year}".strip(),
                         "Sent At": sent_at_text,
                         "Total (€)": _safe_float(row.get("total_amount", 0.0), 0.0),
