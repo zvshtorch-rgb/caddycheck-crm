@@ -3771,7 +3771,9 @@ elif page == "🧾 Invoice Details":
             st.caption(f"{len(table_df) - len(deduped_filtered_inv)} duplicate project row(s) were collapsed in this view.")
 
     if CAN_EDIT:
-        st.info("✏️ Admin mode: you can edit cells directly. Click **Save Changes** when done.")
+        st.subheader("✏️ Edit Invoices")
+        st.caption("Click any cell in the table to edit it, then press Enter. Use Add New Invoice to insert new rows, and Save Changes when finished.")
+        st.info("Admin mode: you can edit cells directly.")
 
         def _parse_invoice_date(value):
             if value in (None, ""):
