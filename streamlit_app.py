@@ -4020,8 +4020,18 @@ elif page == "🧾 Invoice Details":
         _render_invoice_bottom_summary(edited_inv)
         if save_invoice_clicked:
             invalid_editor_rows = []
+            visible_existing_indices = {
+                _safe_int(value, default=-1)
+                for value in df_inv_edit.get("_invoice_index", [])
+                if _safe_int(value, default=-1) >= 0
+            }
+            kept_existing_indices = set()
             for row_idx, row in edited_inv.iterrows():
                 project = _safe_str(row.get("Project", "")).strip()
+                raw_invoice_index = row.get("_invoice_index", "")
+                existing_invoice_index = _safe_int(raw_invoice_index, default=-1)
+                if existing_invoice_index >= 0:
+                    kept_existing_indices.add(existing_invoice_index)
                 if not project and _is_blank_placeholder_row(row):
                     continue
                 if not project and _invoice_row_has_values(row):
@@ -4033,6 +4043,13 @@ elif page == "🧾 Invoice Details":
                     f"Fix or remove row(s): {', '.join(str(idx) for idx in invalid_editor_rows[:10])}"
                 )
                 st.stop()
+
+            removed_existing_indices = visible_existing_indices - kept_existing_indices
+            if removed_existing_indices:
+                invoices[:] = [
+                    inv for idx, inv in enumerate(invoices)
+                    if idx not in removed_existing_indices
+                ]
 
             from models.invoice import Invoice as InvoiceModel
             inv_map = {(i.invoice_number, i.project_name.strip().lower()): i for i in invoices if i.invoice_number}
