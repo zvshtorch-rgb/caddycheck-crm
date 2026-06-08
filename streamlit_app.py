@@ -4045,7 +4045,12 @@ elif page == "🧾 Invoice Details":
                 st.stop()
 
             removed_existing_indices = visible_existing_indices - kept_existing_indices
+            deleted_invoice_ids = []
             if removed_existing_indices:
+                deleted_invoice_ids = [
+                    inv.db_id for idx, inv in enumerate(invoices)
+                    if idx in removed_existing_indices and inv.db_id
+                ]
                 invoices[:] = [
                     inv for idx, inv in enumerate(invoices)
                     if idx not in removed_existing_indices
@@ -4119,6 +4124,9 @@ elif page == "🧾 Invoice Details":
                 inv.payment_date = _parse_invoice_date(row.get("Payment Date"))
             try:
                 _save_invoices(invoices, _data_path)
+                if deleted_invoice_ids:
+                    from services.supabase_service import delete_invoice_by_ids
+                    delete_invoice_by_ids(deleted_invoice_ids)
                 load_data.clear()
                 st.session_state.pop("add_inv_row", None)
                 st.session_state.pop("inv_editor", None)

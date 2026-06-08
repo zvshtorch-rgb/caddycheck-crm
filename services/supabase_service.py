@@ -252,6 +252,24 @@ def delete_projects(project_names: list[str]) -> int:
     return deleted
 
 
+def delete_invoice_by_ids(db_ids: list[int]) -> int:
+    """Delete invoice rows by their database IDs."""
+    if not db_ids:
+        return 0
+    
+    client = _get_client()
+    deleted = 0
+    for db_id in db_ids:
+        try:
+            client.table("invoices").delete().eq("id", db_id).execute()
+            deleted += 1
+        except Exception as e:
+            logger.warning(f"Failed to delete invoice ID {db_id}: {e}")
+    
+    logger.info(f"Deleted {deleted} invoice row(s) from Supabase")
+    return deleted
+
+
 def rename_invoice_project_names(rename_map: Dict[str, str]) -> int:
     """Rename invoice project names in Supabase and return the number of updated rows."""
     cleaned = {
@@ -343,6 +361,7 @@ def load_invoices() -> list:
             for_month=str(row.get("for_month") or ""),
             sent_at=str(row.get("sent_at") or ""),
             description=row.get("description"),
+            db_id=row["id"],
         )
         invoices.append(inv)
         key = _invoice_identity(

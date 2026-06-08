@@ -20,6 +20,7 @@ class Invoice:
     for_month: str = ""
     sent_at: str = ""
     description: Optional[str] = None
+    db_id: Optional[int] = None     # Database ID (for tracking deletions)
 
     def is_paid(self) -> bool:
         return str(self.paid).strip().lower() == "yes"
