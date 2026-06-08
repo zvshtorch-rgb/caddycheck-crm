@@ -19,3 +19,6 @@ config/data_paths.json
 
 # Local DB backups (dedup safety snapshots)
 _dedup_backup_*.json
+
+# JSON database exports
+db_backups/
