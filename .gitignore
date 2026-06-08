@@ -16,3 +16,6 @@ venv/
 # Config with sensitive info
 config/email_config.json
 config/data_paths.json
+
+# Local DB backups (dedup safety snapshots)
+_dedup_backup_*.json
