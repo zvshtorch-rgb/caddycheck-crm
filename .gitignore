@@ -22,3 +22,5 @@ _dedup_backup_*.json
 
 # JSON database exports
 db_backups/
+db_backups_pg/
+*.dump
