@@ -1,7 +1,7 @@
 param(
     [string]$OutputDir = "db_backups_pg",
     [string]$PgDumpPath = "C:\Program Files\PostgreSQL\17\bin\pg_dump.exe",
-    [string]$HostName = "aws-0-ap-southeast-1.pooler.supabase.com",
+    [string]$HostName = "aws-1-ap-southeast-1.pooler.supabase.com",
     [int]$Port = 5432,
     [string]$Database = "postgres",
     [string]$UserName = "postgres.rdoxihpmghrvroddnkdi",
