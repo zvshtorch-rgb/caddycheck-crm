@@ -391,20 +391,35 @@ def upsert_invoices(invoices: list) -> None:
 
     for inv in invoices:
         inv.project_name = canonical_project_name(inv.project_name)
-        numbered_key = _invoice_number_project_identity(inv.invoice_number, inv.project_name)
-        logical_key = _invoice_identity(inv.project_name, inv.maintenance_year, inv.year)
-        dedupe_key = numbered_key if numbered_key is not None else logical_key
+        # Rows that already have a database id are distinct existing records and
+        # must never be merged together, otherwise the partial-payment remainder
+        # row (same invoice_number/project as the original) would be silently lost.
+        existing_db_id = getattr(inv, "db_id", None)
+        if existing_db_id is not None:
+            dedupe_key = ("id", existing_db_id)
+        else:
+            numbered_key = _invoice_number_project_identity(inv.invoice_number, inv.project_name)
+            logical_key = _invoice_identity(inv.project_name, inv.maintenance_year, inv.year)
+            dedupe_key = numbered_key if numbered_key is not None else logical_key
         if dedupe_key in deduped_invoices:
             duplicate_count += 1
         deduped_invoices[dedupe_key] = inv
 
     for dedupe_key, inv in deduped_invoices.items():
-        logical_key = _invoice_identity(inv.project_name, inv.maintenance_year, inv.year)
-        db_id = None
-        if len(dedupe_key) == 2:
-            db_id = _invoice_number_project_id_map.get(dedupe_key)
+        # Prefer the db_id carried on the invoice object. It is populated by
+        # load_invoices() and travels with the cached invoice list, so it stays
+        # correct even when the module-level id maps are empty (e.g. after a
+        # process restart where load_data() returned a cached list without
+        # re-running load_invoices()). Falling back to the maps here would treat
+        # every row as new and insert duplicates of the entire ledger.
+        db_id = getattr(inv, "db_id", None)
         if db_id is None:
-            db_id = _invoice_id_map.get(logical_key)
+            numbered_key = _invoice_number_project_identity(inv.invoice_number, inv.project_name)
+            logical_key = _invoice_identity(inv.project_name, inv.maintenance_year, inv.year)
+            if numbered_key is not None:
+                db_id = _invoice_number_project_id_map.get(numbered_key)
+            if db_id is None:
+                db_id = _invoice_id_map.get(logical_key)
         row = _invoice_row(inv)
         if db_id is not None:
             row["id"] = db_id

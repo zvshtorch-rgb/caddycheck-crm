@@ -4045,24 +4045,31 @@ elif page == "🧾 Invoice Details":
                 st.stop()
 
             removed_existing_indices = visible_existing_indices - kept_existing_indices
-            deleted_invoice_ids = []
-            if removed_existing_indices:
-                deleted_invoice_ids = [
-                    inv.db_id for idx, inv in enumerate(invoices)
-                    if idx in removed_existing_indices and inv.db_id
-                ]
-                invoices[:] = [
-                    inv for idx, inv in enumerate(invoices)
-                    if idx not in removed_existing_indices
-                ]
+            # Snapshot the original list so positional lookups stay valid even
+            # after we drop deleted rows (filtering would otherwise shift indices
+            # and make invoices[existing_invoice_index] resolve to the wrong row).
+            original_invoices = list(invoices)
+            deleted_invoice_ids = [
+                inv.db_id
+                for idx, inv in enumerate(original_invoices)
+                if idx in removed_existing_indices and getattr(inv, "db_id", None)
+            ]
 
             from models.invoice import Invoice as InvoiceModel
-            inv_map = {(i.invoice_number, i.project_name.strip().lower()): i for i in invoices if i.invoice_number}
+            inv_map = {(i.invoice_number, i.project_name.strip().lower()): i for i in original_invoices if i.invoice_number}
             # Secondary lookup for invoices without invoice numbers — match by (project, maint_year, year)
             no_inv_map = {
                 (i.project_name.strip().lower(), str(i.maintenance_year).strip(), str(i.year) if i.year else ""): i
-                for i in invoices if not i.invoice_number
+                for i in original_invoices if not i.invoice_number
             }
+            kept_objects: list = []
+            seen_object_ids: set = set()
+
+            def _track(obj):
+                if id(obj) not in seen_object_ids:
+                    seen_object_ids.add(id(obj))
+                    kept_objects.append(obj)
+
             new_count = 0
             for _, row in edited_inv.iterrows():
                 project = _safe_str(row.get("Project", "")).strip()
@@ -4071,8 +4078,8 @@ elif page == "🧾 Invoice Details":
                 raw_invoice_index = row.get("_invoice_index", "")
                 existing_invoice_index = _safe_int(raw_invoice_index, default=-1)
                 inv = None
-                if existing_invoice_index >= 0 and existing_invoice_index < len(invoices):
-                    inv = invoices[existing_invoice_index]
+                if 0 <= existing_invoice_index < len(original_invoices):
+                    inv = original_invoices[existing_invoice_index]
                 inv_no_str = _safe_str(row.get("Invoice #", "")).strip()
                 try:
                     inv_no = float(inv_no_str) if inv_no_str else None
@@ -4100,7 +4107,6 @@ elif page == "🧾 Invoice Details":
                         sent_at=_safe_str(row.get("Sent At", "")).strip(),
                         description=_safe_str(row.get("Description", "")).strip() or None,
                     )
-                    invoices.append(inv)
                     if inv_no:
                         inv_map[(inv_no, project.lower())] = inv
                     else:
@@ -4122,6 +4128,11 @@ elif page == "🧾 Invoice Details":
                 inv.sent_at = row_sent_at
                 inv.description = _safe_str(row.get("Description", "")).strip() or None
                 inv.payment_date = _parse_invoice_date(row.get("Payment Date"))
+                _track(inv)
+
+            # Rebuild the invoice list from tracked objects only; any original row
+            # that was deleted in the editor is simply not tracked and drops out.
+            invoices[:] = kept_objects
             try:
                 _save_invoices(invoices, _data_path)
                 if deleted_invoice_ids:
