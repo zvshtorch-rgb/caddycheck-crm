@@ -6367,6 +6367,18 @@ elif page == "🏦 Bank Payment":
             credit_inv = c1.number_input("Invoice #", min_value=0, step=1, key="credit_inv")
             credit_project = c2.text_input("Project", key="credit_project")
             credit_amount = c3.number_input("Credit Amount (€)", min_value=0.0, step=1.0, key="credit_amount")
+            credit_new_invoice_number = st.checkbox(
+                "Assign a new invoice number (credit note)",
+                value=True,
+                key="credit_new_invoice_number",
+                help="Allocates the next available invoice number to this credit so it can be issued as a standalone credit-note PDF.",
+            )
+            if credit_new_invoice_number:
+                try:
+                    _preview_credit_no = _get_next_invoice_number(invoices, _data_path)
+                    st.caption(f"Next invoice number to assign: #{_preview_credit_no}")
+                except Exception:
+                    pass
             credit_whole_invoice = st.checkbox(
                 "Credit whole invoice (single entry)",
                 value=True,
@@ -6378,20 +6390,32 @@ elif page == "🏦 Bank Payment":
                 value=True,
                 key="credit_no_invoice_link",
                 help="When enabled, the credit is recorded as a standalone credit entry.",
+                disabled=credit_new_invoice_number,
             )
             credit_note = st.text_input("Note", value="Duplicate transaction credit", key="credit_note")
             if st.button("Create Credit", type="primary", key="create_credit"):
                 resolved_project = _safe_str(credit_project).strip()
-                effective_invoice_number = None if credit_no_invoice_link else int(credit_inv)
+                if credit_new_invoice_number:
+                    effective_invoice_number = _get_next_invoice_number(invoices, _data_path)
+                else:
+                    effective_invoice_number = None if credit_no_invoice_link else int(credit_inv)
                 if credit_whole_invoice and not resolved_project:
                     if effective_invoice_number:
-                        resolved_project = f"INVOICE#{effective_invoice_number}-CREDIT"
+                        resolved_project = (
+                            f"CREDIT NOTE #{effective_invoice_number}"
+                            if credit_new_invoice_number
+                            else f"INVOICE#{effective_invoice_number}-CREDIT"
+                        )
                     else:
                         resolved_project = "UNLINKED-INVOICE-CREDIT"
 
                 if credit_amount <= 0:
                     st.error("Positive amount is required.")
-                elif not credit_no_invoice_link and credit_inv <= 0:
+                elif (
+                    not credit_new_invoice_number
+                    and not credit_no_invoice_link
+                    and credit_inv <= 0
+                ):
                     st.error("Invoice # is required unless no-invoice-link is enabled.")
                 elif not resolved_project:
                     st.error("Project is required unless whole-invoice credit is enabled.")
@@ -6410,7 +6434,44 @@ elif page == "🏦 Bank Payment":
                         ),
                     )
                     st.cache_data.clear()
-                    st.success("Credit row created.")
+                    if credit_new_invoice_number and effective_invoice_number:
+                        st.session_state["_credit_pdf_invoice_number"] = int(effective_invoice_number)
+                        st.success(f"Credit note created as invoice #{effective_invoice_number}.")
+                    else:
+                        st.session_state.pop("_credit_pdf_invoice_number", None)
+                        st.success("Credit row created.")
+                    st.rerun()
+
+            pending_credit_pdf_no = st.session_state.get("_credit_pdf_invoice_number")
+            if pending_credit_pdf_no:
+                st.markdown("---")
+                st.markdown(f"#### Credit Note PDF — Invoice #{pending_credit_pdf_no}")
+                credit_rows_for_pdf = [
+                    inv for inv in invoices
+                    if _safe_int(inv.invoice_number) == int(pending_credit_pdf_no)
+                ]
+                if credit_rows_for_pdf:
+                    try:
+                        from services.pdf_service import generate_invoice_pdf_from_rows
+
+                        credit_pdf_bytes = generate_invoice_pdf_from_rows(
+                            invoice_rows=credit_rows_for_pdf,
+                            invoice_number=int(pending_credit_pdf_no),
+                            description="Iretailcheck - Credit Note",
+                        )
+                        st.download_button(
+                            label="⬇️ Download Credit Note PDF",
+                            data=credit_pdf_bytes,
+                            file_name=f"CC_credit_{int(pending_credit_pdf_no)}.pdf",
+                            mime="application/pdf",
+                            key="download_credit_note_pdf",
+                        )
+                    except Exception as exc:
+                        st.error(f"Credit note PDF generation failed: {exc}")
+                else:
+                    st.info("Credit row saved. Use Refresh Data if the PDF rows are not yet available.")
+                if st.button("Done", key="clear_credit_pdf"):
+                    st.session_state.pop("_credit_pdf_invoice_number", None)
                     st.rerun()
 
         with tab_apply:
