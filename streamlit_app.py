@@ -1964,20 +1964,22 @@ if page == "📊 Dashboard":
 
         df_line = pd.DataFrame(rows)
         if metric in ("Income (Paid)", "Income (All)"):
+            df_line["month_label"] = df_line["date"].apply(lambda d: d.strftime("%b %Y"))
             df_line["moving_average"] = df_line["value"].rolling(window=3, min_periods=1).mean()
             fig = go.Figure()
             fig.add_trace(
                 go.Bar(
-                    x=df_line["date"],
+                    x=df_line["month_label"],
                     y=df_line["value"],
                     name="Real payments",
                     marker_color="#2980B9",
+                    width=0.65,
                     hovertemplate="<b>%{x|%b %Y}</b><br>Real payments: %{y:,.0f}<extra></extra>",
                 )
             )
             fig.add_trace(
                 go.Scatter(
-                    x=df_line["date"],
+                    x=df_line["month_label"],
                     y=df_line["moving_average"],
                     mode="lines",
                     name="3M Moving Avg",
@@ -1994,6 +1996,7 @@ if page == "📊 Dashboard":
                 title=f"{metric} — Monthly ({monthly_year})",
                 xaxis_title="Month",
                 yaxis_title=y_label,
+                xaxis={"type": "category", "categoryorder": "array", "categoryarray": df_line["month_label"].tolist()},
             )
         else:
             fig = px.line(
