@@ -252,6 +252,9 @@ DETECTION_CAMERA_FIELDS = [
     ("Pushout", "pushout_cameras", "Pushout Cams"),
     ("SCO", "sco_cameras", "SCO Cams"),
 ]
+DETECTION_TYPE_OPTIONS = ["", "Backtray", "TopDown", "Pushout", "SCO", "Mixed"]
+DETECTION_CAMERA_COUNT_OPTIONS = list(range(0, 13))
+VIM_VERSION_OPTIONS = ["", "V11", "V60", "V66", "V70"]
 
 SUPPORTED_ORDER_FILE_SUFFIXES = {".pdf", ".xlsx", ".xlsm", ".xls", ".csv"}
 from services.excel_service import (
@@ -591,6 +594,55 @@ def _format_detection_summary(counts: dict[str, int], fallback: str = "") -> str
         if _safe_int(counts.get(field_name), default=0) > 0
     ]
     return ", ".join(parts) if parts else _safe_str(fallback).strip()
+
+
+def _detection_type_choice(counts: dict[str, int], fallback: str = "") -> str:
+    active_labels = [
+        label
+        for label, field_name, _ in DETECTION_CAMERA_FIELDS
+        if _safe_int(counts.get(field_name), default=0) > 0
+    ]
+    if len(active_labels) > 1:
+        return "Mixed"
+    if len(active_labels) == 1:
+        return active_labels[0]
+
+    fallback_counts = _parse_detection_camera_counts(fallback)
+    fallback_labels = [
+        label
+        for label, field_name, _ in DETECTION_CAMERA_FIELDS
+        if _safe_int(fallback_counts.get(field_name), default=0) > 0
+    ]
+    if len(fallback_labels) > 1:
+        return "Mixed"
+    if len(fallback_labels) == 1:
+        return fallback_labels[0]
+
+    lowered = _safe_str(fallback).lower()
+    text_matches = {
+        "Backtray": bool(re.search(r"\bback(?:tray)?\b", lowered)),
+        "TopDown": bool(re.search(r"\btop\s*down\b|\btopdown\b", lowered)),
+        "Pushout": bool(re.search(r"\bpush\s*out\b|\bpushout\b", lowered)),
+        "SCO": bool(re.search(r"\bsco\b", lowered)),
+    }
+    matched_labels = [label for label, matched in text_matches.items() if matched]
+    if len(matched_labels) > 1:
+        return "Mixed"
+    if len(matched_labels) == 1:
+        return matched_labels[0]
+    if _normalize_detection_key(fallback) == "backtray_cameras":
+        return "Backtray"
+    return ""
+
+
+def _normalize_vim_version(value: object) -> str:
+    text = _safe_str(value).strip().upper().replace(" ", "")
+    if not text:
+        return ""
+    match = re.search(r"(?:VIM|META|V)?(11|60|66|70)$", text)
+    if match:
+        return f"V{match.group(1)}"
+    return text if text in VIM_VERSION_OPTIONS else ""
 
 
 def _extract_question_month(question: str) -> str:
@@ -2256,12 +2308,12 @@ elif page == "🏗️ Projects":
             "Payment Month":   _safe_str(p.payment_month),
             "Install Year":    _safe_str(p.installation_year),
             "Activation Date": p.activation_date.date() if p.activation_date else None,
-            "Detection Type":  _format_detection_summary(detection_counts, p.detection_type),
+            "Detection Type":  _detection_type_choice(detection_counts, p.detection_type),
             "Backtray Cams":   detection_counts["backtray_cameras"],
             "TopDown Cams":    detection_counts["topdown_cameras"],
             "Pushout Cams":    detection_counts["pushout_cameras"],
             "SCO Cams":        detection_counts["sco_cameras"],
-            "VIM Version":     _safe_str(p.vim_version),
+            "VIM Version":     _normalize_vim_version(p.vim_version),
             "Status":          _normalize_project_status(_safe_str(p.status)),
             "License EOP":     p.license_eop.date() if p.license_eop else None,
         })
@@ -2429,16 +2481,18 @@ elif page == "🏗️ Projects":
                     "Activation Date",
                     format="YYYY-MM-DD",
                 ),
-                "Detection Type": st.column_config.TextColumn(
+                "Detection Type": st.column_config.SelectboxColumn(
                     "Detection Type",
+                    options=DETECTION_TYPE_OPTIONS,
                     help="Readable summary; automatically rebuilt from detection camera counts when counts are entered.",
                 ),
-                "Backtray Cams": st.column_config.NumberColumn("Backtray Cams", min_value=0, step=1),
-                "TopDown Cams": st.column_config.NumberColumn("TopDown Cams", min_value=0, step=1),
-                "Pushout Cams": st.column_config.NumberColumn("Pushout Cams", min_value=0, step=1),
-                "SCO Cams": st.column_config.NumberColumn("SCO Cams", min_value=0, step=1),
-                "VIM Version": st.column_config.TextColumn(
+                "Backtray Cams": st.column_config.SelectboxColumn("Backtray Cams", options=DETECTION_CAMERA_COUNT_OPTIONS),
+                "TopDown Cams": st.column_config.SelectboxColumn("TopDown Cams", options=DETECTION_CAMERA_COUNT_OPTIONS),
+                "Pushout Cams": st.column_config.SelectboxColumn("Pushout Cams", options=DETECTION_CAMERA_COUNT_OPTIONS),
+                "SCO Cams": st.column_config.SelectboxColumn("SCO Cams", options=DETECTION_CAMERA_COUNT_OPTIONS),
+                "VIM Version": st.column_config.SelectboxColumn(
                     "VIM Version",
+                    options=VIM_VERSION_OPTIONS,
                     help="VideoInformManager version, for example Meta70.",
                 ),
                 "Status": st.column_config.SelectboxColumn(
@@ -2508,7 +2562,7 @@ elif page == "🏗️ Projects":
                 p.pushout_cameras = detection_counts["pushout_cameras"]
                 p.sco_cameras = detection_counts["sco_cameras"]
                 p.detection_type = _format_detection_summary(detection_counts, row.get("Detection Type", ""))
-                p.vim_version = _safe_str(row.get("VIM Version", ""))
+                p.vim_version = _normalize_vim_version(row.get("VIM Version", ""))
                 p.status            = _normalize_project_status(row.get("Status", ""))
                 p.activation_date   = _parse_project_date(row.get("Activation Date"))
                 p.license_eop       = _parse_project_date(row.get("License EOP"))
