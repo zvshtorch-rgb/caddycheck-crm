@@ -242,6 +242,8 @@ TICKET_TITLE_OPTIONS = [
     "ROI of the detector not optimal",
 ]
 TICKET_CAMERA_OPTIONS = [""] + [f"K{i}B" for i in range(1, 11)] + [f"K{i}TD" for i in range(1, 11)]
+TICKET_ATTACHMENT_FILE_TYPES = ["jpg", "jpeg", "png", "webp", "gif", "mp4", "mov", "webm"]
+TICKET_ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024
 
 SUPPORTED_ORDER_FILE_SUFFIXES = {".pdf", ".xlsx", ".xlsm", ".xls", ".csv"}
 from services.excel_service import (
@@ -5507,6 +5509,8 @@ elif page == "⚙️ Settings":
 elif page == "🎫 Tickets":
     from services.supabase_service import (
         get_tickets, create_ticket, update_ticket, delete_ticket,
+        list_ticket_attachments, upload_ticket_attachment, download_ticket_attachment,
+        create_ticket_attachment_signed_url, delete_ticket_attachment,
     )
 
     st.title("🎫 Support Tickets")
@@ -5526,6 +5530,14 @@ elif page == "🎫 Tickets":
         text = _safe_str(title).strip().upper()
         match = re.search(r"\bK(10|[1-9])(B|TD)\b", text)
         return match.group(0) if match else ""
+
+    def _format_attachment_size(size_bytes: object) -> str:
+        size = _safe_float(size_bytes, default=0.0)
+        if size >= 1024 * 1024:
+            return f"{size / (1024 * 1024):.1f} MB"
+        if size >= 1024:
+            return f"{size / 1024:.1f} KB"
+        return f"{size:.0f} B"
 
     # ── Summary metrics ───────────────────────────────────────────────────────
     all_tickets = get_tickets()
@@ -5719,6 +5731,99 @@ elif page == "🎫 Tickets":
                 st.rerun()
             except Exception as e:
                 st.error(f"Delete failed: {e}")
+
+        st.markdown("### Attachments")
+        attachments_ready = True
+        try:
+            ticket_attachments = list_ticket_attachments(sel_ticket["id"])
+        except Exception as e:
+            attachments_ready = False
+            ticket_attachments = []
+            st.warning(
+                "Ticket attachments are not ready yet. Run migrations/create_ticket_attachments.sql "
+                f"in Supabase, then refresh this page. Details: {e}"
+            )
+
+        if attachments_ready:
+            st.caption("Attach images or small clips up to 25 MB each.")
+            uploaded_attachments = st.file_uploader(
+                "Add image or clip",
+                type=TICKET_ATTACHMENT_FILE_TYPES,
+                accept_multiple_files=True,
+                key=f"ticket_attachments_{sel_ticket['id']}",
+            )
+            if uploaded_attachments and st.button("Upload Attachments", type="primary", key=f"upload_ticket_attachments_{sel_ticket['id']}"):
+                uploaded_count = 0
+                skipped_files = []
+                upload_errors = []
+                for uploaded_file in uploaded_attachments:
+                    file_bytes = uploaded_file.getvalue()
+                    if len(file_bytes) > TICKET_ATTACHMENT_MAX_BYTES:
+                        skipped_files.append(f"{uploaded_file.name}: larger than 25 MB")
+                        continue
+                    try:
+                        upload_ticket_attachment(
+                            sel_ticket["id"],
+                            file_bytes,
+                            uploaded_file.name,
+                            uploaded_file.type or "application/octet-stream",
+                            uploaded_by="Admin" if IS_ADMIN else None,
+                        )
+                        uploaded_count += 1
+                    except Exception as e:
+                        upload_errors.append(f"{uploaded_file.name}: {e}")
+
+                if uploaded_count:
+                    st.success(f"Uploaded {uploaded_count} attachment(s).")
+                if skipped_files:
+                    st.warning("Skipped:\n- " + "\n- ".join(skipped_files))
+                if upload_errors:
+                    st.error("Upload errors:\n- " + "\n- ".join(upload_errors))
+                if uploaded_count:
+                    st.rerun()
+
+            if ticket_attachments:
+                for attachment in ticket_attachments:
+                    file_name = _safe_str(attachment.get("file_name") or "attachment")
+                    file_type = _safe_str(attachment.get("file_type") or "application/octet-stream")
+                    storage_bucket = _safe_str(attachment.get("storage_bucket") or "ticket-attachments")
+                    storage_path = _safe_str(attachment.get("storage_path") or "")
+                    uploaded_at = _safe_str(attachment.get("uploaded_at") or "").replace("T", " ")[:19]
+
+                    with st.container(border=True):
+                        ac1, ac2, ac3 = st.columns([4, 2, 1])
+                        ac1.markdown(f"**{file_name}**")
+                        ac1.caption(f"{file_type} | {_format_attachment_size(attachment.get('file_size'))} | {uploaded_at}")
+
+                        signed_url = None
+                        if storage_bucket and storage_path:
+                            signed_url = create_ticket_attachment_signed_url(storage_bucket, storage_path)
+                        if signed_url and file_type.startswith("image/"):
+                            st.image(signed_url, caption=file_name, use_container_width=True)
+                        elif signed_url and file_type.startswith("video/"):
+                            st.video(signed_url)
+
+                        try:
+                            download_bytes = download_ticket_attachment(storage_bucket, storage_path)
+                            ac2.download_button(
+                                "Download",
+                                data=download_bytes,
+                                file_name=file_name,
+                                mime=file_type,
+                                key=f"download_ticket_attachment_{attachment['id']}",
+                            )
+                        except Exception as e:
+                            ac2.caption(f"Download unavailable: {e}")
+
+                        if ac3.button("Delete", key=f"delete_ticket_attachment_{attachment['id']}"):
+                            try:
+                                delete_ticket_attachment(attachment["id"])
+                                st.success(f"Deleted {file_name}.")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Delete failed: {e}")
+            else:
+                st.info("No attachments for this ticket yet.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -9,10 +9,12 @@ logger = logging.getLogger(__name__)
 SENT_INVOICE_BUCKET = "sent-invoices"
 ORDER_PDF_BUCKET = "order-pdfs"
 BANK_PAYMENT_BUCKET = "bank-payments"
+TICKET_ATTACHMENT_BUCKET = "ticket-attachments"
 LICENSE_CHANGE_LOG_TABLE = "license_change_log"
 PROJECT_CHANGE_LOG_TABLE = "project_change_log"
 BANK_PAYMENTS_TABLE = "bank_payments"
 BANK_PAYMENT_ALLOCATIONS_TABLE = "bank_payment_allocations"
+TICKET_ATTACHMENTS_TABLE = "ticket_attachments"
 SUPABASE_PAGE_SIZE = 1000
 
 
@@ -693,6 +695,100 @@ def update_ticket(ticket_id: int, **fields) -> dict:
 def delete_ticket(ticket_id: int) -> None:
     client = _get_client()
     client.table("tickets").delete().eq("id", ticket_id).execute()
+
+
+def _ticket_attachment_storage_path(ticket_id: int, filename: str) -> str:
+    base = Path(filename).name or "attachment"
+    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", base).strip("_") or "attachment"
+    stamp = datetime.datetime.utcnow().strftime("%Y/%m/%Y%m%d-%H%M%S-%f")
+    return f"ticket-{int(ticket_id)}/{stamp}-{safe_name}"
+
+
+def list_ticket_attachments(ticket_id: int) -> List[dict]:
+    client = _get_client()
+    resp = (
+        client.table(TICKET_ATTACHMENTS_TABLE)
+        .select("*")
+        .eq("ticket_id", int(ticket_id))
+        .order("uploaded_at", desc=True)
+        .execute()
+    )
+    return resp.data or []
+
+
+def upload_ticket_attachment(
+    ticket_id: int,
+    file_bytes: bytes,
+    filename: str,
+    content_type: str = "application/octet-stream",
+    uploaded_by: Optional[str] = None,
+) -> dict:
+    import tempfile
+
+    client = _get_client()
+    _ensure_storage_bucket(client, TICKET_ATTACHMENT_BUCKET)
+    target_path = _ticket_attachment_storage_path(ticket_id, filename)
+    suffix = Path(filename).suffix.lower() or ""
+
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp_file:
+        tmp_file.write(file_bytes)
+        tmp_path = Path(tmp_file.name)
+
+    try:
+        client.storage.from_(TICKET_ATTACHMENT_BUCKET).upload(
+            path=target_path,
+            file=str(tmp_path),
+            file_options={"content-type": content_type or "application/octet-stream", "upsert": "true"},
+        )
+    finally:
+        try:
+            tmp_path.unlink()
+        except Exception:
+            pass
+
+    row = {
+        "ticket_id": int(ticket_id),
+        "file_name": Path(filename).name or "attachment",
+        "file_type": content_type or "application/octet-stream",
+        "file_size": len(file_bytes),
+        "storage_bucket": TICKET_ATTACHMENT_BUCKET,
+        "storage_path": target_path,
+        "uploaded_by": uploaded_by or None,
+    }
+    resp = client.table(TICKET_ATTACHMENTS_TABLE).insert(row).execute()
+    return resp.data[0] if resp.data else row
+
+
+def download_ticket_attachment(bucket_name: str, storage_path: str) -> bytes:
+    client = _get_client()
+    return client.storage.from_(bucket_name).download(storage_path)
+
+
+def create_ticket_attachment_signed_url(bucket_name: str, storage_path: str, expires_in: int = 3600) -> Optional[str]:
+    client = _get_client()
+    try:
+        resp = client.storage.from_(bucket_name).create_signed_url(storage_path, expires_in)
+    except Exception as exc:
+        logger.warning("Could not create signed URL for ticket attachment: %s", exc)
+        return None
+    if isinstance(resp, dict):
+        return resp.get("signedURL") or resp.get("signed_url") or resp.get("signedUrl")
+    return None
+
+
+def delete_ticket_attachment(attachment_id: int) -> None:
+    client = _get_client()
+    resp = client.table(TICKET_ATTACHMENTS_TABLE).select("storage_bucket, storage_path").eq("id", int(attachment_id)).execute()
+    rows = resp.data or []
+    if rows:
+        bucket_name = rows[0].get("storage_bucket") or TICKET_ATTACHMENT_BUCKET
+        storage_path = rows[0].get("storage_path")
+        if storage_path:
+            try:
+                client.storage.from_(bucket_name).remove([storage_path])
+            except Exception as exc:
+                logger.warning("Could not remove ticket attachment file: %s", exc)
+    client.table(TICKET_ATTACHMENTS_TABLE).delete().eq("id", int(attachment_id)).execute()
 
 
 # ── Orders ───────────────────────────────────────────────────────────────────
