@@ -1963,15 +1963,18 @@ if page == "📊 Dashboard":
             rows.append({"date": datetime.date(monthly_year, mo, 1), "value": float(v)})
 
         df_line = pd.DataFrame(rows)
-        fig = px.line(
-            df_line, x="date", y="value",
-            labels={"date": "Month", "value": y_label},
-            title=f"{metric} — Monthly ({monthly_year})",
-            color_discrete_sequence=["#2980B9"],
-            markers=True,
-        )
         if metric in ("Income (Paid)", "Income (All)"):
             df_line["moving_average"] = df_line["value"].rolling(window=3, min_periods=1).mean()
+            fig = go.Figure()
+            fig.add_trace(
+                go.Bar(
+                    x=df_line["date"],
+                    y=df_line["value"],
+                    name="Real payments",
+                    marker_color="#2980B9",
+                    hovertemplate="<b>%{x|%b %Y}</b><br>Real payments: %{y:,.0f}<extra></extra>",
+                )
+            )
             fig.add_trace(
                 go.Scatter(
                     x=df_line["date"],
@@ -1979,13 +1982,29 @@ if page == "📊 Dashboard":
                     mode="lines",
                     name="3M Moving Avg",
                     line={"color": "#E67E22", "width": 3},
+                    hovertemplate="<b>%{x|%b %Y}</b><br>3M Moving Avg: %{y:,.0f}<extra></extra>",
                 )
             )
-            fig.update_layout(showlegend=True)
+            fig.update_layout(
+                showlegend=True,
+                barmode="overlay",
+                bargap=0.2,
+                legend_title_text="",
+                height=380,
+                title=f"{metric} — Monthly ({monthly_year})",
+                xaxis_title="Month",
+                yaxis_title=y_label,
+            )
         else:
-            fig.update_layout(showlegend=False)
-        fig.update_traces(hovertemplate="<b>%{x|%b %Y}</b><br>" + y_label + ": %{y:,.0f}<extra></extra>")
-        fig.update_layout(height=380)
+            fig = px.line(
+                df_line, x="date", y="value",
+                labels={"date": "Month", "value": y_label},
+                title=f"{metric} — Monthly ({monthly_year})",
+                color_discrete_sequence=["#2980B9"],
+                markers=True,
+            )
+            fig.update_traces(hovertemplate="<b>%{x|%b %Y}</b><br>" + y_label + ": %{y:,.0f}<extra></extra>")
+            fig.update_layout(showlegend=False, height=380)
 
     fig.update_layout(dragmode=False)
     fig.update_xaxes(fixedrange=True)
@@ -2009,6 +2028,8 @@ if page == "📊 Dashboard":
             ],
         },
     )
+    if metric in ("Income (Paid)", "Income (All)"):
+        st.caption("Blue bars show real payments. Orange line shows the 3M moving average.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
