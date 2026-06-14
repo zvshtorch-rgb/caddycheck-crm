@@ -250,9 +250,8 @@ DETECTION_CAMERA_FIELDS = [
     ("Backtray", "backtray_cameras", "Backtray Cams"),
     ("TopDown", "topdown_cameras", "TopDown Cams"),
     ("Pushout", "pushout_cameras", "Pushout Cams"),
-    ("SCO", "sco_cameras", "SCO Cams"),
 ]
-DETECTION_TYPE_OPTIONS = ["", "Backtray", "TopDown", "Pushout", "SCO", "Mixed"]
+DETECTION_TYPE_OPTIONS = ["", "Backtray", "TopDown", "Pushout", "Mixed"]
 DETECTION_CAMERA_COUNT_OPTIONS = list(range(0, 13))
 VIM_VERSION_OPTIONS = ["", "V11", "V60", "V66", "V70"]
 
@@ -554,7 +553,6 @@ def _normalize_detection_key(value: str) -> str:
         "topdown": "topdown_cameras",
         "push": "pushout_cameras",
         "pushout": "pushout_cameras",
-        "sco": "sco_cameras",
     }
     return aliases.get(text, "")
 
@@ -565,7 +563,7 @@ def _parse_detection_camera_counts(detection_text: str) -> dict[str, int]:
     if not text.strip():
         return counts
 
-    type_pattern = r"backtray|back|topdown|top\s*down|pushout|push\s*out|sco"
+    type_pattern = r"backtray|back|topdown|top\s*down|pushout|push\s*out"
     for match in re.finditer(rf"(\d+)\s*(?:cams?|cameras?)?\s*[-:]?\s*({type_pattern})", text, flags=re.IGNORECASE):
         field_name = _normalize_detection_key(match.group(2))
         if field_name:
@@ -623,7 +621,6 @@ def _detection_type_choice(counts: dict[str, int], fallback: str = "") -> str:
         "Backtray": bool(re.search(r"\bback(?:tray)?\b", lowered)),
         "TopDown": bool(re.search(r"\btop\s*down\b|\btopdown\b", lowered)),
         "Pushout": bool(re.search(r"\bpush\s*out\b|\bpushout\b", lowered)),
-        "SCO": bool(re.search(r"\bsco\b", lowered)),
     }
     matched_labels = [label for label, matched in text_matches.items() if matched]
     if len(matched_labels) > 1:
@@ -2228,7 +2225,7 @@ elif page == "🏗️ Projects":
             return None
 
     def _normalize_project_change_value(field_name: str, value) -> str:
-        if field_name in {"num_cams", "backtray_cameras", "topdown_cameras", "pushout_cameras", "sco_cameras"}:
+        if field_name in {"num_cams", "backtray_cameras", "topdown_cameras", "pushout_cameras"}:
             return str(_safe_int(value, default=0))
         if field_name == "payment_month":
             return normalize_month(_safe_str(value).strip())
@@ -2245,7 +2242,6 @@ elif page == "🏗️ Projects":
             "backtray_cameras": "Backtray Cams",
             "topdown_cameras": "TopDown Cams",
             "pushout_cameras": "Pushout Cams",
-            "sco_cameras": "SCO Cams",
             "vim_version": "VIM Version",
         }
         entries: list[dict] = []
@@ -2312,7 +2308,6 @@ elif page == "🏗️ Projects":
             "Backtray Cams":   detection_counts["backtray_cameras"],
             "TopDown Cams":    detection_counts["topdown_cameras"],
             "Pushout Cams":    detection_counts["pushout_cameras"],
-            "SCO Cams":        detection_counts["sco_cameras"],
             "VIM Version":     _normalize_vim_version(p.vim_version),
             "Status":          _normalize_project_status(_safe_str(p.status)),
             "License EOP":     p.license_eop.date() if p.license_eop else None,
@@ -2449,7 +2444,7 @@ elif page == "🏗️ Projects":
         _empty_proj = {"_original_project_name": "", "Project Name": "", "Country": "", "# Cams": 0,
                    "Payment Month": "", "Install Year": "",
                    "Activation Date": None, "Detection Type": "", "Backtray Cams": 0,
-                   "TopDown Cams": 0, "Pushout Cams": 0, "SCO Cams": 0, "VIM Version": "",
+                       "TopDown Cams": 0, "Pushout Cams": 0, "VIM Version": "",
                    "Status": "New", "License EOP": None}
         n_new = st.session_state.get("add_proj_row", 0)
         if n_new:
@@ -2489,7 +2484,6 @@ elif page == "🏗️ Projects":
                 "Backtray Cams": st.column_config.SelectboxColumn("Backtray Cams", options=DETECTION_CAMERA_COUNT_OPTIONS),
                 "TopDown Cams": st.column_config.SelectboxColumn("TopDown Cams", options=DETECTION_CAMERA_COUNT_OPTIONS),
                 "Pushout Cams": st.column_config.SelectboxColumn("Pushout Cams", options=DETECTION_CAMERA_COUNT_OPTIONS),
-                "SCO Cams": st.column_config.SelectboxColumn("SCO Cams", options=DETECTION_CAMERA_COUNT_OPTIONS),
                 "VIM Version": st.column_config.SelectboxColumn(
                     "VIM Version",
                     options=VIM_VERSION_OPTIONS,
@@ -2550,7 +2544,6 @@ elif page == "🏗️ Projects":
                     "backtray_cameras": _safe_int(row.get("Backtray Cams", 0), default=0),
                     "topdown_cameras": _safe_int(row.get("TopDown Cams", 0), default=0),
                     "pushout_cameras": _safe_int(row.get("Pushout Cams", 0), default=0),
-                    "sco_cameras": _safe_int(row.get("SCO Cams", 0), default=0),
                 }
                 detection_total = sum(detection_counts.values())
                 if p.num_cams and detection_total > p.num_cams:
@@ -2560,7 +2553,6 @@ elif page == "🏗️ Projects":
                 p.backtray_cameras = detection_counts["backtray_cameras"]
                 p.topdown_cameras = detection_counts["topdown_cameras"]
                 p.pushout_cameras = detection_counts["pushout_cameras"]
-                p.sco_cameras = detection_counts["sco_cameras"]
                 p.detection_type = _format_detection_summary(detection_counts, row.get("Detection Type", ""))
                 p.vim_version = _normalize_vim_version(row.get("VIM Version", ""))
                 p.status            = _normalize_project_status(row.get("Status", ""))

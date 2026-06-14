@@ -107,7 +107,6 @@ def load_projects(filepath: Path = None) -> List[Project]:
             backtray_cameras=_safe_int(row.get("Backtray Cameras")) or 0,
             topdown_cameras=_safe_int(row.get("TopDown Cameras")) or 0,
             pushout_cameras=_safe_int(row.get("Pushout Cameras")) or 0,
-            sco_cameras=_safe_int(row.get("SCO Cameras")) or 0,
             cart_type=_safe_str(row.get("Cart Type")),
             vim_version=_safe_str(row.get("VIM Version")),
             status=_safe_str(row.get("Status")),

@@ -18,7 +18,6 @@ class Project:
     backtray_cameras: int = 0
     topdown_cameras: int = 0
     pushout_cameras: int = 0
-    sco_cameras: int = 0
     cart_type: str = ""
     vim_version: str = ""
     status: str = ""

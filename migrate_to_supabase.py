@@ -50,7 +50,6 @@ def migrate():
             "backtray_cameras": p.backtray_cameras or 0,
             "topdown_cameras": p.topdown_cameras or 0,
             "pushout_cameras": p.pushout_cameras or 0,
-            "sco_cameras": p.sco_cameras or 0,
             "cart_type": p.cart_type or None,
             "vim_version": p.vim_version or None,
             "status": p.status or None,
