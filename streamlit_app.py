@@ -5775,7 +5775,7 @@ elif page == "🎫 Tickets":
                             file_bytes,
                             uploaded_file.name,
                             uploaded_file.type or "application/octet-stream",
-                            uploaded_by="Admin" if IS_ADMIN else None,
+                            uploaded_by=ROLES[ROLE]["label"],
                         )
                         uploaded_seen.add(upload_key)
                         uploaded_count += 1
