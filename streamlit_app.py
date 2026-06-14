@@ -5644,7 +5644,7 @@ elif page == "🎫 Tickets":
     if CAN_EDIT and filtered_tickets:
         st.markdown("---")
         st.subheader("Update Ticket")
-        ticket_options = {f"{t['ticket_number']} — {t['title']}": t for t in filtered_tickets}
+        ticket_options = {f"{t['ticket_number']} — {t['project_name']} — {t['title']}": t for t in filtered_tickets}
         selected_label = st.selectbox("Select ticket to update", list(ticket_options.keys()), key="sel_ticket")
         sel_ticket = ticket_options[selected_label]
 
