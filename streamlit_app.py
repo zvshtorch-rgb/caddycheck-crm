@@ -3352,6 +3352,11 @@ elif page == "🔐 Licenses":
     today = datetime.date.today()
     next_month = today.month % 12 + 1
     next_month_year = today.year if today.month < 12 else today.year + 1
+    next_month_end = datetime.date(
+        next_month_year,
+        next_month,
+        calendar.monthrange(next_month_year, next_month)[1],
+    )
 
     license_rows = []
     for project in projects:
@@ -3363,6 +3368,11 @@ elif page == "🔐 Licenses":
             "Status": _safe_str(project.status),
             "License EOP": license_date.strftime("%Y-%m-%d") if license_date else "",
             "License Status": _license_status(project, today),
+            "Licensed Through Next Month": (
+                license_date is not None
+                and license_date >= next_month_end
+                and _normalize_project_status(project.status).lower() != "cancelled"
+            ),
         })
 
     next_month_rows = [
@@ -3389,7 +3399,7 @@ elif page == "🔐 Licenses":
         )
         license_status = lf2.selectbox(
             "License Status",
-            ["All", "Active", "Update Next Month", "Expired", "Missing", "Cancelled"],
+            ["All", "Active", "Licensed Through Next Month", "Update Next Month", "Expired", "Missing", "Cancelled"],
             key="license_status",
         )
         license_search = lf3.text_input("Search project", key="license_search")
@@ -3397,9 +3407,18 @@ elif page == "🔐 Licenses":
     filtered_license_rows = [
         row for row in license_rows
         if (license_country == "All" or row["Country"] == license_country)
-        and (license_status == "All" or row["License Status"] == license_status)
+        and (
+            license_status == "All"
+            or (license_status == "Licensed Through Next Month" and row.get("Licensed Through Next Month"))
+            or row["License Status"] == license_status
+        )
         and (not license_search.strip() or license_search.lower() in row["Project"].lower())
     ]
+    if license_status == "Licensed Through Next Month":
+        st.caption(
+            f"Showing non-cancelled projects with License EOP on or after {next_month_end.strftime('%Y-%m-%d')} "
+            f"(covered through {calendar.month_name[next_month]} {next_month_year})."
+        )
 
     st.subheader(f"Projects Needing Update in {calendar.month_name[next_month]} {next_month_year} (cancelled excluded)")
     if next_month_rows:
