@@ -1974,7 +1974,7 @@ if page == "📊 Dashboard":
                     name="Real payments",
                     marker_color="#2980B9",
                     width=0.65,
-                    hovertemplate="<b>%{x|%b %Y}</b><br>Real payments: %{y:,.0f}<extra></extra>",
+                    hovertemplate="<b>%{x}</b><br>Real payments: %{y:,.0f}<extra></extra>",
                 )
             )
             fig.add_trace(
@@ -1984,7 +1984,7 @@ if page == "📊 Dashboard":
                     mode="lines",
                     name="3M Moving Avg",
                     line={"color": "#E67E22", "width": 3},
-                    hovertemplate="<b>%{x|%b %Y}</b><br>3M Moving Avg: %{y:,.0f}<extra></extra>",
+                    hovertemplate="<b>%{x}</b><br>3M Moving Avg: %{y:,.0f}<extra></extra>",
                 )
             )
             fig.update_layout(
