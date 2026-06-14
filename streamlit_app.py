@@ -246,6 +246,12 @@ TICKET_TITLE_OPTIONS = [
 TICKET_CAMERA_OPTIONS = [""] + [f"K{i}B" for i in range(1, 11)] + [f"K{i}TD" for i in range(1, 11)]
 TICKET_ATTACHMENT_FILE_TYPES = ["jpg", "jpeg", "png", "webp", "gif", "mp4", "mov", "webm"]
 TICKET_ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024
+DETECTION_CAMERA_FIELDS = [
+    ("Backtray", "backtray_cameras", "Backtray Cams"),
+    ("TopDown", "topdown_cameras", "TopDown Cams"),
+    ("Pushout", "pushout_cameras", "Pushout Cams"),
+    ("SCO", "sco_cameras", "SCO Cams"),
+]
 
 SUPPORTED_ORDER_FILE_SUFFIXES = {".pdf", ".xlsx", ".xlsm", ".xls", ".csv"}
 from services.excel_service import (
@@ -534,6 +540,57 @@ def _license_status(project, today: Optional[datetime.date] = None) -> str:
     if license_date.month == next_month and license_date.year == next_month_year:
         return "Update Next Month"
     return "Active"
+
+
+def _normalize_detection_key(value: str) -> str:
+    text = re.sub(r"[^a-z0-9]+", "", _safe_str(value).lower())
+    aliases = {
+        "back": "backtray_cameras",
+        "backtray": "backtray_cameras",
+        "top": "topdown_cameras",
+        "topdown": "topdown_cameras",
+        "push": "pushout_cameras",
+        "pushout": "pushout_cameras",
+        "sco": "sco_cameras",
+    }
+    return aliases.get(text, "")
+
+
+def _parse_detection_camera_counts(detection_text: str) -> dict[str, int]:
+    counts = {field_name: 0 for _, field_name, _ in DETECTION_CAMERA_FIELDS}
+    text = _safe_str(detection_text)
+    if not text.strip():
+        return counts
+
+    type_pattern = r"backtray|back|topdown|top\s*down|pushout|push\s*out|sco"
+    for match in re.finditer(rf"(\d+)\s*(?:cams?|cameras?)?\s*[-:]?\s*({type_pattern})", text, flags=re.IGNORECASE):
+        field_name = _normalize_detection_key(match.group(2))
+        if field_name:
+            counts[field_name] += _safe_int(match.group(1), default=0)
+    for match in re.finditer(rf"({type_pattern})\s*[-:]?\s*(\d+)", text, flags=re.IGNORECASE):
+        field_name = _normalize_detection_key(match.group(1))
+        if field_name and counts[field_name] == 0:
+            counts[field_name] += _safe_int(match.group(2), default=0)
+    return counts
+
+
+def _project_detection_counts(project) -> dict[str, int]:
+    counts = {
+        field_name: _safe_int(getattr(project, field_name, 0), default=0)
+        for _, field_name, _ in DETECTION_CAMERA_FIELDS
+    }
+    if any(counts.values()):
+        return counts
+    return _parse_detection_camera_counts(getattr(project, "detection_type", ""))
+
+
+def _format_detection_summary(counts: dict[str, int], fallback: str = "") -> str:
+    parts = [
+        f"{_safe_int(counts.get(field_name), default=0)} {label}"
+        for label, field_name, _ in DETECTION_CAMERA_FIELDS
+        if _safe_int(counts.get(field_name), default=0) > 0
+    ]
+    return ", ".join(parts) if parts else _safe_str(fallback).strip()
 
 
 def _extract_question_month(question: str) -> str:
@@ -2119,7 +2176,7 @@ elif page == "🏗️ Projects":
             return None
 
     def _normalize_project_change_value(field_name: str, value) -> str:
-        if field_name == "num_cams":
+        if field_name in {"num_cams", "backtray_cameras", "topdown_cameras", "pushout_cameras", "sco_cameras"}:
             return str(_safe_int(value, default=0))
         if field_name == "payment_month":
             return normalize_month(_safe_str(value).strip())
@@ -2132,6 +2189,12 @@ elif page == "🏗️ Projects":
             "status": "Status",
             "num_cams": "# Cams",
             "payment_month": "Payment Month",
+            "detection_type": "Detection Type",
+            "backtray_cameras": "Backtray Cams",
+            "topdown_cameras": "TopDown Cams",
+            "pushout_cameras": "Pushout Cams",
+            "sco_cameras": "SCO Cams",
+            "vim_version": "VIM Version",
         }
         entries: list[dict] = []
         for project in after_projects:
@@ -2176,23 +2239,33 @@ elif page == "🏗️ Projects":
         filtered = [p for p in filtered if search.lower() in p.project_name.lower()]
 
     sort_row_1, sort_row_2 = st.columns(2)
-    sort_options = ["Activation Date", "Install Year", "Project Name", "Country", "# Cams", "Payment Month", "Status", "License EOP"]
+    sort_options = ["Activation Date", "Install Year", "Project Name", "Country", "# Cams", "Payment Month", "Detection Type", "VIM Version", "Status", "License EOP"]
     selected_sort_column = sort_row_1.selectbox("Sort by", sort_options, index=0, key="proj_sort_column")
     selected_sort_order = sort_row_2.selectbox("Sort order", ["Descending", "Ascending"], index=0, key="proj_sort_order")
 
     st.caption(f"Showing {len(filtered)} of {len(projects)} projects")
 
-    df = pd.DataFrame([{
-        "_original_project_name": _safe_str(p.project_name),
-        "Project Name":    _safe_str(p.project_name),
-        "Country":         _safe_str(p.country),
-        "# Cams":          _safe_int(p.num_cams),
-        "Payment Month":   _safe_str(p.payment_month),
-        "Install Year":    _safe_str(p.installation_year),
-        "Activation Date": p.activation_date.date() if p.activation_date else None,
-        "Status":          _normalize_project_status(_safe_str(p.status)),
-        "License EOP":     p.license_eop.date() if p.license_eop else None,
-    } for p in filtered])
+    project_rows = []
+    for p in filtered:
+        detection_counts = _project_detection_counts(p)
+        project_rows.append({
+            "_original_project_name": _safe_str(p.project_name),
+            "Project Name":    _safe_str(p.project_name),
+            "Country":         _safe_str(p.country),
+            "# Cams":          _safe_int(p.num_cams),
+            "Payment Month":   _safe_str(p.payment_month),
+            "Install Year":    _safe_str(p.installation_year),
+            "Activation Date": p.activation_date.date() if p.activation_date else None,
+            "Detection Type":  _format_detection_summary(detection_counts, p.detection_type),
+            "Backtray Cams":   detection_counts["backtray_cameras"],
+            "TopDown Cams":    detection_counts["topdown_cameras"],
+            "Pushout Cams":    detection_counts["pushout_cameras"],
+            "SCO Cams":        detection_counts["sco_cameras"],
+            "VIM Version":     _safe_str(p.vim_version),
+            "Status":          _normalize_project_status(_safe_str(p.status)),
+            "License EOP":     p.license_eop.date() if p.license_eop else None,
+        })
+    df = pd.DataFrame(project_rows)
 
     if not df.empty:
         df["Activation Date"] = pd.to_datetime(df["Activation Date"], errors="coerce")
@@ -2322,8 +2395,10 @@ elif page == "🏗️ Projects":
             save_projects_clicked = st.button("💾 Save Changes", key="save_projects_top")
 
         _empty_proj = {"_original_project_name": "", "Project Name": "", "Country": "", "# Cams": 0,
-                       "Payment Month": "", "Install Year": "",
-                       "Activation Date": None, "Status": "New", "License EOP": None}
+                   "Payment Month": "", "Install Year": "",
+                   "Activation Date": None, "Detection Type": "", "Backtray Cams": 0,
+                   "TopDown Cams": 0, "Pushout Cams": 0, "SCO Cams": 0, "VIM Version": "",
+                   "Status": "New", "License EOP": None}
         n_new = st.session_state.get("add_proj_row", 0)
         if n_new:
             empty_rows = pd.DataFrame([_empty_proj] * n_new)
@@ -2353,6 +2428,18 @@ elif page == "🏗️ Projects":
                 "Activation Date": st.column_config.DateColumn(
                     "Activation Date",
                     format="YYYY-MM-DD",
+                ),
+                "Detection Type": st.column_config.TextColumn(
+                    "Detection Type",
+                    help="Readable summary; automatically rebuilt from detection camera counts when counts are entered.",
+                ),
+                "Backtray Cams": st.column_config.NumberColumn("Backtray Cams", min_value=0, step=1),
+                "TopDown Cams": st.column_config.NumberColumn("TopDown Cams", min_value=0, step=1),
+                "Pushout Cams": st.column_config.NumberColumn("Pushout Cams", min_value=0, step=1),
+                "SCO Cams": st.column_config.NumberColumn("SCO Cams", min_value=0, step=1),
+                "VIM Version": st.column_config.TextColumn(
+                    "VIM Version",
+                    help="VideoInformManager version, for example Meta70.",
                 ),
                 "Status": st.column_config.SelectboxColumn(
                     "Status",
@@ -2385,6 +2472,7 @@ elif page == "🏗️ Projects":
             projects_to_save = []
             delete_project_names = []
             renamed_projects = {}
+            validation_errors = []
             new_count = 0
             for _, row in edited_df.iterrows():
                 name = _safe_str(row.get("Project Name", "")).strip()
@@ -2404,6 +2492,23 @@ elif page == "🏗️ Projects":
                 p.num_cams          = _safe_int(row.get("# Cams", 0))
                 p.payment_month     = _safe_str(row.get("Payment Month", ""))
                 p.installation_year = _safe_int(row.get("Install Year")) or None
+                detection_counts = {
+                    "backtray_cameras": _safe_int(row.get("Backtray Cams", 0), default=0),
+                    "topdown_cameras": _safe_int(row.get("TopDown Cams", 0), default=0),
+                    "pushout_cameras": _safe_int(row.get("Pushout Cams", 0), default=0),
+                    "sco_cameras": _safe_int(row.get("SCO Cams", 0), default=0),
+                }
+                detection_total = sum(detection_counts.values())
+                if p.num_cams and detection_total > p.num_cams:
+                    validation_errors.append(
+                        f"{name}: detection cameras total {detection_total}, but project has {p.num_cams} cameras"
+                    )
+                p.backtray_cameras = detection_counts["backtray_cameras"]
+                p.topdown_cameras = detection_counts["topdown_cameras"]
+                p.pushout_cameras = detection_counts["pushout_cameras"]
+                p.sco_cameras = detection_counts["sco_cameras"]
+                p.detection_type = _format_detection_summary(detection_counts, row.get("Detection Type", ""))
+                p.vim_version = _safe_str(row.get("VIM Version", ""))
                 p.status            = _normalize_project_status(row.get("Status", ""))
                 p.activation_date   = _parse_project_date(row.get("Activation Date"))
                 p.license_eop       = _parse_project_date(row.get("License EOP"))
@@ -2414,6 +2519,10 @@ elif page == "🏗️ Projects":
 
             removed_visible_names = visible_original_names - preserved_original_names
             delete_project_names.extend(sorted(name for name in removed_visible_names if name))
+
+            if validation_errors:
+                st.error("Fix detection camera counts before saving:\n- " + "\n- ".join(validation_errors))
+                st.stop()
 
             remaining_projects = [
                 p for p in projects

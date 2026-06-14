@@ -104,6 +104,10 @@ def load_projects(filepath: Path = None) -> List[Project]:
             project_approval=_safe_str(row.get("Project Approval")),
             activation_date=_safe_datetime(row.get("Activation date")),
             detection_type=_safe_str(row.get("Detection Type")),
+            backtray_cameras=_safe_int(row.get("Backtray Cameras")) or 0,
+            topdown_cameras=_safe_int(row.get("TopDown Cameras")) or 0,
+            pushout_cameras=_safe_int(row.get("Pushout Cameras")) or 0,
+            sco_cameras=_safe_int(row.get("SCO Cameras")) or 0,
             cart_type=_safe_str(row.get("Cart Type")),
             vim_version=_safe_str(row.get("VIM Version")),
             status=_safe_str(row.get("Status")),
@@ -335,6 +339,8 @@ def save_projects_to_excel(
                     proj.payment_month[:3] if proj.payment_month else None)
         _safe_write(ws, row_idx, _PROJ_COL["Installation Year"],  proj.installation_year)
         _safe_write(ws, row_idx, _PROJ_COL["Activation date"],    proj.activation_date)
+        _safe_write(ws, row_idx, _PROJ_COL["Detection Type"],     proj.detection_type or None)
+        _safe_write(ws, row_idx, _PROJ_COL["VIM Version"],        proj.vim_version or None)
         _safe_write(ws, row_idx, _PROJ_COL["Status"],             proj.status or None)
         _safe_write(ws, row_idx, _PROJ_COL["Licsense EOP "],      proj.license_eop)
 
@@ -350,6 +356,8 @@ def save_projects_to_excel(
         row_data[_PROJ_COL["payment month"] - 1]      = proj.payment_month[:3] if proj.payment_month else None
         row_data[_PROJ_COL["Installation Year"] - 1]  = proj.installation_year
         row_data[_PROJ_COL["Activation date"] - 1]    = proj.activation_date
+        row_data[_PROJ_COL["Detection Type"] - 1]     = proj.detection_type or None
+        row_data[_PROJ_COL["VIM Version"] - 1]        = proj.vim_version or None
         row_data[_PROJ_COL["Status"] - 1]             = proj.status or None
         row_data[_PROJ_COL["Licsense EOP "] - 1]      = proj.license_eop
         ws.append(row_data)
