@@ -2,6 +2,7 @@
 import datetime
 import calendar
 import copy
+import hashlib
 import io
 import logging
 import re
@@ -5745,21 +5746,28 @@ elif page == "🎫 Tickets":
             )
 
         if attachments_ready:
-            st.caption("Attach images or small clips up to 25 MB each.")
+            st.caption("Attach images or small clips up to 25 MB each. Files are attached automatically after selection.")
             uploaded_attachments = st.file_uploader(
                 "Add image or clip",
                 type=TICKET_ATTACHMENT_FILE_TYPES,
                 accept_multiple_files=True,
                 key=f"ticket_attachments_{sel_ticket['id']}",
             )
-            if uploaded_attachments and st.button("Upload Attachments", type="primary", key=f"upload_ticket_attachments_{sel_ticket['id']}"):
+            if uploaded_attachments:
+                uploaded_seen_key = f"_ticket_attachment_seen_{sel_ticket['id']}"
+                uploaded_seen = st.session_state.setdefault(uploaded_seen_key, set())
                 uploaded_count = 0
                 skipped_files = []
                 upload_errors = []
                 for uploaded_file in uploaded_attachments:
                     file_bytes = uploaded_file.getvalue()
+                    file_hash = hashlib.sha256(file_bytes).hexdigest()
+                    upload_key = f"{uploaded_file.name}:{len(file_bytes)}:{file_hash}"
+                    if upload_key in uploaded_seen:
+                        continue
                     if len(file_bytes) > TICKET_ATTACHMENT_MAX_BYTES:
                         skipped_files.append(f"{uploaded_file.name}: larger than 25 MB")
+                        uploaded_seen.add(upload_key)
                         continue
                     try:
                         upload_ticket_attachment(
@@ -5769,18 +5777,18 @@ elif page == "🎫 Tickets":
                             uploaded_file.type or "application/octet-stream",
                             uploaded_by="Admin" if IS_ADMIN else None,
                         )
+                        uploaded_seen.add(upload_key)
                         uploaded_count += 1
                     except Exception as e:
                         upload_errors.append(f"{uploaded_file.name}: {e}")
 
                 if uploaded_count:
-                    st.success(f"Uploaded {uploaded_count} attachment(s).")
+                    st.success(f"Attached {uploaded_count} file(s).")
+                    ticket_attachments = list_ticket_attachments(sel_ticket["id"])
                 if skipped_files:
                     st.warning("Skipped:\n- " + "\n- ".join(skipped_files))
                 if upload_errors:
                     st.error("Upload errors:\n- " + "\n- ".join(upload_errors))
-                if uploaded_count:
-                    st.rerun()
 
             if ticket_attachments:
                 for attachment in ticket_attachments:
