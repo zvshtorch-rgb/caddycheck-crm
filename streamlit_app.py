@@ -204,6 +204,7 @@ from services.supabase_service import (
     load_projects,
     load_invoices,
     upsert_projects,
+    update_project_license_eop as update_project_license_eop_supabase,
     upsert_invoices,
     delete_projects as delete_projects_supabase,
     rename_invoice_project_names as rename_invoice_project_names_supabase,
@@ -3446,9 +3447,13 @@ elif page == "🔐 Licenses":
                 key="license_action",
             )
             base_license_date = current_license_date or today
+            default_license_date = current_license_date or _add_months(today, 12)
+            if st.session_state.get("_license_project_for_date") != selected_project_name:
+                st.session_state["license_new_date_from_today"] = default_license_date
+                st.session_state["_license_project_for_date"] = selected_project_name
             new_license_date = st.date_input(
                 "New License EOP",
-                value=_add_months(today, 12),
+                value=default_license_date,
                 key="license_new_date_from_today",
             )
             if current_license_date:
@@ -3468,15 +3473,19 @@ elif page == "🔐 Licenses":
 
             selected_project.license_eop = datetime.datetime.combine(target_license_date, datetime.time.min)
             try:
-                _save_projects(projects, _data_path)
-                append_license_change_log({
-                    "project_name": selected_project.project_name,
-                    "country": selected_project.country,
-                    "old_license_eop": previous_license_date.isoformat() if previous_license_date else None,
-                    "new_license_eop": target_license_date.isoformat(),
-                    "action": extend_action,
-                    "source_name": _data_path,
-                })
+                with st.spinner("Saving license update..."):
+                    if _is_excel_source(_data_path):
+                        _save_projects(projects, _data_path)
+                    else:
+                        update_project_license_eop_supabase(selected_project.project_name, target_license_date)
+                    append_license_change_log({
+                        "project_name": selected_project.project_name,
+                        "country": selected_project.country,
+                        "old_license_eop": previous_license_date.isoformat() if previous_license_date else None,
+                        "new_license_eop": target_license_date.isoformat(),
+                        "action": extend_action,
+                        "source_name": _data_path,
+                    })
                 load_data.clear()
                 # Reset License Status filter to "All" so the updated project is visible
                 # (it may move from "Expired" to "Active" and would otherwise be hidden).

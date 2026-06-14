@@ -229,6 +229,37 @@ def upsert_projects(projects: list) -> None:
     logger.info("Upserted %d projects to Supabase", len(rows))
 
 
+def update_project_license_eop(project_name: str, license_eop: Any) -> dict:
+    client = _get_client()
+    from config.settings import canonical_project_name
+
+    canonical_name = canonical_project_name(project_name)
+    if isinstance(license_eop, datetime.datetime):
+        license_value = license_eop.date().isoformat()
+    elif isinstance(license_eop, datetime.date):
+        license_value = license_eop.isoformat()
+    else:
+        license_value = None
+
+    row = {"license_eop": license_value}
+    resp = (
+        client.table("projects")
+        .update(row)
+        .eq("project_name", canonical_name)
+        .execute()
+    )
+    if not resp.data:
+        resp = (
+            client.table("projects")
+            .update(row)
+            .ilike("project_name", canonical_name)
+            .execute()
+        )
+    if not resp.data:
+        raise RuntimeError(f"Project was not found for license update: {canonical_name}")
+    return resp.data[0]
+
+
 def delete_projects(project_names: list[str]) -> int:
     """Delete project rows whose canonical name matches the selected project."""
     from config.settings import canonical_project_name
