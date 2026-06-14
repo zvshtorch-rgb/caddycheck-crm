@@ -16,3 +16,9 @@ CREATE TABLE IF NOT EXISTS ticket_attachments (
 
 CREATE INDEX IF NOT EXISTS ticket_attachments_ticket_id_idx ON ticket_attachments(ticket_id);
 CREATE INDEX IF NOT EXISTS ticket_attachments_uploaded_at_idx ON ticket_attachments(uploaded_at);
+
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('ticket-attachments', 'ticket-attachments', false)
+ON CONFLICT (id) DO NOTHING;
+
+NOTIFY pgrst, 'reload schema';
