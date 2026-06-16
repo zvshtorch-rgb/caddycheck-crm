@@ -232,7 +232,7 @@ ORDER_STATUS_OPTIONS = [
     "Cancelled",
 ]
 
-PROJECT_STATUS_OPTIONS = ORDER_STATUS_OPTIONS.copy()
+PROJECT_STATUS_OPTIONS = ORDER_STATUS_OPTIONS[:-1] + ["Offline"] + ORDER_STATUS_OPTIONS[-1:]
 
 TICKET_SUBCATEGORY_OPTIONS = ["PushOut", "TopDown", "BackTray", "License"]
 TICKET_TITLE_OPTIONS = [
@@ -1516,7 +1516,7 @@ def _normalize_project_status(value: str) -> str:
     if not cleaned:
         return "New"
     if cleaned.lower() == "offline":
-        return "Cancelled"
+        return "Offline"
     for option in PROJECT_STATUS_OPTIONS:
         if option.lower() == cleaned.lower():
             return option
