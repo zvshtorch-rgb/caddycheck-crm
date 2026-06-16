@@ -2184,21 +2184,50 @@ if page == "📊 Dashboard":
             ("TopDown", "topdown_cameras"),
             ("Pushout", "pushout_cameras"),
         ]
-        det_labels, det_values = [], []
-        for label, attr in detection_types:
-            if cfg_measure == "Cameras":
-                det_values.append(float(sum(_safe_int(getattr(p, attr, 0)) for p in cfg_projects)))
-            else:
-                det_values.append(float(sum(1 for p in cfg_projects if _safe_int(getattr(p, attr, 0)) > 0)))
-            det_labels.append(label)
-        det_unit = "Cameras" if cfg_measure == "Cameras" else "Projects"
+        if cfg_measure == "Cameras":
+            det_labels = [label for label, _ in detection_types]
+            det_values = [
+                float(sum(_safe_int(getattr(p, attr, 0)) for p in cfg_projects))
+                for _, attr in detection_types
+            ]
+            det_colors = ["#2980B9", "#27AE60", "#E67E22"]
+            det_unit = "Cameras"
+        else:
+            # Group projects by their detection type label so "Mixed" is visible.
+            det_order = ["Backtray", "TopDown", "Pushout", "Mixed", "Unspecified"]
+            det_color_map = {
+                "Backtray": "#2980B9",
+                "TopDown": "#27AE60",
+                "Pushout": "#E67E22",
+                "Mixed": "#9B59B6",
+                "Unspecified": "#95A5A6",
+            }
+            det_counts = {}
+            for p in cfg_projects:
+                counts = {
+                    "Backtray": _safe_int(getattr(p, "backtray_cameras", 0)),
+                    "TopDown": _safe_int(getattr(p, "topdown_cameras", 0)),
+                    "Pushout": _safe_int(getattr(p, "pushout_cameras", 0)),
+                }
+                present = [name for name, n in counts.items() if n > 0]
+                if len(present) > 1:
+                    label = "Mixed"
+                elif len(present) == 1:
+                    label = present[0]
+                else:
+                    label = "Unspecified"
+                det_counts[label] = det_counts.get(label, 0) + 1
+            det_labels = [d for d in det_order if d in det_counts]
+            det_values = [float(det_counts[d]) for d in det_labels]
+            det_colors = [det_color_map.get(d, "#2980B9") for d in det_labels]
+            det_unit = "Projects"
         det_fig = px.bar(
             x=det_labels,
             y=det_values,
             labels={"x": "Detection type", "y": det_unit},
             title=f"Detection Types — {det_unit} ({cfg_scope})",
             color=det_labels,
-            color_discrete_sequence=["#2980B9", "#27AE60", "#E67E22"],
+            color_discrete_sequence=det_colors,
         )
         det_fig.update_traces(hovertemplate="<b>%{x}</b><br>" + det_unit + ": %{y:,.0f}<extra></extra>")
         det_fig.update_layout(showlegend=False, height=360, dragmode=False)
@@ -2209,6 +2238,10 @@ if page == "📊 Dashboard":
             use_container_width=True,
             config={"scrollZoom": False, "displaylogo": False, "displayModeBar": False},
         )
+        if cfg_measure == "Cameras":
+            det_col.caption("Cameras of Mixed projects are counted under each detection type.")
+        else:
+            det_col.caption("Projects using more than one detection type are grouped as Mixed.")
 
         # VIM version breakdown
         vim_counts = {}
