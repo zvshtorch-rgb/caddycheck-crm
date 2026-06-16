@@ -2178,16 +2178,19 @@ if page == "📊 Dashboard":
     else:
         det_col, vim_col = st.columns(2)
 
-        # Detection type breakdown
+        # Detection type breakdown.
+        # Use the same counts the Projects editor shows: structured camera
+        # columns when present, otherwise parsed from the detection_type text.
         detection_types = [
             ("Backtray", "backtray_cameras"),
             ("TopDown", "topdown_cameras"),
             ("Pushout", "pushout_cameras"),
         ]
+        project_det_counts = [_project_detection_counts(p) for p in cfg_projects]
         if cfg_measure == "Cameras":
             det_labels = [label for label, _ in detection_types]
             det_values = [
-                float(sum(_safe_int(getattr(p, attr, 0)) for p in cfg_projects))
+                float(sum(_safe_int(counts.get(attr, 0)) for counts in project_det_counts))
                 for _, attr in detection_types
             ]
             det_colors = ["#2980B9", "#27AE60", "#E67E22"]
@@ -2203,13 +2206,12 @@ if page == "📊 Dashboard":
                 "Unspecified": "#95A5A6",
             }
             det_counts = {}
-            for p in cfg_projects:
-                counts = {
-                    "Backtray": _safe_int(getattr(p, "backtray_cameras", 0)),
-                    "TopDown": _safe_int(getattr(p, "topdown_cameras", 0)),
-                    "Pushout": _safe_int(getattr(p, "pushout_cameras", 0)),
-                }
-                present = [name for name, n in counts.items() if n > 0]
+            for counts in project_det_counts:
+                present = [
+                    label
+                    for label, attr in detection_types
+                    if _safe_int(counts.get(attr, 0)) > 0
+                ]
                 if len(present) > 1:
                     label = "Mixed"
                 elif len(present) == 1:
