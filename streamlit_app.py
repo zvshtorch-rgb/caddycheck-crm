@@ -642,6 +642,19 @@ def _normalize_vim_version(value: object) -> str:
     return text if text in VIM_VERSION_OPTIONS else ""
 
 
+def _project_fields_changed(before, after) -> bool:
+    """Return True if any persisted field differs between two project objects."""
+    fields = (
+        "project_name", "country", "num_cams", "payment_month", "installation_year",
+        "backtray_cameras", "topdown_cameras", "pushout_cameras",
+        "detection_type", "vim_version", "status", "activation_date", "license_eop",
+    )
+    for field in fields:
+        if getattr(before, field, None) != getattr(after, field, None):
+            return True
+    return False
+
+
 def _extract_question_month(question: str) -> str:
     q = _normalize_query_text(question)
     for month in MONTH_ORDER:
@@ -2520,6 +2533,7 @@ elif page == "🏗️ Projects":
             projects_to_save = []
             delete_project_names = []
             renamed_projects = {}
+            changed_projects = []
             validation_errors = []
             new_count = 0
             for _, row in edited_df.iterrows():
@@ -2559,9 +2573,13 @@ elif page == "🏗️ Projects":
                 p.activation_date   = _parse_project_date(row.get("Activation Date"))
                 p.license_eop       = _parse_project_date(row.get("License EOP"))
                 projects_to_save.append(p)
-                if original_name and old_name and old_name != name:
+                is_renamed = bool(original_name and old_name and old_name != name)
+                if is_renamed:
                     delete_project_names.append(old_name)
                     renamed_projects[old_name] = name
+                before_project = before_projects_map.get(original_name) if original_name else None
+                if before_project is None or is_renamed or _project_fields_changed(before_project, p):
+                    changed_projects.append(p)
 
             removed_visible_names = visible_original_names - preserved_original_names
             delete_project_names.extend(sorted(name for name in removed_visible_names if name))
@@ -2581,7 +2599,8 @@ elif page == "🏗️ Projects":
                     projects_to_save,
                     _data_path,
                 )
-                _save_projects(projects, _data_path)
+                if changed_projects:
+                    _save_projects(changed_projects, _data_path)
                 _rename_invoice_project_names(renamed_projects, _data_path)
                 _delete_projects(sorted({name for name in delete_project_names if name}), _data_path)
                 for entry in project_change_entries:
