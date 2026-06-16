@@ -2157,6 +2157,85 @@ if page == "📊 Dashboard":
     if metric in ("Income (Paid)", "Income (All)"):
         st.caption("Blue bars show real payments. Orange line shows the 3M moving average.")
 
+    # ── Project configuration breakdown (Detection types & VIM versions) ──
+    st.markdown("---")
+    st.subheader("Project Configuration")
+    pcfg1, pcfg2 = st.columns([2, 1])
+    cfg_scope = pcfg1.selectbox(
+        "Projects",
+        ["Active only", "All projects"],
+        key="proj_cfg_scope",
+    )
+    cfg_measure = pcfg2.selectbox(
+        "Detection by",
+        ["Cameras", "Projects"],
+        key="proj_cfg_measure",
+    )
+    cfg_projects = [p for p in projects if p.is_active()] if cfg_scope == "Active only" else list(projects)
+
+    if not cfg_projects:
+        st.info("No projects to display for the selected scope.")
+    else:
+        det_col, vim_col = st.columns(2)
+
+        # Detection type breakdown
+        detection_types = [
+            ("Backtray", "backtray_cameras"),
+            ("TopDown", "topdown_cameras"),
+            ("Pushout", "pushout_cameras"),
+        ]
+        det_labels, det_values = [], []
+        for label, attr in detection_types:
+            if cfg_measure == "Cameras":
+                det_values.append(float(sum(_safe_int(getattr(p, attr, 0)) for p in cfg_projects)))
+            else:
+                det_values.append(float(sum(1 for p in cfg_projects if _safe_int(getattr(p, attr, 0)) > 0)))
+            det_labels.append(label)
+        det_unit = "Cameras" if cfg_measure == "Cameras" else "Projects"
+        det_fig = px.bar(
+            x=det_labels,
+            y=det_values,
+            labels={"x": "Detection type", "y": det_unit},
+            title=f"Detection Types — {det_unit} ({cfg_scope})",
+            color=det_labels,
+            color_discrete_sequence=["#2980B9", "#27AE60", "#E67E22"],
+        )
+        det_fig.update_traces(hovertemplate="<b>%{x}</b><br>" + det_unit + ": %{y:,.0f}<extra></extra>")
+        det_fig.update_layout(showlegend=False, height=360, dragmode=False)
+        det_fig.update_xaxes(type="category", categoryorder="array", categoryarray=det_labels, fixedrange=True)
+        det_fig.update_yaxes(fixedrange=True)
+        det_col.plotly_chart(
+            det_fig,
+            use_container_width=True,
+            config={"scrollZoom": False, "displaylogo": False, "displayModeBar": False},
+        )
+
+        # VIM version breakdown
+        vim_counts = {}
+        for p in cfg_projects:
+            version = _normalize_vim_version(getattr(p, "vim_version", "")) or "Unspecified"
+            vim_counts[version] = vim_counts.get(version, 0) + 1
+        vim_order = [v for v in VIM_VERSION_OPTIONS if v] + ["Unspecified"]
+        vim_labels = [v for v in vim_order if v in vim_counts]
+        vim_labels += [v for v in vim_counts if v not in vim_labels]
+        vim_values = [float(vim_counts[v]) for v in vim_labels]
+        vim_fig = px.bar(
+            x=vim_labels,
+            y=vim_values,
+            labels={"x": "VIM version", "y": "Projects"},
+            title=f"VIM Versions — Projects ({cfg_scope})",
+            color_discrete_sequence=["#8E44AD"],
+        )
+        vim_fig.update_traces(hovertemplate="<b>%{x}</b><br>Projects: %{y:,.0f}<extra></extra>")
+        vim_fig.update_layout(showlegend=False, height=360, dragmode=False)
+        vim_fig.update_xaxes(type="category", categoryorder="array", categoryarray=vim_labels, fixedrange=True)
+        vim_fig.update_yaxes(fixedrange=True)
+        vim_col.plotly_chart(
+            vim_fig,
+            use_container_width=True,
+            config={"scrollZoom": False, "displaylogo": False, "displayModeBar": False},
+        )
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE: ASK DATA
