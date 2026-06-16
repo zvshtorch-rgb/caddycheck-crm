@@ -2228,8 +2228,13 @@ if page == "📊 Dashboard":
             title=f"Detection Types — {det_unit} ({cfg_scope})",
             color=det_labels,
             color_discrete_sequence=det_colors,
+            text=[f"{v:,.0f}" for v in det_values],
         )
-        det_fig.update_traces(hovertemplate="<b>%{x}</b><br>" + det_unit + ": %{y:,.0f}<extra></extra>")
+        det_fig.update_traces(
+            textposition="outside",
+            cliponaxis=False,
+            hovertemplate="<b>%{x}</b><br>" + det_unit + ": %{y:,.0f}<extra></extra>",
+        )
         det_fig.update_layout(showlegend=False, height=360, dragmode=False)
         det_fig.update_xaxes(type="category", categoryorder="array", categoryarray=det_labels, fixedrange=True)
         det_fig.update_yaxes(fixedrange=True)
@@ -2255,11 +2260,16 @@ if page == "📊 Dashboard":
         vim_fig = px.bar(
             x=vim_labels,
             y=vim_values,
+            text=[f"{v:,.0f}" for v in vim_values],
             labels={"x": "VIM version", "y": "Projects"},
             title=f"VIM Versions — Projects ({cfg_scope})",
             color_discrete_sequence=["#8E44AD"],
         )
-        vim_fig.update_traces(hovertemplate="<b>%{x}</b><br>Projects: %{y:,.0f}<extra></extra>")
+        vim_fig.update_traces(
+            textposition="outside",
+            cliponaxis=False,
+            hovertemplate="<b>%{x}</b><br>Projects: %{y:,.0f}<extra></extra>",
+        )
         vim_fig.update_layout(showlegend=False, height=360, dragmode=False)
         vim_fig.update_xaxes(type="category", categoryorder="array", categoryarray=vim_labels, fixedrange=True)
         vim_fig.update_yaxes(fixedrange=True)
