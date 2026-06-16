@@ -252,7 +252,7 @@ DETECTION_CAMERA_FIELDS = [
     ("Pushout", "pushout_cameras", "Pushout Cams"),
 ]
 DETECTION_TYPE_OPTIONS = ["", "Backtray", "TopDown", "Pushout", "Mixed"]
-DETECTION_CAMERA_COUNT_OPTIONS = list(range(0, 13))
+DETECTION_CAMERA_COUNT_OPTIONS = list(range(0, 21))
 VIM_VERSION_OPTIONS = ["", "V11", "V60", "V66", "V70"]
 
 SUPPORTED_ORDER_FILE_SUFFIXES = {".pdf", ".xlsx", ".xlsm", ".xls", ".csv"}
