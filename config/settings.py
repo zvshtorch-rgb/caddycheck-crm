@@ -58,7 +58,6 @@ DEFAULT_EUR_TO_ILS_RATES = {
 
 PROJECT_NAME_ALIASES = {
     "ad waaken": "Proxy Waaken",
-    "proxy kluisbergen": "AD Kluisbergen",
     "ad kluisbergen old": "AD Kluisbergen",
 }
 
