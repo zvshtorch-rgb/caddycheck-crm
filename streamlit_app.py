@@ -254,6 +254,7 @@ DETECTION_CAMERA_FIELDS = [
 DETECTION_TYPE_OPTIONS = ["", "Backtray", "TopDown", "Pushout", "Mixed"]
 DETECTION_CAMERA_COUNT_OPTIONS = list(range(0, 21))
 VIM_VERSION_OPTIONS = ["", "V4", "V11", "V60", "V66", "V70"]
+SUPERMARKET_NETWORK_OPTIONS = ["AD", "AH", "Proxy", "Edeka", "Rewe", "Merim", "Cora", "CM", "Spar", "Plus"]
 
 SUPPORTED_ORDER_FILE_SUFFIXES = {".pdf", ".xlsx", ".xlsm", ".xls", ".csv"}
 from services.excel_service import (
@@ -640,6 +641,26 @@ def _normalize_vim_version(value: object) -> str:
     if match:
         return f"V{match.group(1)}"
     return text if text in VIM_VERSION_OPTIONS else ""
+
+
+def _project_network(project_name: object) -> str:
+    name = _safe_str(project_name).strip()
+    if not name:
+        return "Other"
+    lowered = name.lower()
+    for network in SUPERMARKET_NETWORK_OPTIONS:
+        token = network.lower()
+        if lowered == token or lowered.startswith(token + " "):
+            return network
+    return "Other"
+
+
+def _ordered_project_networks(networks: set[str]) -> list[str]:
+    ordered = [network for network in SUPERMARKET_NETWORK_OPTIONS if network in networks]
+    if "Other" in networks:
+        ordered.append("Other")
+    ordered.extend(sorted(network for network in networks if network not in ordered))
+    return ordered
 
 
 def _project_fields_changed(before, after) -> bool:
@@ -2281,6 +2302,126 @@ if page == "📊 Dashboard":
             config={"scrollZoom": False, "displaylogo": False, "displayModeBar": False},
         )
 
+    # ── Network trends (AD/AH/Proxy/...) ──
+    st.markdown("---")
+    st.subheader("Network Trends")
+    network_col1, network_col2, network_col3, network_col4 = st.columns([2, 1, 1, 1])
+    network_scope = network_col1.selectbox(
+        "Projects Scope",
+        ["Active only", "All projects"],
+        key="network_trend_scope",
+    )
+    network_resolution = network_col2.selectbox(
+        "Resolution",
+        ["Yearly", "Monthly"],
+        key="network_trend_resolution",
+    )
+
+    network_projects = [p for p in projects if p.is_active()] if network_scope == "Active only" else list(projects)
+    available_networks = _ordered_project_networks({
+        _project_network(p.project_name)
+        for p in network_projects
+        if _safe_str(p.project_name).strip()
+    })
+    default_networks = available_networks[:]
+    selected_networks = st.multiselect(
+        "Networks",
+        options=available_networks,
+        default=default_networks,
+        key="network_trend_networks",
+    )
+
+    trend_years = sorted({
+        _project_start_date(p).year
+        for p in network_projects
+        if _project_start_date(p)
+    })
+    if not trend_years:
+        trend_years = [datetime.datetime.now().year]
+
+    if network_resolution == "Yearly":
+        network_from_year = network_col3.selectbox(
+            "From Year",
+            trend_years,
+            index=0,
+            key="network_trend_from",
+        )
+        network_to_year = network_col4.selectbox(
+            "To Year",
+            trend_years,
+            index=len(trend_years) - 1,
+            key="network_trend_to",
+        )
+        if network_from_year > network_to_year:
+            network_from_year, network_to_year = network_to_year, network_from_year
+    else:
+        network_year = network_col3.selectbox(
+            "Year",
+            trend_years,
+            index=len(trend_years) - 1,
+            key="network_trend_year",
+        )
+        network_col4.empty()
+
+    if not selected_networks:
+        st.info("Select at least one network to display the trend.")
+    else:
+        trend_rows = []
+        if network_resolution == "Yearly":
+            for year in range(network_from_year, network_to_year + 1):
+                period_end = datetime.date(year, 12, 31)
+                for network in selected_networks:
+                    count = sum(
+                        1
+                        for project in network_projects
+                        if _project_network(project.project_name) == network
+                        and _project_start_date(project)
+                        and _project_start_date(project) <= period_end
+                    )
+                    trend_rows.append({"period": str(year), "network": network, "count": float(count)})
+            trend_title = f"Projects by Network — Yearly ({network_from_year}-{network_to_year})"
+        else:
+            for month in range(1, 13):
+                period_end = datetime.date(network_year, month, calendar.monthrange(network_year, month)[1])
+                label = datetime.date(network_year, month, 1).strftime("%b %Y")
+                for network in selected_networks:
+                    count = sum(
+                        1
+                        for project in network_projects
+                        if _project_network(project.project_name) == network
+                        and _project_start_date(project)
+                        and _project_start_date(project) <= period_end
+                    )
+                    trend_rows.append({"period": label, "network": network, "count": float(count)})
+            trend_title = f"Projects by Network — Monthly ({network_year})"
+
+        network_df = pd.DataFrame(trend_rows)
+        if network_df.empty:
+            st.info("No network trend data is available for the selected range.")
+        else:
+            network_fig = px.line(
+                network_df,
+                x="period",
+                y="count",
+                color="network",
+                markers=True,
+                labels={"period": "Period", "count": "Projects", "network": "Network"},
+                title=trend_title,
+            )
+            network_fig.update_traces(hovertemplate="<b>%{fullData.name}</b><br>%{x}: %{y:,.0f}<extra></extra>")
+            network_fig.update_layout(height=420, dragmode=False)
+            network_fig.update_xaxes(type="category", fixedrange=True)
+            network_fig.update_yaxes(fixedrange=True)
+            st.plotly_chart(
+                network_fig,
+                use_container_width=True,
+                config={
+                    "scrollZoom": False,
+                    "displaylogo": False,
+                    "displayModeBar": False,
+                },
+            )
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE: ASK DATA
@@ -2406,25 +2547,32 @@ elif page == "🏗️ Projects":
         return entries
 
     # Filters
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     countries = sorted({p.country for p in projects if p.country})
-    project_statuses = sorted({_normalize_project_status(p.status) for p in projects if p.status})
+    project_networks = _ordered_project_networks({
+        _project_network(p.project_name)
+        for p in projects
+        if _safe_str(p.project_name).strip()
+    })
     install_year_options = [""] + [str(year) for year in range(2030, 2013, -1)]
     payment_month_options = [""] + MONTH_ORDER
     sel_country = col1.selectbox("Country", ["All"] + countries, key="proj_country")
     sel_status  = col2.selectbox("Status",  ["All"] + PROJECT_STATUS_OPTIONS, key="proj_status")
-    search      = col3.text_input("Search project name", key="proj_search")
+    sel_network = col3.selectbox("Network", ["All"] + project_networks, key="proj_network")
+    search      = col4.text_input("Search project name", key="proj_search")
 
     filtered = projects
     if sel_country != "All":
         filtered = [p for p in filtered if p.country == sel_country]
     if sel_status != "All":
         filtered = [p for p in filtered if _normalize_project_status(p.status) == sel_status]
+    if sel_network != "All":
+        filtered = [p for p in filtered if _project_network(p.project_name) == sel_network]
     if search:
         filtered = [p for p in filtered if search.lower() in p.project_name.lower()]
 
     sort_row_1, sort_row_2 = st.columns(2)
-    sort_options = ["Activation Date", "Install Year", "Project Name", "Country", "# Cams", "Payment Month", "Detection Type", "VIM Version", "Status", "License EOP"]
+    sort_options = ["Activation Date", "Install Year", "Project Name", "Network", "Country", "# Cams", "Payment Month", "Detection Type", "VIM Version", "Status", "License EOP"]
     selected_sort_column = sort_row_1.selectbox("Sort by", sort_options, index=0, key="proj_sort_column")
     selected_sort_order = sort_row_2.selectbox("Sort order", ["Descending", "Ascending"], index=0, key="proj_sort_order")
 
@@ -2460,6 +2608,9 @@ elif page == "🏗️ Projects":
             # Keep UI values as strings for SelectboxColumn, but sort numerically.
             df["_sort_install_year"] = pd.to_numeric(df["Install Year"], errors="coerce")
             sort_column = "_sort_install_year"
+        elif sort_column == "Network":
+            df["_sort_network"] = df["Project Name"].apply(_project_network)
+            sort_column = "_sort_network"
         if sort_column in df.columns:
             df = df.sort_values(
                 by=sort_column,
@@ -2469,6 +2620,8 @@ elif page == "🏗️ Projects":
             )
         if "_sort_install_year" in df.columns:
             df = df.drop(columns=["_sort_install_year"])
+        if "_sort_network" in df.columns:
+            df = df.drop(columns=["_sort_network"])
         df["Activation Date"] = df["Activation Date"].dt.date
         df["License EOP"] = df["License EOP"].dt.date
 
