@@ -338,6 +338,11 @@ ROLES = {
 
 APP_BUILD = "viewer-open-2026-04-23-1"
 
+
+def _reset_orders_upload_widget() -> None:
+    st.session_state["_orders_upload_key_suffix"] = st.session_state.get("_orders_upload_key_suffix", 0) + 1
+
+
 def _check_login(username: str, password: str):
     """Return role string if credentials match, else None."""
     normalized_username = str(username or "").strip().lower()
@@ -3513,16 +3518,6 @@ elif page == "📦 Orders":
 
     st.caption(f"Showing {len(filtered_orders)} of {len(orders)} order row(s)")
     if filtered_orders:
-        order_pdf_links: dict[int, str | None] = {}
-        for order in filtered_orders:
-            order_id = _safe_int(order.get("id"), default=0)
-            storage_bucket = _safe_str(order.get("pdf_storage_bucket")).strip()
-            storage_path = _safe_str(order.get("pdf_storage_path")).strip()
-            link: str | None = None
-            if storage_bucket and storage_path:
-                link = create_order_pdf_signed_url_supabase(storage_bucket, storage_path)
-            order_pdf_links[order_id] = link
-
         orders_df = pd.DataFrame([
             {
                 "Order": _safe_str(order.get("order_number")),
@@ -3536,7 +3531,7 @@ elif page == "📦 Orders":
                 "Requested Activation": (_parse_order_date(order.get("requested_activation_date")) or ""),
                 "Status": _normalize_order_status(order.get("status", "")),
                 "Project Exists": "Yes" if _project_name_matches(order.get("project_name"), project_name_keys) else "No",
-                "Source PDF": order_pdf_links.get(_safe_int(order.get("id"), default=0)) or "",
+                "Source PDF": "Yes" if _safe_str(order.get("pdf_storage_path") or order.get("source_archive_path") or order.get("source_filename")).strip() else "",
             }
             for order in filtered_orders
         ])
@@ -3545,13 +3540,6 @@ elif page == "📦 Orders":
             use_container_width=True,
             hide_index=True,
             height=340,
-            column_config={
-                "Source PDF": st.column_config.LinkColumn(
-                    "Source PDF",
-                    help="Click to open the originally uploaded order PDF.",
-                    display_text="Download",
-                ),
-            },
         )
     else:
         st.info("No orders match the current filters.")
@@ -3707,8 +3695,8 @@ elif page == "📦 Orders":
             )
             upd_notes = st.text_area("Notes", value=_safe_str(selected_order.get("notes")), height=100, key=f"upd_order_notes{field_key_suffix}")
             form_col1, form_col2 = st.columns([3, 1])
-            update_order_btn = form_col1.form_submit_button("💾 Update Order", type="primary")
-            delete_order_btn = form_col2.form_submit_button("🗑️ Delete", type="secondary")
+            update_order_btn = form_col1.form_submit_button("💾 Update Order", type="primary", on_click=_reset_orders_upload_widget)
+            delete_order_btn = form_col2.form_submit_button("🗑️ Delete", type="secondary", on_click=_reset_orders_upload_widget)
 
         if update_order_btn:
             final_project_name = _safe_str(upd_project_match).strip() or _safe_str(upd_project_name).strip()
