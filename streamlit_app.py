@@ -254,7 +254,7 @@ DETECTION_CAMERA_FIELDS = [
 DETECTION_TYPE_OPTIONS = ["", "Backtray", "TopDown", "Pushout", "Mixed"]
 DETECTION_CAMERA_COUNT_OPTIONS = list(range(0, 21))
 VIM_VERSION_OPTIONS = ["", "V4", "V11", "V60", "V66", "V70"]
-SUPERMARKET_NETWORK_OPTIONS = ["AD", "AH", "Proxy", "Edeka", "Rewe", "Merim", "Cora", "CM", "Spar", "Plus"]
+SUPERMARKET_NETWORK_OPTIONS = ["AD", "AH", "Proxy", "Edeka", "Rewe", "Merim", "Cora", "CM", "Spar", "Plus", "Jumbo"]
 
 SUPPORTED_ORDER_FILE_SUFFIXES = {".pdf", ".xlsx", ".xlsm", ".xls", ".csv"}
 from services.excel_service import (
