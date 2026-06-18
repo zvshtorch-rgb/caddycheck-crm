@@ -3787,14 +3787,13 @@ elif page == "📷 Camera Audit":
         for project in projects
         if _safe_str(project.project_name).strip()
     ]
-    project_key_lookup: dict[str, str] = {}
+    project_name_by_key: dict[str, str] = {}
     for project_name in project_names_for_audit:
-        canonical_key = _normalize_project_name_key(canonical_project_name(project_name))
-        if not canonical_key:
-            continue
-        project_key_lookup[_normalize_project_name_key(project_name)] = canonical_key
-        project_key_lookup[_normalize_project_name_key(canonical_project_name(project_name))] = canonical_key
-        project_key_lookup[_normalize_order_project_match_key(project_name)] = canonical_key
+        canonical_name = canonical_project_name(project_name)
+        project_name_by_key[_normalize_project_name_key(project_name)] = project_name
+        project_name_by_key[_normalize_project_name_key(canonical_name)] = project_name
+        project_name_by_key[_normalize_order_project_match_key(project_name)] = project_name
+        project_name_by_key[_normalize_order_project_match_key(canonical_name)] = project_name
 
     # Aggregate ordered cameras per project: SUM of ordered_cameras across all orders.
     # Use the same smart matching as the Orders page so variants like
@@ -3803,17 +3802,17 @@ elif page == "📷 Camera Audit":
     has_order_for_project: set[str] = set()
     for order in ca_orders:
         order_project_name = _safe_str(order.get("project_name")).strip()
-        key = project_key_lookup.get(_normalize_project_name_key(canonical_project_name(order_project_name)))
-        if key is None:
-            key = project_key_lookup.get(_normalize_order_project_match_key(order_project_name))
-        if key is None:
+        matched_project_name = project_name_by_key.get(_normalize_project_name_key(canonical_project_name(order_project_name)))
+        if matched_project_name is None:
+            matched_project_name = project_name_by_key.get(_normalize_order_project_match_key(order_project_name))
+        if matched_project_name is None:
             suggested_project_name, suggested_project_score = _suggest_best_order_project_match(order_project_name, project_names_for_audit)
             if suggested_project_score >= 0.55:
-                key = _normalize_project_name_key(canonical_project_name(suggested_project_name))
-        if not key:
+                matched_project_name = suggested_project_name
+        if not matched_project_name:
             continue
-        has_order_for_project.add(key)
-        ordered_by_project[key] = ordered_by_project.get(key, 0) + _safe_int(order.get("ordered_cameras"), default=0)
+        has_order_for_project.add(matched_project_name)
+        ordered_by_project[matched_project_name] = ordered_by_project.get(matched_project_name, 0) + _safe_int(order.get("ordered_cameras"), default=0)
 
     rows = []
     for project in projects:
@@ -3823,7 +3822,7 @@ elif page == "📷 Camera Audit":
         key = _normalize_project_name_key(canonical_project_name(name))
         working = _safe_int(project.num_cams, default=0)
         invoiced = invoiced_by_project.get(key)
-        ordered = ordered_by_project.get(key) if key in has_order_for_project else None
+        ordered = ordered_by_project.get(name) if name in has_order_for_project else None
         rows.append({
             "Project": name,
             "Network": _project_network(name),
