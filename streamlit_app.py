@@ -1731,6 +1731,14 @@ def card(title: str, value: str, css_class: str):
     )
 
 
+if "role" not in st.session_state:
+    _login_form()
+    st.stop()
+
+ROLE = st.session_state["role"]
+CAN_EDIT = ROLES[ROLE]["can_edit"]
+
+
 # ── Sidebar navigation ────────────────────────────────────────────────────────
 st.sidebar.title("📊 CaddyCheck CRM")
 st.sidebar.markdown("---")
