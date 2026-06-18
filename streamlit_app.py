@@ -253,7 +253,7 @@ DETECTION_CAMERA_FIELDS = [
 ]
 DETECTION_TYPE_OPTIONS = ["", "Backtray", "TopDown", "Pushout", "Mixed"]
 DETECTION_CAMERA_COUNT_OPTIONS = list(range(0, 21))
-VIM_VERSION_OPTIONS = ["", "V11", "V60", "V66", "V70"]
+VIM_VERSION_OPTIONS = ["", "V4", "V11", "V60", "V66", "V70"]
 
 SUPPORTED_ORDER_FILE_SUFFIXES = {".pdf", ".xlsx", ".xlsm", ".xls", ".csv"}
 from services.excel_service import (
@@ -636,7 +636,7 @@ def _normalize_vim_version(value: object) -> str:
     text = _safe_str(value).strip().upper().replace(" ", "")
     if not text:
         return ""
-    match = re.search(r"(?:VIM|META|V)?(11|60|66|70)$", text)
+    match = re.search(r"(?:VIM|META|V)?(4|11|60|66|70)$", text)
     if match:
         return f"V{match.group(1)}"
     return text if text in VIM_VERSION_OPTIONS else ""
