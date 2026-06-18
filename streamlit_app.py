@@ -162,6 +162,13 @@ def _suggest_best_order_project_match(candidate: object, project_names: list[str
     return best_name, best_score
 
 
+def _order_project_matches(candidate: object, project_names: list[str], threshold: float = 0.55) -> bool:
+    if not _normalize_order_project_match_key(candidate):
+        return False
+    _, score = _suggest_best_order_project_match(candidate, project_names)
+    return score >= threshold
+
+
 def _get_exact_existing_project_match(candidate: object, project_names: list[str]) -> str:
     candidate_key = _normalize_project_name_key(candidate)
     if not candidate_key:
@@ -3087,15 +3094,19 @@ elif page == "📦 Orders":
     )
     missing_project_orders = [
         order for order in orders
-        if not _project_name_matches(order.get("project_name"), project_name_keys)
+        if not _order_project_matches(order.get("project_name"), project_name_choices)
     ]
     total_ordered_cameras = sum(_safe_int(order.get("ordered_cameras"), default=0) for order in orders)
 
     mc1, mc2, mc3, mc4 = st.columns(4)
     mc1.metric("Total Orders", total_orders)
-    mc2.metric("Open Orders", open_orders)
-    mc3.metric("Missing Projects", len(missing_project_orders))
+    mc2.metric("Not Completed", open_orders)
+    mc3.metric("No Project Match", len(missing_project_orders))
     mc4.metric("Ordered Cameras", total_ordered_cameras)
+    st.caption(
+        "Not Completed = orders with status New, Ordered, or In Progress. "
+        "No Project Match = orders that cannot be matched to an existing project name, including known short names like AH/AD/CM/Proxy."
+    )
 
     if CAN_EDIT:
         with st.expander("📥 Import Orders", expanded=False):
@@ -3513,7 +3524,7 @@ elif page == "📦 Orders":
     if missing_only:
         filtered_orders = [
             order for order in filtered_orders
-            if not _project_name_matches(order.get("project_name"), project_name_keys)
+            if not _order_project_matches(order.get("project_name"), project_name_choices)
         ]
 
     st.caption(f"Showing {len(filtered_orders)} of {len(orders)} order row(s)")
@@ -3530,7 +3541,7 @@ elif page == "📦 Orders":
                 "Order Date": (_parse_order_date(order.get("order_date")) or ""),
                 "Requested Activation": (_parse_order_date(order.get("requested_activation_date")) or ""),
                 "Status": _normalize_order_status(order.get("status", "")),
-                "Project Exists": "Yes" if _project_name_matches(order.get("project_name"), project_name_keys) else "No",
+                "Project Exists": "Yes" if _order_project_matches(order.get("project_name"), project_name_choices) else "No",
                 "Source PDF": "Yes" if _safe_str(order.get("pdf_storage_path") or order.get("source_archive_path") or order.get("source_filename")).strip() else "",
             }
             for order in filtered_orders
@@ -3550,7 +3561,7 @@ elif page == "📦 Orders":
         missing_order_options = {
             f"#{_safe_int(order.get('id'), default=0)} | {_safe_str(order.get('order_number')) or 'No Ref'} | {_safe_str(order.get('project_name'))}": order
             for order in filtered_orders
-            if not _project_name_matches(order.get("project_name"), project_name_keys)
+            if not _order_project_matches(order.get("project_name"), project_name_choices)
         }
         if missing_order_options:
             selected_missing_orders = st.multiselect(
@@ -3573,7 +3584,7 @@ elif page == "📦 Orders":
                     for label in selected_missing_orders:
                         order = missing_order_options[label]
                         project_name = _safe_str(order.get("project_name")).strip()
-                        if not project_name or _project_name_matches(project_name, existing_project_keys):
+                        if not project_name or _order_project_matches(project_name, project_name_choices):
                             continue
                         activation_date = _parse_order_date(order.get("requested_activation_date"))
                         projects.append(ProjectModel(
