@@ -3820,7 +3820,7 @@ elif page == "📷 Camera Audit":
     audit_df = pd.DataFrame(rows)
 
     # ── Filters ───────────────────────────────────────────────────────────────
-    fc1, fc2, fc3, fc4, fc5 = st.columns(5)
+    fc1, fc2, fc3, fc4, fc5, fc6 = st.columns(6)
     with fc1:
         network_choices = ["All"] + _ordered_project_networks(set(audit_df["Network"]))
         sel_net = st.selectbox("Network", network_choices, key="camaudit_network")
@@ -3833,6 +3833,8 @@ elif page == "📷 Camera Audit":
     with fc4:
         mismatch_only = st.checkbox("Mismatches only", value=False, key="camaudit_mismatch")
     with fc5:
+        no_order_data_only = st.checkbox("No order data", value=False, key="camaudit_no_order_data")
+    with fc6:
         order_search = st.text_input("Search project", key="camaudit_search").strip().lower()
 
     filtered = audit_df.copy()
@@ -3844,6 +3846,8 @@ elif page == "📷 Camera Audit":
         filtered = filtered[filtered["Status"] == sel_status]
     if order_search:
         filtered = filtered[filtered["Project"].str.lower().str.contains(order_search, na=False)]
+    if no_order_data_only:
+        filtered = filtered[filtered["Ordered"].isna()]
     if mismatch_only:
         filtered = filtered[
             ((filtered["Δ Ordered"].notna()) & (filtered["Δ Ordered"] != 0))
