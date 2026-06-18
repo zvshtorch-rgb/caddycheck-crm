@@ -126,6 +126,42 @@ def _suggest_project_matches(candidate: object, project_names: list[str], limit:
     return [name for score, name in scored_matches[:limit] if score >= 0.55]
 
 
+def _normalize_order_project_match_key(value: object) -> str:
+    key = _normalize_project_name_key(value)
+    key = key.replace("albertheijn", "ah")
+    key = key.replace("carrefourmarket", "cm")
+    if key.startswith("addelhaize"):
+        key = "ad" + key[len("addelhaize"):]
+    if key.startswith("proxydelhaize"):
+        key = "proxy" + key[len("proxydelhaize"):]
+    return key
+
+
+def _suggest_best_order_project_match(candidate: object, project_names: list[str]) -> tuple[str, float]:
+    candidate_key = _normalize_order_project_match_key(candidate)
+    if not candidate_key or not project_names:
+        return "", 0.0
+
+    from difflib import SequenceMatcher
+
+    best_name = ""
+    best_score = 0.0
+    for project_name in project_names:
+        project_key = _normalize_order_project_match_key(project_name)
+        if not project_key:
+            continue
+        if candidate_key == project_key:
+            return project_name, 1.0
+        if candidate_key in project_key or project_key in candidate_key:
+            score = 0.95
+        else:
+            score = SequenceMatcher(None, candidate_key, project_key).ratio()
+        if score > best_score:
+            best_score = score
+            best_name = project_name
+    return best_name, best_score
+
+
 def _get_exact_existing_project_match(candidate: object, project_names: list[str]) -> str:
     candidate_key = _normalize_project_name_key(candidate)
     if not candidate_key:
@@ -3125,12 +3161,16 @@ elif page == "📦 Orders":
                         for row_index, row in enumerate(import_rows):
                             row_project_name = _safe_str(row["project_name"]).strip()
                             existing_project = project_lookup.get(_normalize_project_name_key(row_project_name))
-                            suggested_project_name, suggested_project_score = _suggest_best_project_match(row_project_name, project_name_choices)
-                            if existing_project is None and suggested_project_score >= 0.72:
+                            suggested_project_name, suggested_project_score = _suggest_best_order_project_match(row_project_name, project_name_choices)
+                            if existing_project is None and suggested_project_score >= 0.55:
                                 existing_project = project_lookup.get(_normalize_project_name_key(suggested_project_name))
-                            resolved_project_name = existing_project.project_name if existing_project and suggested_project_score >= 0.72 else row_project_name
-                            resolved_country = row["country"] or (existing_project.country if existing_project else "") or _guess_order_country(row_project_name)
+                            resolved_project_name = existing_project.project_name if existing_project and suggested_project_score >= 0.55 else row_project_name
+                            parsed_country = _normalize_country(_safe_str(row["country"]).strip())
+                            resolved_country = (existing_project.country if existing_project else "") or parsed_country or _guess_order_country(row_project_name)
                             resolved_ordered_cams = row["num_cams"] or (_safe_int(existing_project.num_cams, default=0) if existing_project else 0)
+                            resolved_payment_amount = _safe_float(row.get("payment_amount"), default=0.0)
+                            if resolved_payment_amount <= 0 and resolved_ordered_cams > 0:
+                                resolved_payment_amount = float(resolved_ordered_cams * 778)
                             resolved_payment_month = row["payment_month"] or (_safe_str(existing_project.payment_month).strip() if existing_project else "")
                             resolved_install_year = row["installation_year"] or (existing_project.installation_year if existing_project else None)
                             preview_rows.append({
@@ -3142,7 +3182,7 @@ elif page == "📦 Orders":
                                 "Suggested Match": suggested_project_name,
                                 "Country": resolved_country,
                                 "Ordered Cams": resolved_ordered_cams,
-                                "Payment Amount": _safe_float(row.get("payment_amount"), default=0.0),
+                                "Payment Amount": resolved_payment_amount,
                                 "Payment Month": resolved_payment_month,
                                 "Install Year": resolved_install_year or "",
                                 "Requested Activation": row["activation_date"].date().isoformat() if row["activation_date"] else "",
@@ -3487,7 +3527,7 @@ elif page == "📦 Orders":
             {
                 "Order": _safe_str(order.get("order_number")),
                 "Project": _safe_str(order.get("project_name")),
-                "Suggested Match": _suggest_best_project_match(order.get("project_name"), project_name_choices)[0],
+                "Suggested Match": _suggest_best_order_project_match(order.get("project_name"), project_name_choices)[0],
                 "Country": _safe_str(order.get("country")),
                 "Ordered Cams": _safe_int(order.get("ordered_cameras"), default=0),
                 "Payment Amount": _safe_float(order.get("payment_amount"), default=0.0),
