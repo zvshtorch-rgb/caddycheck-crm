@@ -3058,14 +3058,19 @@ elif page == "📦 Orders":
 
     if CAN_EDIT:
         with st.expander("📥 Import Orders", expanded=False):
+            orders_upload_key_suffix = st.session_state.setdefault("_orders_upload_key_suffix", 0)
             uploaded_order_files = st.file_uploader(
                 "Upload order file(s) (PDF, XLSX, CSV, or ZIP)",
                 type=["pdf", "xlsx", "xlsm", "xls", "csv", "zip"],
-                key="orders_upload",
+                key=f"orders_upload_{orders_upload_key_suffix}",
                 accept_multiple_files=True,
                 help="Upload one or more order files or ZIP archives. Each parsed row becomes a tracked order record.",
             )
             if uploaded_order_files:
+                if st.button("Clear selected upload files", key=f"orders_clear_upload_{orders_upload_key_suffix}"):
+                    st.session_state["_orders_upload_key_suffix"] = orders_upload_key_suffix + 1
+                    st.rerun()
+
                 try:
                     expanded_order_sources = _expand_uploaded_order_sources(uploaded_order_files)
                 except Exception as exc:
@@ -3283,6 +3288,7 @@ elif page == "📦 Orders":
                                             + (f" Skipped {skipped_existing} existing row(s)." if skipped_existing else "")
                                         )
                                         st.session_state["_flash_success_page"] = "📦 Orders"
+                                        st.session_state["_orders_upload_key_suffix"] = orders_upload_key_suffix + 1
                                         st.rerun()
                                     except Exception as exc:
                                         st.error(f"Import failed: {exc}")
@@ -3688,6 +3694,7 @@ elif page == "📦 Orders":
                     load_orders_data.clear()
                     st.session_state["_flash_success"] = "Order updated successfully."
                     st.session_state["_flash_success_page"] = "📦 Orders"
+                    st.session_state["_orders_upload_key_suffix"] = st.session_state.get("_orders_upload_key_suffix", 0) + 1
                     st.rerun()
                 except Exception as exc:
                     st.error(f"Update failed: {exc}")
@@ -3698,6 +3705,7 @@ elif page == "📦 Orders":
                 load_orders_data.clear()
                 st.session_state["_flash_success"] = "Order deleted successfully."
                 st.session_state["_flash_success_page"] = "📦 Orders"
+                st.session_state["_orders_upload_key_suffix"] = st.session_state.get("_orders_upload_key_suffix", 0) + 1
                 st.rerun()
             except Exception as exc:
                 st.error(f"Delete failed: {exc}")
