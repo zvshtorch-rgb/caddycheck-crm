@@ -427,41 +427,6 @@ if _renew_token:
     else:
         st.error(f"❌ {_result['message']}")
         st.caption("Contact your account manager if you believe this is an error.")
-    st.stop()
-
-# Gate access
-if "role" not in st.session_state:
-    _login_form()
-    st.stop()
-
-ROLE       = st.session_state["role"]
-CAN_EDIT   = ROLES[ROLE]["can_edit"]
-
-# ── Custom CSS ────────────────────────────────────────────────────────────────
-st.markdown("""
-<style>
-    .metric-card {
-        background: white;
-        border-radius: 10px;
-        padding: 16px 20px;
-        border-left: 5px solid #2D6A9F;
-        box-shadow: 0 2px 6px rgba(0,0,0,0.08);
-        margin-bottom: 4px;
-    }
-    .metric-title { font-size: 13px; font-weight: 600; color: #666; margin-bottom: 4px; }
-    .metric-value { font-size: 26px; font-weight: 800; color: #2C3E50; }
-    .card-income  { border-left-color: #27AE60; }
-    .card-paid    { border-left-color: #2980B9; }
-    .card-debt    { border-left-color: #E74C3C; }
-    .card-monthly { border-left-color: #16A085; }
-    .card-yearly  { border-left-color: #2C3E50; }
-    .card-projects{ border-left-color: #8E44AD; }
-    .card-cameras { border-left-color: #F39C12; }
-    .stDataFrame thead tr th { background: #2D6A9F !important; color: white !important; }
-</style>
-""", unsafe_allow_html=True)
-
-
 # ── Data loading (cached) ─────────────────────────────────────────────────────
 @st.cache_data(ttl=300)
 def load_data():
