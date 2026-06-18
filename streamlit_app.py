@@ -3006,7 +3006,10 @@ elif page == "🏗️ Projects":
             if selected_value_search.strip():
                 needle = selected_value_search.strip().lower()
                 project_change_df = project_change_df[
-                    project_change_df["Old Value"].str.lower().str.contains(needle, na=False)
+                    project_change_df["Field"].str.lower().str.contains(needle, na=False)
+                    | project_change_df["Description"].str.lower().str.contains(needle, na=False)
+                    | project_change_df["Source"].str.lower().str.contains(needle, na=False)
+                    | project_change_df["Old Value"].str.lower().str.contains(needle, na=False)
                     | project_change_df["New Value"].str.lower().str.contains(needle, na=False)
                 ]
 
