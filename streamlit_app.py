@@ -1947,41 +1947,6 @@ if page == "📊 Dashboard":
 
     st.markdown("---")
 
-    # ── Cameras by Project table ───────────────────────────────────────────────
-    st.subheader("Cameras by Project")
-    sorted_proj = sorted(f_proj, key=lambda p: (0 if p.is_active() else 1, p.project_name))
-    proj_df = pd.DataFrame([{
-        "Project Name":    _safe_str(p.project_name),
-        "Country":         _safe_str(p.country),
-        "# Cams":          _safe_int(p.num_cams),
-        "Payment Month":   _safe_str(p.payment_month),
-        "Install Year":    _safe_str(p.installation_year),
-        "Status":          _normalize_project_status(_safe_str(p.status)),
-    } for p in sorted_proj])
-    proj_display_df = proj_df.copy()
-    if len(proj_display_df) > 0:
-        proj_display_df["# Cams"] = proj_display_df["# Cams"].map(lambda value: _safe_str(value))
-
-    def color_status(val):
-        if str(val).strip().lower() == "active":
-            return "color: #27AE60; font-weight: bold"
-        return "color: #E74C3C"
-
-    proj_table = proj_display_df
-    if len(proj_display_df) > 0:
-        proj_table = proj_display_df.style.set_properties(subset=["# Cams"], **{"text-align": "left"})
-        if "Status" in proj_display_df.columns:
-            proj_table = proj_table.map(color_status, subset=["Status"])
-
-    st.dataframe(
-        proj_table,
-        use_container_width=True,
-        hide_index=True,
-        height=300,
-    )
-
-    st.markdown("---")
-
     # ── Trend Chart ───────────────────────────────────────────────────────────
     st.subheader("Trends")
     cc1, cc2, cc3, cc4 = st.columns([2, 2, 1, 1])
