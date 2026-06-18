@@ -3118,8 +3118,13 @@ elif page == "📦 Orders":
                             "default_order_reference": order_reference,
                         })
                         for row_index, row in enumerate(import_rows):
-                            existing_project = project_lookup.get(row["project_name"].strip().lower())
-                            resolved_country = row["country"] or (existing_project.country if existing_project else "") or _guess_order_country(row["project_name"])
+                            row_project_name = _safe_str(row["project_name"]).strip()
+                            existing_project = project_lookup.get(_normalize_project_name_key(row_project_name))
+                            suggested_project_name, suggested_project_score = _suggest_best_project_match(row_project_name, project_name_choices)
+                            if existing_project is None and suggested_project_score >= 0.72:
+                                existing_project = project_lookup.get(_normalize_project_name_key(suggested_project_name))
+                            resolved_project_name = existing_project.project_name if existing_project and suggested_project_score >= 0.72 else row_project_name
+                            resolved_country = row["country"] or (existing_project.country if existing_project else "") or _guess_order_country(row_project_name)
                             resolved_ordered_cams = row["num_cams"] or (_safe_int(existing_project.num_cams, default=0) if existing_project else 0)
                             resolved_payment_month = row["payment_month"] or (_safe_str(existing_project.payment_month).strip() if existing_project else "")
                             resolved_install_year = row["installation_year"] or (existing_project.installation_year if existing_project else None)
@@ -3128,7 +3133,8 @@ elif page == "📦 Orders":
                                 "_source_key": source_key,
                                 "File": order_source["source_path"],
                                 "Order Ref": order_reference,
-                                "Project": row["project_name"],
+                                "Project": resolved_project_name,
+                                "Suggested Match": suggested_project_name,
                                 "Country": resolved_country,
                                 "Ordered Cams": resolved_ordered_cams,
                                 "Payment Amount": _safe_float(row.get("payment_amount"), default=0.0),
@@ -3175,6 +3181,7 @@ elif page == "📦 Orders":
                                 "_preview_id": None,
                                 "_source_key": None,
                                 "Project": st.column_config.TextColumn("Project", required=True),
+                                "Suggested Match": st.column_config.TextColumn("Suggested Match"),
                                 "Ordered Cams": st.column_config.NumberColumn("Ordered Cams", min_value=0, step=1),
                                 "Payment Amount": st.column_config.NumberColumn("Payment Amount", min_value=0.0, step=1.0, format="€ %.2f"),
                             },
