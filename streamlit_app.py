@@ -1619,6 +1619,21 @@ def _normalize_country(value: str) -> str:
     return country_mapping.get(normalized_key, cleaned)
 
 
+def _order_country_label(value: str) -> str:
+    cleaned = _safe_str(value).strip()
+    if not cleaned:
+        return ""
+    short_country_mapping = {
+        "bel": "Bel",
+        "belgium": "Bel",
+        "hol": "Hol",
+        "holland": "Hol",
+        "netherlands": "Hol",
+        "nld": "Hol",
+    }
+    return short_country_mapping.get(cleaned.lower(), cleaned)
+
+
 def _parse_order_date(value) -> Optional[datetime.date]:
     if value in (None, ""):
         return None
@@ -3157,7 +3172,7 @@ elif page == "📦 Orders":
                                 existing_project = project_lookup.get(_normalize_project_name_key(suggested_project_name))
                             resolved_project_name = existing_project.project_name if existing_project and suggested_project_score >= 0.55 else row_project_name
                             parsed_country = _normalize_country(_safe_str(row["country"]).strip())
-                            resolved_country = (existing_project.country if existing_project else "") or parsed_country or _guess_order_country(row_project_name)
+                            resolved_country = _order_country_label((existing_project.country if existing_project else "") or parsed_country or _guess_order_country(row_project_name))
                             resolved_ordered_cams = row["num_cams"] or (_safe_int(existing_project.num_cams, default=0) if existing_project else 0)
                             resolved_payment_amount = _safe_float(row.get("payment_amount"), default=0.0)
                             if resolved_payment_amount <= 0 and resolved_ordered_cams > 0:
@@ -3264,7 +3279,7 @@ elif page == "📦 Orders":
                                     import_rows_to_create.append({
                                         "order_number": order_ref_value,
                                         "project_name": edited_project_name,
-                                        "country": _safe_str(reviewed_row.get("Country", row["country"])).strip(),
+                                        "country": _order_country_label(_safe_str(reviewed_row.get("Country", row["country"])).strip()),
                                         "ordered_cameras": _safe_int(reviewed_row.get("Ordered Cams", row["num_cams"]), default=0),
                                         "payment_amount": _safe_float(reviewed_row.get("Payment Amount", row.get("payment_amount", 0.0)), default=0.0),
                                         "payment_month": _safe_str(reviewed_row.get("Payment Month", row["payment_month"])).strip(),
@@ -3421,7 +3436,7 @@ elif page == "📦 Orders":
                 nc1, nc2, nc3 = st.columns(3)
                 new_order_number = nc1.text_input("Order reference", key="new_order_number")
                 new_project_name = nc2.text_input("Project name", key="new_order_project")
-                new_country_options = [""] + sorted({_normalize_country(_safe_str(order.get("country")).strip()) for order in orders if _safe_str(order.get("country")).strip()} | {_normalize_country(_safe_str(p.country).strip()) for p in projects if _safe_str(p.country).strip()})
+                new_country_options = [""] + sorted({_order_country_label(order.get("country")) for order in orders if _safe_str(order.get("country")).strip()} | {_order_country_label(p.country) for p in projects if _safe_str(p.country).strip()})
                 new_country = nc3.selectbox("Country", new_country_options, key="new_order_country")
 
                 nc4, nc5, nc6 = st.columns(3)
@@ -3454,7 +3469,7 @@ elif page == "📦 Orders":
                             {
                                 "order_number": _safe_str(new_order_number).strip(),
                                 "project_name": _safe_str(new_project_name).strip(),
-                                "country": _safe_str(new_country).strip(),
+                                "country": _order_country_label(new_country),
                                 "ordered_cameras": int(new_ordered_cameras),
                                 "payment_amount": float(new_payment_amount),
                                 "payment_month": _safe_str(new_payment_month).strip(),
@@ -3478,7 +3493,7 @@ elif page == "📦 Orders":
     with st.expander("🔍 Filters", expanded=True):
         fc1, fc2, fc3, fc4 = st.columns(4)
         status_options = ["All"] + sorted({_normalize_order_status(order.get("status", "")) for order in orders if _safe_str(order.get("status"))})
-        country_options = ["All"] + sorted({_safe_str(order.get("country")).strip() for order in orders if _safe_str(order.get("country")).strip()})
+        country_options = ["All"] + sorted({_order_country_label(order.get("country")) for order in orders if _safe_str(order.get("country")).strip()})
         order_status_filter = fc1.selectbox("Status", status_options, key="orders_filter_status")
         order_country_filter = fc2.selectbox("Country", country_options, key="orders_filter_country")
         order_search = fc3.text_input("Search project / order", key="orders_filter_search")
@@ -3488,7 +3503,7 @@ elif page == "📦 Orders":
     if order_status_filter != "All":
         filtered_orders = [order for order in filtered_orders if _normalize_order_status(order.get("status", "")) == order_status_filter]
     if order_country_filter != "All":
-        filtered_orders = [order for order in filtered_orders if _safe_str(order.get("country")).strip() == order_country_filter]
+        filtered_orders = [order for order in filtered_orders if _order_country_label(order.get("country")) == order_country_filter]
     if order_search.strip():
         order_search_lower = order_search.lower().strip()
         filtered_orders = [
@@ -3509,7 +3524,7 @@ elif page == "📦 Orders":
                 "Order": _safe_str(order.get("order_number")),
                 "Project": _safe_str(order.get("project_name")),
                 "Suggested Match": _suggest_best_order_project_match(order.get("project_name"), project_name_choices)[0],
-                "Country": _safe_str(order.get("country")),
+                "Country": _order_country_label(order.get("country")),
                 "Ordered Cams": _safe_int(order.get("ordered_cameras"), default=0),
                 "Payment Amount": _safe_float(order.get("payment_amount"), default=0.0),
                 "Install Year": _safe_int(order.get("installation_year"), default=0) or "",
@@ -3617,8 +3632,8 @@ elif page == "📦 Orders":
             uc1, uc2, uc3 = st.columns(3)
             upd_order_number = uc1.text_input("Order reference", value=_safe_str(selected_order.get("order_number")), key=f"upd_order_number{field_key_suffix}")
             upd_project_name = uc2.text_input("Project name", value=_safe_str(selected_order.get("project_name")), key=f"upd_order_project{field_key_suffix}")
-            upd_country_options = [""] + sorted({_normalize_country(_safe_str(order.get("country")).strip()) for order in orders if _safe_str(order.get("country")).strip()} | {_normalize_country(_safe_str(p.country).strip()) for p in projects if _safe_str(p.country).strip()})
-            current_country = _normalize_country(_safe_str(selected_order.get("country")).strip())
+            upd_country_options = [""] + sorted({_order_country_label(order.get("country")) for order in orders if _safe_str(order.get("country")).strip()} | {_order_country_label(p.country) for p in projects if _safe_str(p.country).strip()})
+            current_country = _order_country_label(selected_order.get("country"))
             upd_country_index = upd_country_options.index(current_country) if current_country in upd_country_options else 0
             upd_country = uc3.selectbox("Country", upd_country_options, index=upd_country_index, key=f"upd_order_country{field_key_suffix}")
             exact_project_picker_options = [""] + project_name_choices
@@ -3695,7 +3710,7 @@ elif page == "📦 Orders":
                         orders_source_name,
                         order_number=_safe_str(upd_order_number).strip(),
                         project_name=final_project_name,
-                        country=_safe_str(upd_country).strip(),
+                        country=_order_country_label(upd_country),
                         ordered_cameras=int(upd_ordered_cameras),
                         payment_amount=float(upd_payment_amount),
                         payment_month=_safe_str(upd_payment_month).strip(),
