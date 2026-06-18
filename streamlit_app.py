@@ -329,6 +329,43 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+st.markdown(
+    """
+    <style>
+    .metric-card {
+        background: #ffffff;
+        border: 1px solid #e6e9ef;
+        border-left: 4px solid #64748b;
+        border-radius: 8px;
+        padding: 14px 16px;
+        min-height: 84px;
+        box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+    }
+    .metric-title {
+        color: #64748b;
+        font-size: 0.82rem;
+        font-weight: 600;
+        line-height: 1.2;
+        margin-bottom: 8px;
+    }
+    .metric-value {
+        color: #0f172a;
+        font-size: 1.55rem;
+        font-weight: 700;
+        line-height: 1.15;
+        overflow-wrap: anywhere;
+    }
+    .card-income { border-left-color: #2563eb; }
+    .card-paid { border-left-color: #16a34a; }
+    .card-debt { border-left-color: #dc2626; }
+    .card-yearly { border-left-color: #7c3aed; }
+    .card-projects { border-left-color: #0d9488; }
+    .card-cameras { border-left-color: #f59e0b; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 # ── Role-based login ──────────────────────────────────────────────────────────
 # Passwords are stored in Streamlit secrets (secrets.toml or Streamlit Cloud secrets).
 # Format in .streamlit/secrets.toml:
