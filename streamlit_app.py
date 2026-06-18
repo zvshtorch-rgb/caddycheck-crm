@@ -3817,7 +3817,7 @@ elif page == "📷 Camera Audit":
     audit_df = pd.DataFrame(rows)
 
     # ── Filters ───────────────────────────────────────────────────────────────
-    fc1, fc2, fc3, fc4 = st.columns(4)
+    fc1, fc2, fc3, fc4, fc5 = st.columns(5)
     with fc1:
         network_choices = ["All"] + _ordered_project_networks(set(audit_df["Network"]))
         sel_net = st.selectbox("Network", network_choices, key="camaudit_network")
@@ -3825,8 +3825,11 @@ elif page == "📷 Camera Audit":
         country_vals = sorted(v for v in audit_df["Country"].unique() if v)
         sel_country = st.selectbox("Country", ["All"] + country_vals, key="camaudit_country")
     with fc3:
-        mismatch_only = st.checkbox("Mismatches only", value=False, key="camaudit_mismatch")
+        status_vals = sorted(v for v in audit_df["Status"].unique() if v)
+        sel_status = st.selectbox("Status", ["All"] + status_vals, key="camaudit_status")
     with fc4:
+        mismatch_only = st.checkbox("Mismatches only", value=False, key="camaudit_mismatch")
+    with fc5:
         order_search = st.text_input("Search project", key="camaudit_search").strip().lower()
 
     filtered = audit_df.copy()
@@ -3834,6 +3837,8 @@ elif page == "📷 Camera Audit":
         filtered = filtered[filtered["Network"] == sel_net]
     if sel_country != "All":
         filtered = filtered[filtered["Country"] == sel_country]
+    if sel_status != "All":
+        filtered = filtered[filtered["Status"] == sel_status]
     if order_search:
         filtered = filtered[filtered["Project"].str.lower().str.contains(order_search, na=False)]
     if mismatch_only:
