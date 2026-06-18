@@ -1719,7 +1719,7 @@ st.sidebar.title("📊 CaddyCheck CRM")
 st.sidebar.markdown("---")
 page = st.sidebar.radio(
     "Navigation",
-    ["📊 Dashboard", "❓ Ask Data", "🏗️ Projects", "📦 Orders", "🔐 Licenses", "🧾 Invoice Details", "💸 Debt Report", "📅 Monthly Invoice", "🎫 Tickets", "🏦 Bank Payment", "⚙️ Settings"],
+    ["📊 Dashboard", "❓ Ask Data", "🏗️ Projects", "📦 Orders", "� Camera Audit", "�🔐 Licenses", "🧾 Invoice Details", "💸 Debt Report", "📅 Monthly Invoice", "🎫 Tickets", "🏦 Bank Payment", "⚙️ Settings"],
     label_visibility="collapsed",
 )
 st.sidebar.markdown("---")
@@ -3703,6 +3703,141 @@ elif page == "📦 Orders":
             )
         elif _safe_str(selected_order.get("source_filename")).strip():
             st.caption(f"Source file: {_safe_str(selected_order.get('source_filename')).strip()}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: CAMERA AUDIT
+# ══════════════════════════════════════════════════════════════════════════════
+elif page == "📷 Camera Audit":
+    st.title("📷 Camera Audit")
+    st.caption(
+        "Compare each project's actual working cameras (# Cams) against the cameras "
+        "you invoiced and the cameras the customer ordered."
+    )
+
+    try:
+        ca_orders, ca_orders_source = load_orders_data(_data_path)
+    except Exception as exc:
+        ca_orders, ca_orders_source = [], "unavailable"
+        st.warning(f"Could not load orders ({exc}). Ordered cameras will show as blank.")
+
+    # Aggregate invoiced cameras per project: MAX cameras_number across all invoices.
+    invoiced_by_project: dict[str, int] = {}
+    for inv in invoices:
+        key = _normalize_project_name_key(canonical_project_name(inv.project_name))
+        if not key:
+            continue
+        cams = _safe_int(getattr(inv, "cameras_number", None), default=0)
+        if cams > invoiced_by_project.get(key, 0):
+            invoiced_by_project[key] = cams
+
+    # Aggregate ordered cameras per project: SUM of ordered_cameras across all orders.
+    ordered_by_project: dict[str, int] = {}
+    has_order_for_project: set[str] = set()
+    for order in ca_orders:
+        key = _normalize_project_name_key(canonical_project_name(order.get("project_name")))
+        if not key:
+            continue
+        has_order_for_project.add(key)
+        ordered_by_project[key] = ordered_by_project.get(key, 0) + _safe_int(order.get("ordered_cameras"), default=0)
+
+    rows = []
+    for project in projects:
+        name = _safe_str(project.project_name).strip()
+        if not name:
+            continue
+        key = _normalize_project_name_key(canonical_project_name(name))
+        working = _safe_int(project.num_cams, default=0)
+        invoiced = invoiced_by_project.get(key)
+        ordered = ordered_by_project.get(key) if key in has_order_for_project else None
+        rows.append({
+            "Project": name,
+            "Network": _project_network(name),
+            "Country": _safe_str(project.country).strip(),
+            "Status": _safe_str(project.status).strip(),
+            "# Cams (working)": working,
+            "Ordered": ordered,
+            "Invoiced (max)": invoiced if invoiced else None,
+            "Δ Ordered": (working - ordered) if ordered is not None else None,
+            "Δ Invoiced": (working - invoiced) if invoiced else None,
+        })
+
+    if not rows:
+        st.info("No projects available to compare.")
+        st.stop()
+
+    audit_df = pd.DataFrame(rows)
+
+    # ── Filters ───────────────────────────────────────────────────────────────
+    fc1, fc2, fc3, fc4 = st.columns(4)
+    with fc1:
+        network_choices = ["All"] + _ordered_project_networks(set(audit_df["Network"]))
+        sel_net = st.selectbox("Network", network_choices, key="camaudit_network")
+    with fc2:
+        country_vals = sorted(v for v in audit_df["Country"].unique() if v)
+        sel_country = st.selectbox("Country", ["All"] + country_vals, key="camaudit_country")
+    with fc3:
+        mismatch_only = st.checkbox("Mismatches only", value=False, key="camaudit_mismatch")
+    with fc4:
+        order_search = st.text_input("Search project", key="camaudit_search").strip().lower()
+
+    filtered = audit_df.copy()
+    if sel_net != "All":
+        filtered = filtered[filtered["Network"] == sel_net]
+    if sel_country != "All":
+        filtered = filtered[filtered["Country"] == sel_country]
+    if order_search:
+        filtered = filtered[filtered["Project"].str.lower().str.contains(order_search, na=False)]
+    if mismatch_only:
+        filtered = filtered[
+            ((filtered["Δ Ordered"].notna()) & (filtered["Δ Ordered"] != 0))
+            | ((filtered["Δ Invoiced"].notna()) & (filtered["Δ Invoiced"] != 0))
+        ]
+
+    # ── Summary metrics ───────────────────────────────────────────────────────
+    total_working = int(filtered["# Cams (working)"].sum())
+    total_ordered = int(filtered["Ordered"].dropna().sum())
+    total_invoiced = int(filtered["Invoiced (max)"].dropna().sum())
+    order_mismatches = int(((filtered["Δ Ordered"].notna()) & (filtered["Δ Ordered"] != 0)).sum())
+    invoice_mismatches = int(((filtered["Δ Invoiced"].notna()) & (filtered["Δ Invoiced"] != 0)).sum())
+    no_orders = int(filtered["Ordered"].isna().sum())
+
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("Working Cams", total_working)
+    m2.metric("Ordered Cams", total_ordered)
+    m3.metric("Invoiced Cams", total_invoiced)
+    m4.metric("Order Mismatches", order_mismatches)
+    m5.metric("Invoice Mismatches", invoice_mismatches)
+    if no_orders:
+        st.caption(f"⚠️ {no_orders} project(s) have no order data yet (still being uploaded).")
+
+    # ── Highlighted table ─────────────────────────────────────────────────────
+    def _highlight_delta(val):
+        if pd.isna(val):
+            return ""
+        if val == 0:
+            return "color: #2e7d32;"  # green = match
+        return "background-color: #fdecea; color: #c62828; font-weight: bold;"  # red = mismatch
+
+    styled = (
+        filtered.style
+        .map(_highlight_delta, subset=["Δ Ordered", "Δ Invoiced"])
+        .format({
+            "Ordered": lambda v: "—" if pd.isna(v) else f"{int(v)}",
+            "Invoiced (max)": lambda v: "—" if pd.isna(v) else f"{int(v)}",
+            "Δ Ordered": lambda v: "—" if pd.isna(v) else f"{int(v):+d}",
+            "Δ Invoiced": lambda v: "—" if pd.isna(v) else f"{int(v):+d}",
+        })
+    )
+    st.dataframe(styled, use_container_width=True, hide_index=True)
+
+    st.download_button(
+        "⬇️ Download comparison (CSV)",
+        data=filtered.to_csv(index=False).encode("utf-8"),
+        file_name="camera_audit.csv",
+        mime="text/csv",
+        key="camaudit_download",
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
