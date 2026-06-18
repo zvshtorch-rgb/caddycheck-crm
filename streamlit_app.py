@@ -1022,7 +1022,10 @@ def _load_project_order_pdf_as_dataframe(file_bytes: bytes) -> pd.DataFrame:
                         extracted_rows.append(normalized_row)
 
     if not extracted_rows:
-        raise ValueError("Could not find any table rows in the uploaded PDF order")
+        # No ruled table grid in this PDF (common for single-order forms).
+        # Return an empty frame so the caller falls back to text-based parsing
+        # (project name from filename, cameras/amount from the PDF text).
+        return pd.DataFrame()
 
     max_cols = max(len(row) for row in extracted_rows)
     padded_rows = [row + [""] * (max_cols - len(row)) for row in extracted_rows]
@@ -1221,6 +1224,7 @@ def _guess_project_name_from_order_filename(filename: str) -> str:
     stem = stem.replace("_", " ")
     stem = re.sub(r"^\d{4}-\d{2}-\d{2,3}\s+", "", stem)
     stem = re.sub(r"^\d{4}-\d{2}-\d+\s+", "", stem)
+    stem = re.sub(r"^BL\d+\s+", "", stem, flags=re.IGNORECASE)
     stem = re.sub(r"\b(?:revised?|rev|extra(?:\s+pshout)?|pushout)\b.*$", "", stem, flags=re.IGNORECASE)
     stem = re.sub(r"\s+", " ", stem).strip(" -_")
     return stem
