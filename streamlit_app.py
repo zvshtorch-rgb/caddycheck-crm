@@ -3663,10 +3663,14 @@ elif page == "📦 Orders":
         if current_status not in ORDER_STATUS_OPTIONS:
             current_status = ORDER_STATUS_OPTIONS[0]
         exact_project_match = _get_exact_existing_project_match(selected_order.get("project_name"), project_name_choices)
+        suggested_project_match, suggested_project_score = _suggest_best_order_project_match(selected_order.get("project_name"), project_name_choices)
+        selected_project_match = exact_project_match or (suggested_project_match if suggested_project_score >= 0.55 else "")
         if exact_project_match:
             st.caption(f"Exact project match found: {exact_project_match}")
+        elif selected_project_match:
+            st.caption(f"Suggested project match: {selected_project_match}")
         else:
-            st.caption("No exact project match found. Use the dropdown below to pick a real project name.")
+            st.caption("No project match found. Use the dropdown below to pick a real project name.")
 
         with st.form("update_order_form"):
             uc1, uc2, uc3 = st.columns(3)
@@ -3677,12 +3681,15 @@ elif page == "📦 Orders":
             upd_country_index = upd_country_options.index(current_country) if current_country in upd_country_options else 0
             upd_country = uc3.selectbox("Country", upd_country_options, index=upd_country_index, key=f"upd_order_country{field_key_suffix}")
             exact_project_picker_options = [""] + project_name_choices
-            exact_project_index = 1 if exact_project_match and exact_project_match in project_name_choices else 0
+            exact_project_index = (
+                exact_project_picker_options.index(selected_project_match)
+                if selected_project_match in exact_project_picker_options else 0
+            )
             upd_project_match = st.selectbox(
-                "Existing project name (exact match only)",
+                "Existing project name",
                 exact_project_picker_options,
                 index=exact_project_index,
-                help="This dropdown only shows project names that already exist in the Projects list.",
+                help="This dropdown only shows project names that already exist in the Projects list. It defaults to the exact match or best suggested match.",
                 key=f"upd_order_project_match{field_key_suffix}",
             )
 
