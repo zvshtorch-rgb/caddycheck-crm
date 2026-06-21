@@ -3576,6 +3576,146 @@ elif page == "📦 Orders":
     else:
         st.info("No orders match the current filters.")
 
+    if CAN_EDIT and orders:
+        st.markdown("---")
+        st.subheader("Create Invoice From Order")
+        order_invoice_refs = sorted(
+            {
+                _safe_str(order.get("order_number")).strip()
+                for order in orders
+                if _safe_str(order.get("order_number")).strip()
+            },
+            reverse=True,
+        )
+        if not order_invoice_refs:
+            st.info("No order references are available for invoice creation.")
+        else:
+            default_order_invoice_ref = "775940" if "775940" in order_invoice_refs else order_invoice_refs[0]
+            oi1, oi2, oi3, oi4 = st.columns(4)
+            selected_order_invoice_ref = oi1.selectbox(
+                "Order reference",
+                order_invoice_refs,
+                index=order_invoice_refs.index(default_order_invoice_ref),
+                key="order_invoice_ref",
+            )
+            order_invoice_rows = [
+                order for order in orders
+                if _safe_str(order.get("order_number")).strip() == selected_order_invoice_ref
+            ]
+            suggested_order_invoice_no = _get_next_invoice_number(invoices, _data_path)
+            order_invoice_number = oi2.number_input(
+                "Invoice number",
+                min_value=1,
+                step=1,
+                value=suggested_order_invoice_no,
+                key="order_invoice_number",
+            )
+            order_invoice_years = [
+                _safe_int(order.get("installation_year"), default=0)
+                for order in order_invoice_rows
+                if _safe_int(order.get("installation_year"), default=0) > 0
+            ]
+            default_order_invoice_year = max(order_invoice_years) if order_invoice_years else datetime.date.today().year
+            order_invoice_year = oi3.number_input(
+                "Invoice year",
+                min_value=2013,
+                max_value=2035,
+                step=1,
+                value=int(default_order_invoice_year),
+                key="order_invoice_year",
+            )
+            default_order_maintenance_year = "Paid Trial-0.5Y" if _is_continuation_order(selected_order_invoice_ref) else "Y1"
+            order_invoice_maintenance_year = oi4.selectbox(
+                "Maint. year",
+                ["Y1", "Paid Trial-0.5Y", "Y2", "Y3", "Y4", "Y5"],
+                index=["Y1", "Paid Trial-0.5Y", "Y2", "Y3", "Y4", "Y5"].index(default_order_maintenance_year),
+                key="order_invoice_maintenance_year",
+            )
+            order_invoice_type = st.selectbox(
+                "Invoice type",
+                ["New installation", "Complementary", "Monthly", ""],
+                key="order_invoice_type",
+            )
+
+            grouped_invoice_rows: dict[str, dict] = {}
+            for order in order_invoice_rows:
+                order_project_name = _safe_str(order.get("project_name")).strip()
+                exact_project_name = _get_exact_existing_project_match(order_project_name, project_name_choices)
+                suggested_project_name, suggested_project_score = _suggest_best_order_project_match(order_project_name, project_name_choices)
+                resolved_project_name = exact_project_name or (suggested_project_name if suggested_project_score >= 0.55 else order_project_name)
+                resolved_project_name = canonical_project_name(resolved_project_name)
+                if not resolved_project_name:
+                    continue
+                group_key = _normalize_project_name_key(resolved_project_name)
+                cameras = _safe_int(order.get("ordered_cameras"), default=0)
+                amount = _safe_float(order.get("payment_amount"), default=0.0)
+                if amount <= 0 and cameras > 0:
+                    amount = float(cameras * (389 if _is_continuation_order(selected_order_invoice_ref) else 778))
+                if group_key not in grouped_invoice_rows:
+                    grouped_invoice_rows[group_key] = {
+                        "project_name": resolved_project_name,
+                        "cameras_number": 0,
+                        "payment_amount": 0.0,
+                    }
+                grouped_invoice_rows[group_key]["cameras_number"] += cameras
+                grouped_invoice_rows[group_key]["payment_amount"] += amount
+
+            order_invoice_payload = [
+                {
+                    "invoice_number": str(int(order_invoice_number)),
+                    "project_name": row["project_name"],
+                    "maintenance_year": order_invoice_maintenance_year,
+                    "payment_amount": round(_safe_float(row["payment_amount"]), 2),
+                    "cameras_number": _safe_int(row["cameras_number"], default=0) or None,
+                    "payment_date": None,
+                    "paid": "No",
+                    "year": int(order_invoice_year),
+                    "invoice_type": order_invoice_type or None,
+                    "for_month": None,
+                    "sent_at": None,
+                    "description": f"Order {selected_order_invoice_ref}",
+                }
+                for row in sorted(grouped_invoice_rows.values(), key=lambda item: item["project_name"])
+                if _safe_float(row["payment_amount"], default=0.0) > 0 or _safe_int(row["cameras_number"], default=0) > 0
+            ]
+
+            if order_invoice_payload:
+                order_invoice_preview_df = pd.DataFrame([
+                    {
+                        "Invoice #": row["invoice_number"],
+                        "Project": row["project_name"],
+                        "Maint. Year": row["maintenance_year"],
+                        "Amount (€)": row["payment_amount"],
+                        "Cameras": row["cameras_number"] or 0,
+                        "Year": row["year"],
+                        "Type": row["invoice_type"] or "",
+                        "Description": row["description"],
+                    }
+                    for row in order_invoice_payload
+                ])
+                st.caption(
+                    f"Preview: {len(order_invoice_payload)} invoice row(s), "
+                    f"{sum(_safe_int(row['cameras_number'], default=0) for row in order_invoice_payload)} cameras, "
+                    f"€{sum(_safe_float(row['payment_amount']) for row in order_invoice_payload):,.0f}."
+                )
+                st.dataframe(order_invoice_preview_df, use_container_width=True, hide_index=True, height=260)
+                if _is_excel_source(_data_path):
+                    st.warning("Creating invoices directly from orders is available only when connected to Supabase.")
+                elif st.button("Create Invoice From This Order", type="primary", key="create_invoice_from_order"):
+                    try:
+                        replace_invoice_rows(int(order_invoice_number), order_invoice_payload)
+                        load_data.clear()
+                        st.session_state["_flash_success"] = (
+                            f"Created invoice #{int(order_invoice_number)} from order {selected_order_invoice_ref} "
+                            f"with {len(order_invoice_payload)} row(s)."
+                        )
+                        st.session_state["_flash_success_page"] = "📦 Orders"
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"Invoice creation failed: {exc}")
+            else:
+                st.warning("No billable rows were found for the selected order reference.")
+
     if CAN_EDIT and filtered_orders:
         st.markdown("---")
         st.subheader("Create Missing Projects")
