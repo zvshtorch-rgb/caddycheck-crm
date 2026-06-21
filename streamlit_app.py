@@ -1145,6 +1145,15 @@ def _infer_order_camera_total_from_amount(payment_amount: float, rate_per_camera
     return 0
 
 
+def _is_continuation_order(value: object) -> bool:
+    text = _safe_str(value).lower()
+    return "775940" in text or "continuation" in text or "rest of" in text
+
+
+def _infer_continuation_order_camera_total(payment_amount: float) -> int:
+    return _infer_order_camera_total_from_amount(payment_amount, rate_per_camera=389.0)
+
+
 def _extract_purchase_order_metrics(raw_df: pd.DataFrame, text: str) -> tuple[int, float]:
     ordered_cameras = 0
     line_totals: list[tuple[int, float]] = []  # (qty, amount) per detected line item
@@ -3173,8 +3182,22 @@ elif page == "📦 Orders":
                             resolved_project_name = existing_project.project_name if existing_project and suggested_project_score >= 0.55 else row_project_name
                             parsed_country = _normalize_country(_safe_str(row["country"]).strip())
                             resolved_country = _order_country_label((existing_project.country if existing_project else "") or parsed_country or _guess_order_country(row_project_name))
-                            resolved_ordered_cams = row["num_cams"] or (_safe_int(existing_project.num_cams, default=0) if existing_project else 0)
                             resolved_payment_amount = _safe_float(row.get("payment_amount"), default=0.0)
+                            continuation_context = " ".join([
+                                order_reference,
+                                order_source["source_name"],
+                                order_source["source_path"],
+                                row_project_name,
+                            ])
+                            amount_inferred_cams = (
+                                _infer_continuation_order_camera_total(resolved_payment_amount)
+                                if _is_continuation_order(continuation_context)
+                                else _infer_order_camera_total_from_amount(resolved_payment_amount)
+                            )
+                            if _is_continuation_order(continuation_context):
+                                resolved_ordered_cams = amount_inferred_cams or row["num_cams"] or (_safe_int(existing_project.num_cams, default=0) if existing_project else 0)
+                            else:
+                                resolved_ordered_cams = row["num_cams"] or amount_inferred_cams or (_safe_int(existing_project.num_cams, default=0) if existing_project else 0)
                             if resolved_payment_amount <= 0 and resolved_ordered_cams > 0:
                                 resolved_payment_amount = float(resolved_ordered_cams * 778)
                             resolved_payment_month = row["payment_month"] or (_safe_str(existing_project.payment_month).strip() if existing_project else "")
@@ -3622,6 +3645,20 @@ elif page == "📦 Orders":
         current_payment_month = _safe_str(selected_order.get("payment_month")).strip()
         current_installation_year = _safe_str(selected_order.get("installation_year")).strip()
         current_payment_amount = _safe_float(selected_order.get("payment_amount"), default=0.0)
+        current_ordered_cameras = _safe_int(selected_order.get("ordered_cameras"), default=0)
+        selected_order_context = " ".join([
+            _safe_str(selected_order.get("order_number")),
+            _safe_str(selected_order.get("source_filename")),
+            _safe_str(selected_order.get("project_name")),
+        ])
+        continuation_cameras = (
+            _infer_continuation_order_camera_total(current_payment_amount)
+            if _is_continuation_order(selected_order_context)
+            else 0
+        )
+        if continuation_cameras > 0 and continuation_cameras != current_ordered_cameras:
+            current_ordered_cameras = continuation_cameras
+            st.caption(f"Continuation order detected: suggested cameras from €389/cam = {continuation_cameras}.")
         current_status = _normalize_order_status(selected_order.get("status", ""))
         if current_status not in ORDER_STATUS_OPTIONS:
             current_status = ORDER_STATUS_OPTIONS[0]
@@ -3654,7 +3691,7 @@ elif page == "📦 Orders":
                 "Ordered cameras",
                 min_value=0,
                 step=1,
-                value=max(0, _safe_int(selected_order.get("ordered_cameras"), default=0)),
+                value=max(0, current_ordered_cameras),
                 key=f"upd_order_cameras{field_key_suffix}",
             )
             upd_payment_amount = uc5.number_input(
