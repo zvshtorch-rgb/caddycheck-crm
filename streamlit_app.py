@@ -5202,53 +5202,9 @@ elif page == "💸 Debt Report":
 
     st.markdown("---")
 
-    # ── Summary table: grouped by project ────────────────────────────────────
-    st.subheader("Debt Summary by Project")
-    from collections import defaultdict
-    proj_debt: dict = defaultdict(lambda: {"inv_nos": set(), "total": 0.0, "country": ""})
-    for i in debt_inv:
-        key = i.project_name
-        if i.invoice_number:
-            proj_debt[key]["inv_nos"].add(str(int(i.invoice_number)))
-        proj_debt[key]["total"]   += i.payment_amount
-        resolved_country = _normalize_country(_safe_str(_get_country(i.project_name)).strip())
-        if not resolved_country:
-            invoice_number_hint = _safe_int(i.invoice_number, default=0)
-            if invoice_number_hint:
-                resolved_country = _safe_str(invoice_country_hint.get(invoice_number_hint, "")).strip()
-        if not resolved_country:
-            resolved_country = _infer_country_from_project_name(i.project_name)
-        if resolved_country and not _safe_str(proj_debt[key]["country"]).strip():
-            proj_debt[key]["country"] = resolved_country
-
-    summary_rows = [{
-        "Project Name":    name,
-        "Country":         d["country"],
-        "Invoice Numbers": ", ".join(sorted(d["inv_nos"])),
-        "Total Debt (€)":  int(round(d["total"])),
-    } for name, d in sorted(proj_debt.items(), key=lambda x: -x[1]["total"])]
-
-    if summary_rows:
-        summary_df = pd.DataFrame(summary_rows)
-
-        def color_debt_amt(val):
-            try:
-                return "color: #E74C3C; font-weight: bold" if float(val) > 0 else ""
-            except Exception:
-                return ""
-
-        st.dataframe(
-            summary_df.style.map(color_debt_amt, subset=["Total Debt (€)"]),
-            use_container_width=True, hide_index=True, height=400,
-        )
-
-        # Download summary as CSV
-        csv_summary = summary_df.to_csv(index=False).encode("utf-8")
-        st.download_button("⬇️ Download Summary CSV", csv_summary,
-                           file_name="debt_summary.csv", mime="text/csv")
-
-        # Download summary as PDF (split Y1 vs Y2+)
-        try:
+    # ── Download debt report PDF and email section ───────────────────────────
+    try:
+        if True:
             from reportlab.lib.pagesizes import A4
             from reportlab.lib.units import cm
             from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -5425,8 +5381,8 @@ elif page == "💸 Debt Report":
                                 st.success("Debt report email sent.")
                             except Exception as exc:
                                 st.error(f"Debt report email failed: {exc}")
-        except Exception as e:
-            st.warning(f"PDF export unavailable: {e}")
+    except Exception as e:
+        st.warning(f"PDF export unavailable: {e}")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE: MONTHLY INVOICE
