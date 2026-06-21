@@ -3685,12 +3685,13 @@ elif page == "📦 Orders":
                 exact_project_picker_options.index(selected_project_match)
                 if selected_project_match in exact_project_picker_options else 0
             )
+            project_match_key_suffix = _normalize_project_name_key(selected_project_match) or "none"
             upd_project_match = st.selectbox(
                 "Existing project name",
                 exact_project_picker_options,
                 index=exact_project_index,
                 help="This dropdown only shows project names that already exist in the Projects list. It defaults to the exact match or best suggested match.",
-                key=f"upd_order_project_match{field_key_suffix}",
+                key=f"upd_order_project_match{field_key_suffix}_{project_match_key_suffix}",
             )
 
             uc4, uc5, uc6 = st.columns(3)
