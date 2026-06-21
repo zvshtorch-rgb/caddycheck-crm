@@ -2881,10 +2881,13 @@ elif page == "🏗️ Projects":
         project_merge_options = sorted({_safe_str(p.project_name).strip() for p in projects if _safe_str(p.project_name).strip()})
         if project_merge_options:
             with st.form("merge_project_form"):
+                project_merge_source_options = [""] + project_merge_options
                 merge_source_name = st.selectbox(
                     "Old project name",
-                    project_merge_options,
+                    project_merge_source_options,
+                    index=0,
                     key="project_merge_source",
+                    help="Choose the project name you want to rename or merge. Blank means no project is selected yet.",
                 )
                 merge_target_name = st.text_input(
                     "New / target project name",
@@ -2895,7 +2898,9 @@ elif page == "🏗️ Projects":
 
             if merge_project_btn:
                 target_name = _safe_str(merge_target_name).strip()
-                if not target_name:
+                if not _safe_str(merge_source_name).strip():
+                    st.error("Choose the old project name to rename.")
+                elif not target_name:
                     st.error("Enter the new / target project name.")
                 elif target_name == merge_source_name:
                     st.error("Choose a different target name.")
