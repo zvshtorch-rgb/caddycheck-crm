@@ -3086,25 +3086,30 @@ elif page == "📦 Orders":
     ]
     install_year_options = [""] + [str(year) for year in range(2030, 2013, -1)]
 
-    total_orders = len(orders)
-    open_orders = sum(
-        1 for order in orders
+    order_ref_keys = {
+        _safe_str(order.get("order_number")).strip() or f"row:{_safe_int(order.get('id'), default=0)}"
+        for order in orders
+    }
+    open_order_ref_keys = {
+        _safe_str(order.get("order_number")).strip() or f"row:{_safe_int(order.get('id'), default=0)}"
+        for order in orders
         if _normalize_order_status(order.get("status", "")) in {"New", "Ordered", "In Progress"}
-    )
+    }
     missing_project_orders = [
         order for order in orders
         if not _order_project_matches(order.get("project_name"), project_name_choices)
     ]
     total_ordered_cameras = sum(_safe_int(order.get("ordered_cameras"), default=0) for order in orders)
 
-    mc1, mc2, mc3, mc4 = st.columns(4)
-    mc1.metric("Total Orders", total_orders)
-    mc2.metric("Not Completed", open_orders)
-    mc3.metric("No Project Match", len(missing_project_orders))
-    mc4.metric("Ordered Cameras", total_ordered_cameras)
+    mc1, mc2, mc3, mc4, mc5 = st.columns(5)
+    mc1.metric("Order Refs", len(order_ref_keys))
+    mc2.metric("Order Rows", len(orders))
+    mc3.metric("Not Completed Refs", len(open_order_ref_keys))
+    mc4.metric("No Project Match Rows", len(missing_project_orders))
+    mc5.metric("Ordered Cameras", total_ordered_cameras)
     st.caption(
-        "Not Completed = orders with status New, Ordered, or In Progress. "
-        "No Project Match = orders that cannot be matched to an existing project name, including known short names like AH/AD/CM/Proxy."
+        "Order Refs = unique purchase order numbers. Order Rows = project lines inside those orders. "
+        "No Project Match Rows = project lines that cannot be matched to an existing project name, including known short names like AH/AD/CM/Proxy."
     )
 
     if CAN_EDIT:
