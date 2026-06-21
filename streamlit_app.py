@@ -4444,6 +4444,58 @@ elif page == "🧾 Invoice Details":
 
     st.caption(f"Showing {len(filtered_inv)} of {len(invoices)} invoices — use filters above to narrow results")
 
+    grouped_invoice_batches: dict[int, list] = {}
+    for inv in filtered_inv:
+        invoice_number = _safe_int(inv.invoice_number, default=0)
+        if invoice_number <= 0:
+            continue
+        grouped_invoice_batches.setdefault(invoice_number, []).append(inv)
+
+    grouped_invoice_rows = []
+    for invoice_number, invoice_rows in sorted(grouped_invoice_batches.items(), reverse=True):
+        unique_projects = sorted({
+            canonical_project_name(_safe_str(inv.project_name).strip())
+            for inv in invoice_rows
+            if _safe_str(inv.project_name).strip()
+        })
+        paid_rows = sum(1 for inv in invoice_rows if inv.is_paid())
+        unpaid_rows = sum(1 for inv in invoice_rows if inv.is_unpaid())
+        cancelled_rows = sum(1 for inv in invoice_rows if inv.is_cancelled())
+        if paid_rows == len(invoice_rows):
+            batch_status = "Paid"
+        elif unpaid_rows == len(invoice_rows):
+            batch_status = "Unpaid"
+        elif cancelled_rows == len(invoice_rows):
+            batch_status = "Cancelled"
+        else:
+            batch_status = "Mixed"
+        grouped_invoice_rows.append({
+            "Invoice #": invoice_number,
+            "Rows": len(invoice_rows),
+            "Projects": len(unique_projects),
+            "Total Cameras": sum(_safe_int(inv.cameras_number, default=0) for inv in invoice_rows),
+            "Total Amount (€)": sum(_safe_float(inv.payment_amount) for inv in invoice_rows),
+            "Status": batch_status,
+            "Maint. Years": ", ".join(sorted({_safe_str(inv.maintenance_year).strip() for inv in invoice_rows if _safe_str(inv.maintenance_year).strip()})),
+            "Years": ", ".join(str(year) for year in sorted({_safe_int(inv.year, default=0) for inv in invoice_rows if _safe_int(inv.year, default=0)})),
+            "Included Projects": ", ".join(unique_projects),
+        })
+
+    with st.expander("Grouped Invoice Batches", expanded=bool(inv_no_search.strip())):
+        if grouped_invoice_rows:
+            st.dataframe(
+                pd.DataFrame(grouped_invoice_rows),
+                use_container_width=True,
+                hide_index=True,
+                height=min(320, 70 + 35 * len(grouped_invoice_rows)),
+                column_config={
+                    "Total Amount (€)": st.column_config.NumberColumn("Total Amount (€)", format="€%.0f"),
+                    "Included Projects": st.column_config.TextColumn(width="large"),
+                },
+            )
+        else:
+            st.info("No grouped invoice batches match the current filters.")
+
     saved_invoice_numbers = sorted(
         {
             int(float(inv.invoice_number))
