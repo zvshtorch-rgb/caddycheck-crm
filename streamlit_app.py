@@ -4110,6 +4110,8 @@ elif page == "📷 Camera Audit":
         if cams > invoiced_by_project.get(key, 0):
             invoiced_by_project[key] = cams
         invoice_ref = _safe_str(getattr(inv, "invoice_number", "")).strip()
+        if invoice_ref.endswith(".0"):
+            invoice_ref = invoice_ref[:-2]
         if invoice_ref:
             invoice_refs_by_project.setdefault(key, set()).add(invoice_ref)
 
