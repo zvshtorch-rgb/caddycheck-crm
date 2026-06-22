@@ -4187,6 +4187,7 @@ elif page == "📷 Camera Audit":
             "Invoice Ref Count": len(unique_invoice_refs),
             "Order IDs": ", ".join(unique_order_ids),
             "Order Refs": ", ".join(unique_order_numbers),
+            "Invoice Refs": ", ".join(unique_invoice_refs),
         })
 
     if not rows:
