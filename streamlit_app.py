@@ -1693,6 +1693,10 @@ def _next_local_order_id(order_rows: list[dict]) -> int:
     return max((_safe_int(row.get("id"), default=0) for row in order_rows), default=0) + 1
 
 
+def _order_dedupe_project_key(project_name: object) -> str:
+    return _normalize_order_project_match_key(canonical_project_name(_safe_str(project_name).strip()))
+
+
 def _create_orders(rows: list[dict], orders_source_name: str) -> int:
     cleaned_rows = [row for row in rows if _safe_str(row.get("project_name")).strip()]
     if not cleaned_rows:
@@ -1704,7 +1708,7 @@ def _create_orders(rows: list[dict], orders_source_name: str) -> int:
     existing_order_keys = {
         (
             _safe_str(row.get("order_number")).strip().lower(),
-            canonical_project_name(_safe_str(row.get("project_name")).strip()).lower(),
+            _order_dedupe_project_key(row.get("project_name")),
         )
         for row in entries
         if _safe_str(row.get("project_name")).strip()
@@ -1716,7 +1720,7 @@ def _create_orders(rows: list[dict], orders_source_name: str) -> int:
         local_row = {key: _serialize_order_value(value) for key, value in row.items()}
         local_key = (
             _safe_str(local_row.get("order_number")).strip().lower(),
-            canonical_project_name(_safe_str(local_row.get("project_name")).strip()).lower(),
+            _order_dedupe_project_key(local_row.get("project_name")),
         )
         if local_key in existing_order_keys:
             continue
@@ -3305,7 +3309,7 @@ elif page == "📦 Orders":
                             existing_order_keys = {
                                 (
                                     _safe_str(order.get("order_number")).strip().lower(),
-                                    canonical_project_name(_safe_str(order.get("project_name")).strip()).lower(),
+                                    _order_dedupe_project_key(order.get("project_name")),
                                 )
                                 for order in orders
                                 if _safe_str(order.get("project_name")).strip()
@@ -3328,7 +3332,7 @@ elif page == "📦 Orders":
                                     if not order_ref_value:
                                         continue
                                     edited_project_name = _safe_str(reviewed_row.get("Project", row["project_name"])).strip() or row["project_name"]
-                                    project_key = canonical_project_name(edited_project_name).strip().lower()
+                                    project_key = _order_dedupe_project_key(edited_project_name)
                                     record_key = (order_ref_value.lower(), project_key)
                                     if record_key in existing_order_keys:
                                         skipped_existing += 1
@@ -3611,26 +3615,36 @@ elif page == "📦 Orders":
     order_duplicate_groups: dict[tuple[str, str], list[dict]] = {}
     for order in orders:
         order_number_key = _safe_str(order.get("order_number")).strip().lower()
-        project_key = _normalize_project_name_key(canonical_project_name(_safe_str(order.get("project_name")).strip()))
+        project_key = _order_dedupe_project_key(order.get("project_name"))
         if not order_number_key or not project_key:
             continue
         order_duplicate_groups.setdefault((order_number_key, project_key), []).append(order)
 
     duplicate_order_rows = []
+    suggested_duplicate_delete_ids: list[int] = []
     for (order_number_key, project_key), grouped_rows in sorted(order_duplicate_groups.items()):
         if len(grouped_rows) < 2:
             continue
-        order_number_display = _safe_str(grouped_rows[0].get("order_number")).strip() or order_number_key
-        project_display = canonical_project_name(_safe_str(grouped_rows[0].get("project_name")).strip())
+        grouped_rows = sorted(grouped_rows, key=lambda row: _safe_int(row.get("id"), default=0))
+        kept_row = grouped_rows[0]
+        duplicate_rows_to_delete = grouped_rows[1:]
+        delete_ids = [_safe_int(row.get("id"), default=0) for row in duplicate_rows_to_delete if _safe_int(row.get("id"), default=0)]
+        suggested_duplicate_delete_ids.extend(delete_ids)
+        order_number_display = _safe_str(kept_row.get("order_number")).strip() or order_number_key
+        project_display = canonical_project_name(_safe_str(kept_row.get("project_name")).strip())
+        project_variants = sorted({canonical_project_name(_safe_str(row.get("project_name")).strip()) for row in grouped_rows if _safe_str(row.get("project_name")).strip()})
         duplicate_order_rows.append({
             "Order #": order_number_display,
             "Project": project_display,
+            "Project Variants": ", ".join(project_variants),
             "Rows": len(grouped_rows),
             "Total Cameras": sum(_safe_int(row.get("ordered_cameras"), default=0) for row in grouped_rows),
             "Total Amount (€)": sum(_safe_float(row.get("payment_amount"), default=0.0) for row in grouped_rows),
             "Countries": ", ".join(sorted({_order_country_label(row.get("country")) for row in grouped_rows if _safe_str(row.get("country")).strip()})),
             "Statuses": ", ".join(sorted({_normalize_order_status(row.get("status", "")) for row in grouped_rows if _safe_str(row.get("status")).strip()})),
             "Order IDs": ", ".join(str(_safe_int(row.get("id"), default=0)) for row in grouped_rows if _safe_int(row.get("id"), default=0)),
+            "Keep ID": _safe_int(kept_row.get("id"), default=0) or "",
+            "Suggested Delete IDs": ", ".join(str(row_id) for row_id in delete_ids),
         })
 
     if duplicate_order_rows:
@@ -3646,8 +3660,29 @@ elif page == "📦 Orders":
                 column_config={
                     "Total Amount (€)": st.column_config.NumberColumn("Total Amount (€)", format="€%.0f"),
                     "Order IDs": st.column_config.TextColumn(width="medium"),
+                    "Project Variants": st.column_config.TextColumn(width="large"),
+                    "Suggested Delete IDs": st.column_config.TextColumn(width="medium"),
                 },
             )
+            if CAN_EDIT and suggested_duplicate_delete_ids:
+                delete_duplicate_ids = st.multiselect(
+                    "Duplicate order IDs to delete",
+                    sorted(set(suggested_duplicate_delete_ids)),
+                    default=sorted(set(suggested_duplicate_delete_ids)),
+                    key="delete_duplicate_order_ids",
+                )
+                if st.button("Delete Selected Duplicate Order Rows", type="secondary", key="delete_duplicate_order_rows"):
+                    try:
+                        deleted_ids = []
+                        for order_id in delete_duplicate_ids:
+                            _delete_order(int(order_id), orders_source_name)
+                            deleted_ids.append(int(order_id))
+                        load_orders_data.clear()
+                        st.session_state["_flash_success"] = f"Deleted duplicate order row(s): {', '.join(str(row_id) for row_id in deleted_ids)}."
+                        st.session_state["_flash_success_page"] = "📦 Orders"
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"Duplicate cleanup failed: {exc}")
 
     if CAN_EDIT and orders:
         st.markdown("---")

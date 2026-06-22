@@ -863,7 +863,14 @@ def _order_identity_key(row: Dict[str, Any]) -> tuple[str, str]:
 
     order_number = str(row.get("order_number") or "").strip().lower()
     project_name = canonical_project_name(str(row.get("project_name") or "").strip()).lower()
-    return order_number, project_name
+    project_key = re.sub(r"[^a-z0-9]+", "", project_name)
+    project_key = project_key.replace("albertheijn", "ah")
+    project_key = project_key.replace("carrefourmarket", "cm")
+    if project_key.startswith("addelhaize"):
+        project_key = "ad" + project_key[len("addelhaize"):]
+    if project_key.startswith("proxydelhaize"):
+        project_key = "proxy" + project_key[len("proxydelhaize"):]
+    return order_number, project_key
 
 
 def create_order(**fields) -> dict:
