@@ -3569,6 +3569,7 @@ elif page == "📦 Orders":
             order for order in filtered_orders
             if order_search_lower in _safe_str(order.get("project_name")).lower()
             or order_search_lower in _safe_str(order.get("order_number")).lower()
+            or order_search_lower == _safe_str(_safe_int(order.get("id"), default=0)).lower()
         ]
     if zero_cams_only:
         filtered_orders = [order for order in filtered_orders if _safe_int(order.get("ordered_cameras"), default=0) == 0]
@@ -3582,6 +3583,7 @@ elif page == "📦 Orders":
     if filtered_orders:
         orders_df = pd.DataFrame([
             {
+                "Order ID": _safe_int(order.get("id"), default=0) or "",
                 "Order": _safe_str(order.get("order_number")),
                 "Project": _safe_str(order.get("project_name")),
                 "Suggested Match": _suggest_best_order_project_match(order.get("project_name"), project_name_choices)[0],
