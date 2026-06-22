@@ -4102,10 +4102,16 @@ elif page == "📷 Camera Audit":
     # Aggregate invoiced cameras per project: MAX cameras_number across all invoices.
     invoiced_by_project: dict[str, int] = {}
     invoice_refs_by_project: dict[str, set[str]] = {}
+    seen_audit_invoice_project_keys = set()
     for inv in invoices:
         key = _normalize_project_name_key(canonical_project_name(inv.project_name))
         if not key:
             continue
+        invoice_number_key = _safe_int(getattr(inv, "invoice_number", None), default=0)
+        invoice_project_key = (invoice_number_key, key)
+        if invoice_number_key and invoice_project_key in seen_audit_invoice_project_keys:
+            continue
+        seen_audit_invoice_project_keys.add(invoice_project_key)
         cams = _safe_int(getattr(inv, "cameras_number", None), default=0)
         if cams > invoiced_by_project.get(key, 0):
             invoiced_by_project[key] = cams
