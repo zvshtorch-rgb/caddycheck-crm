@@ -4165,7 +4165,14 @@ elif page == "📷 Camera Audit":
         project_order_rows = ordered_rows_by_project.get(name, [])
         unique_order_ids = sorted({row["order_id"] for row in project_order_rows if row["order_id"] not in {"", "0"}}, key=lambda value: int(value))
         unique_order_numbers = sorted({row["order_number"] for row in project_order_rows if row["order_number"]}, key=str)
-        unique_invoice_refs = sorted(invoice_refs_by_project.get(key, set()), key=lambda value: (len(value), value))
+        unique_invoice_refs = sorted(
+            {
+                invoice_ref.strip()
+                for invoice_ref in invoice_refs_by_project.get(key, set())
+                if _safe_str(invoice_ref).strip()
+            },
+            key=lambda value: (len(value), value),
+        )
         rows.append({
             "Project": name,
             "Network": _project_network(name),
@@ -4177,6 +4184,7 @@ elif page == "📷 Camera Audit":
             "Δ Ordered": (working - ordered) if ordered is not None else None,
             "Δ Invoiced": (working - invoiced) if invoiced else None,
             "Order ID Count": len(unique_order_ids),
+            "Invoice Ref Count": len(unique_invoice_refs),
             "Order IDs": ", ".join(unique_order_ids),
             "Order Refs": ", ".join(unique_order_numbers),
             "Invoice Refs": ", ".join(unique_invoice_refs),
