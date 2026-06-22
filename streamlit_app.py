@@ -4348,10 +4348,15 @@ elif page == "📷 Camera Audit":
             return ["background-color: #f6f8fa; font-weight: bold; border-top: 2px solid #d0d7de;" for _ in row]
         return ["" for _ in row]
 
+    invoice_refs_tooltips = pd.DataFrame("", index=camera_audit_display_df.index, columns=camera_audit_display_df.columns)
+    if "Invoice Refs" in camera_audit_display_df.columns:
+        invoice_refs_tooltips["Invoice Refs"] = camera_audit_display_df["Invoice Refs"].fillna("").astype(str)
+
     styled = (
         camera_audit_display_df.style
         .apply(_highlight_summary_row, axis=1)
         .map(_highlight_delta, subset=["Δ Ordered", "Δ Invoiced"])
+        .set_tooltips(invoice_refs_tooltips)
         .format({
             "Ordered": lambda v: "—" if pd.isna(v) else f"{int(v)}",
             "Invoiced (max)": lambda v: "—" if pd.isna(v) else f"{int(v)}",
