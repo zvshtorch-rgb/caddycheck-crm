@@ -4099,27 +4099,29 @@ elif page == "📷 Camera Audit":
         ca_orders, ca_orders_source = [], "unavailable"
         st.warning(f"Could not load orders ({exc}). Ordered cameras will show as blank.")
 
-    # Aggregate invoiced cameras per project: MAX cameras_number across all invoices.
-    invoiced_by_project: dict[str, int] = {}
+    # Aggregate invoiced cameras per project: MAX cameras_number across invoice refs.
+    invoice_cameras_by_project_ref: dict[tuple[str, int], int] = {}
     invoice_refs_by_project: dict[str, set[str]] = {}
-    seen_audit_invoice_project_keys = set()
     for inv in invoices:
         key = _normalize_project_name_key(canonical_project_name(inv.project_name))
         if not key:
             continue
         invoice_number_key = _safe_int(getattr(inv, "invoice_number", None), default=0)
-        invoice_project_key = (invoice_number_key, key)
-        if invoice_number_key and invoice_project_key in seen_audit_invoice_project_keys:
-            continue
-        seen_audit_invoice_project_keys.add(invoice_project_key)
         cams = _safe_int(getattr(inv, "cameras_number", None), default=0)
-        if cams > invoiced_by_project.get(key, 0):
-            invoiced_by_project[key] = cams
         invoice_ref = _safe_str(getattr(inv, "invoice_number", "")).strip()
         if invoice_ref.endswith(".0"):
             invoice_ref = invoice_ref[:-2]
         if invoice_ref:
             invoice_refs_by_project.setdefault(key, set()).add(invoice_ref)
+        if invoice_number_key and cams > 0:
+            invoice_project_key = (key, invoice_number_key)
+            previous_cams = invoice_cameras_by_project_ref.get(invoice_project_key)
+            invoice_cameras_by_project_ref[invoice_project_key] = min(previous_cams, cams) if previous_cams else cams
+
+    invoiced_by_project: dict[str, int] = {}
+    for (project_key, _invoice_number), cams in invoice_cameras_by_project_ref.items():
+        if cams > invoiced_by_project.get(project_key, 0):
+            invoiced_by_project[project_key] = cams
 
     project_names_for_audit = [
         _safe_str(project.project_name).strip()
