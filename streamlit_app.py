@@ -4101,6 +4101,7 @@ elif page == "📷 Camera Audit":
 
     # Aggregate invoiced cameras per project: MAX cameras_number across all invoices.
     invoiced_by_project: dict[str, int] = {}
+    invoice_refs_by_project: dict[str, set[str]] = {}
     for inv in invoices:
         key = _normalize_project_name_key(canonical_project_name(inv.project_name))
         if not key:
@@ -4108,6 +4109,9 @@ elif page == "📷 Camera Audit":
         cams = _safe_int(getattr(inv, "cameras_number", None), default=0)
         if cams > invoiced_by_project.get(key, 0):
             invoiced_by_project[key] = cams
+        invoice_ref = _safe_str(getattr(inv, "invoice_number", "")).strip()
+        if invoice_ref:
+            invoice_refs_by_project.setdefault(key, set()).add(invoice_ref)
 
     project_names_for_audit = [
         _safe_str(project.project_name).strip()
@@ -4159,6 +4163,7 @@ elif page == "📷 Camera Audit":
         project_order_rows = ordered_rows_by_project.get(name, [])
         unique_order_ids = sorted({row["order_id"] for row in project_order_rows if row["order_id"] not in {"", "0"}}, key=lambda value: int(value))
         unique_order_numbers = sorted({row["order_number"] for row in project_order_rows if row["order_number"]}, key=str)
+        unique_invoice_refs = sorted(invoice_refs_by_project.get(key, set()), key=lambda value: (len(value), value))
         rows.append({
             "Project": name,
             "Network": _project_network(name),
@@ -4172,6 +4177,7 @@ elif page == "📷 Camera Audit":
             "Order ID Count": len(unique_order_ids),
             "Order IDs": ", ".join(unique_order_ids),
             "Order Refs": ", ".join(unique_order_numbers),
+            "Invoice Refs": ", ".join(unique_invoice_refs),
         })
 
     if not rows:
@@ -4306,12 +4312,19 @@ elif page == "📷 Camera Audit":
 
     # ── Highlighted table ─────────────────────────────────────────────────────
     camera_audit_display_df = filtered.drop(columns=sort_helper_columns, errors="ignore").copy()
+    unique_invoice_ref_count = len({
+        invoice_ref.strip()
+        for invoice_refs in camera_audit_display_df.get("Invoice Refs", pd.Series(dtype=str)).fillna("").astype(str)
+        for invoice_ref in invoice_refs.split(",")
+        if invoice_ref.strip()
+    })
     summary_row = {column_name: "" for column_name in camera_audit_display_df.columns}
     summary_row.update({
         "Project": "TOTAL / SUMMARY",
         "# Cams (working)": total_working,
         "Ordered": total_ordered,
         "Invoiced (max)": total_invoiced,
+        "Invoice Ref Count": unique_invoice_ref_count,
         "Δ Ordered": int(filtered["Δ Ordered"].dropna().sum()),
         "Δ Invoiced": int(filtered["Δ Invoiced"].dropna().sum()),
     })
