@@ -4321,7 +4321,7 @@ elif page == "📷 Camera Audit":
         st.caption(f"⚠️ {no_orders} project(s) have no order data yet (still being uploaded).")
 
     # ── Highlighted table ─────────────────────────────────────────────────────
-    camera_audit_display_df = filtered.drop(columns=sort_helper_columns, errors="ignore").copy()
+    camera_audit_display_df = filtered.drop(columns=["Order ID Count"] + sort_helper_columns, errors="ignore").copy()
     unique_invoice_ref_count = len({
         invoice_ref.strip()
         for invoice_refs in camera_audit_display_df.get("Invoice Refs", pd.Series(dtype=str)).fillna("").astype(str)
