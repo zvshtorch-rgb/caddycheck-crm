@@ -4187,7 +4187,6 @@ elif page == "📷 Camera Audit":
             "Invoice Ref Count": len(unique_invoice_refs),
             "Order IDs": ", ".join(unique_order_ids),
             "Order Refs": ", ".join(unique_order_numbers),
-            "Invoice Refs": ", ".join(unique_invoice_refs),
         })
 
     if not rows:
@@ -4321,20 +4320,13 @@ elif page == "📷 Camera Audit":
         st.caption(f"⚠️ {no_orders} project(s) have no order data yet (still being uploaded).")
 
     # ── Highlighted table ─────────────────────────────────────────────────────
-    camera_audit_display_df = filtered.drop(columns=["Order ID Count"] + sort_helper_columns, errors="ignore").copy()
-    unique_invoice_ref_count = len({
-        invoice_ref.strip()
-        for invoice_refs in camera_audit_display_df.get("Invoice Refs", pd.Series(dtype=str)).fillna("").astype(str)
-        for invoice_ref in invoice_refs.split(",")
-        if invoice_ref.strip()
-    })
+    camera_audit_display_df = filtered.drop(columns=["Order ID Count", "Invoice Ref Count"] + sort_helper_columns, errors="ignore").copy()
     summary_row = {column_name: "" for column_name in camera_audit_display_df.columns}
     summary_row.update({
         "Project": "TOTAL / SUMMARY",
         "# Cams (working)": total_working,
         "Ordered": total_ordered,
         "Invoiced (max)": total_invoiced,
-        "Invoice Ref Count": unique_invoice_ref_count,
         "Δ Ordered": int(filtered["Δ Ordered"].dropna().sum()),
         "Δ Invoiced": int(filtered["Δ Invoiced"].dropna().sum()),
     })
