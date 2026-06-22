@@ -2710,9 +2710,9 @@ elif page == "🏗️ Projects":
             num_rows="dynamic",
             column_config={
                 "_original_project_name": None,
-                "Country": st.column_config.SelectboxColumn(
+                "Country": st.column_config.TextColumn(
                     "Country",
-                    options=[""] + countries,
+                    help="Type any country label you need, such as Lux.",
                 ),
                 "Install Year": st.column_config.SelectboxColumn(
                     "Install Year",
