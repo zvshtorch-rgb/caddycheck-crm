@@ -3606,6 +3606,47 @@ elif page == "📦 Orders":
     else:
         st.info("No orders match the current filters.")
 
+    order_duplicate_groups: dict[tuple[str, str], list[dict]] = {}
+    for order in orders:
+        order_number_key = _safe_str(order.get("order_number")).strip().lower()
+        project_key = _normalize_project_name_key(canonical_project_name(_safe_str(order.get("project_name")).strip()))
+        if not order_number_key or not project_key:
+            continue
+        order_duplicate_groups.setdefault((order_number_key, project_key), []).append(order)
+
+    duplicate_order_rows = []
+    for (order_number_key, project_key), grouped_rows in sorted(order_duplicate_groups.items()):
+        if len(grouped_rows) < 2:
+            continue
+        order_number_display = _safe_str(grouped_rows[0].get("order_number")).strip() or order_number_key
+        project_display = canonical_project_name(_safe_str(grouped_rows[0].get("project_name")).strip())
+        duplicate_order_rows.append({
+            "Order #": order_number_display,
+            "Project": project_display,
+            "Rows": len(grouped_rows),
+            "Total Cameras": sum(_safe_int(row.get("ordered_cameras"), default=0) for row in grouped_rows),
+            "Total Amount (€)": sum(_safe_float(row.get("payment_amount"), default=0.0) for row in grouped_rows),
+            "Countries": ", ".join(sorted({_order_country_label(row.get("country")) for row in grouped_rows if _safe_str(row.get("country")).strip()})),
+            "Statuses": ", ".join(sorted({_normalize_order_status(row.get("status", "")) for row in grouped_rows if _safe_str(row.get("status")).strip()})),
+            "Order IDs": ", ".join(str(_safe_int(row.get("id"), default=0)) for row in grouped_rows if _safe_int(row.get("id"), default=0)),
+        })
+
+    if duplicate_order_rows:
+        with st.expander("Duplicate Orders", expanded=bool(order_search.strip() or missing_only or zero_cams_only)):
+            st.caption(
+                "These are repeated order/project combinations. Keep one row and delete or correct the extra rows to avoid double counting in Camera Audit."
+            )
+            st.dataframe(
+                pd.DataFrame(duplicate_order_rows),
+                use_container_width=True,
+                hide_index=True,
+                height=min(260, 70 + 28 * len(duplicate_order_rows)),
+                column_config={
+                    "Total Amount (€)": st.column_config.NumberColumn("Total Amount (€)", format="€%.0f"),
+                    "Order IDs": st.column_config.TextColumn(width="medium"),
+                },
+            )
+
     if CAN_EDIT and orders:
         st.markdown("---")
         st.subheader("Create Invoice From Order")
