@@ -4060,6 +4060,7 @@ elif page == "📷 Camera Audit":
     # Use the same smart matching as the Orders page so variants like
     # "Proxy Delhaize Westkerke" resolve to "Proxy Westkerke".
     ordered_by_project: dict[str, int] = {}
+    ordered_rows_by_project: dict[str, list[dict[str, str]]] = {}
     has_order_for_project: set[str] = set()
     for order in ca_orders:
         order_project_name = _safe_str(order.get("project_name")).strip()
@@ -4074,6 +4075,11 @@ elif page == "📷 Camera Audit":
             continue
         has_order_for_project.add(matched_project_name)
         ordered_by_project[matched_project_name] = ordered_by_project.get(matched_project_name, 0) + _safe_int(order.get("ordered_cameras"), default=0)
+        ordered_rows_by_project.setdefault(matched_project_name, []).append({
+            "order_id": str(_safe_int(order.get("id"), default=0)),
+            "order_number": _safe_str(order.get("order_number")).strip(),
+            "project_name": order_project_name,
+        })
 
     rows = []
     for project in projects:
@@ -4084,6 +4090,9 @@ elif page == "📷 Camera Audit":
         working = _safe_int(project.num_cams, default=0)
         invoiced = invoiced_by_project.get(key)
         ordered = ordered_by_project.get(name) if name in has_order_for_project else None
+        project_order_rows = ordered_rows_by_project.get(name, [])
+        unique_order_ids = sorted({row["order_id"] for row in project_order_rows if row["order_id"] not in {"", "0"}}, key=lambda value: int(value))
+        unique_order_numbers = sorted({row["order_number"] for row in project_order_rows if row["order_number"]}, key=str)
         rows.append({
             "Project": name,
             "Network": _project_network(name),
@@ -4094,6 +4103,8 @@ elif page == "📷 Camera Audit":
             "Invoiced (max)": invoiced if invoiced else None,
             "Δ Ordered": (working - ordered) if ordered is not None else None,
             "Δ Invoiced": (working - invoiced) if invoiced else None,
+            "Order IDs": ", ".join(unique_order_ids),
+            "Order Refs": ", ".join(unique_order_numbers),
         })
 
     if not rows:
