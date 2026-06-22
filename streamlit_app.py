@@ -2857,15 +2857,21 @@ elif page == "🏗️ Projects":
         project_delete_options = sorted({_safe_str(p.project_name).strip() for p in projects if _safe_str(p.project_name).strip()})
         if project_delete_options:
             with st.form("delete_project_form"):
+                project_delete_select_options = [""] + project_delete_options
                 selected_project_to_delete = st.selectbox(
                     "Project to delete",
-                    project_delete_options,
+                    project_delete_select_options,
+                    index=0,
                     key="project_delete_name",
+                    help="Choose the project you want to delete. Blank means no project is selected yet.",
                 )
                 delete_project_btn = st.form_submit_button("🗑️ Delete Project", type="secondary")
 
             if delete_project_btn:
                 try:
+                    if not _safe_str(selected_project_to_delete).strip():
+                        st.error("Choose a project to delete.")
+                        st.stop()
                     deleted = _delete_projects([selected_project_to_delete], _data_path)
                     load_data.clear()
                     st.session_state["_flash_success"] = (
