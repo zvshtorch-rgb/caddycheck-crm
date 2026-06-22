@@ -4182,6 +4182,13 @@ elif page == "📷 Camera Audit":
             key=lambda value: (_safe_int(value, default=-1), value),
             reverse=True,
         )
+        invoice_refs_with_cams = []
+        for invoice_ref in unique_invoice_refs:
+            ref_cams = invoice_cameras_by_project_ref.get((key, _safe_int(invoice_ref, default=0)))
+            if ref_cams:
+                invoice_refs_with_cams.append(f"{invoice_ref} ({ref_cams})")
+            else:
+                invoice_refs_with_cams.append(invoice_ref)
         rows.append({
             "Project": name,
             "Network": _project_network(name),
@@ -4196,7 +4203,7 @@ elif page == "📷 Camera Audit":
             "Invoice Ref Count": len(unique_invoice_refs),
             "Order IDs": ", ".join(unique_order_ids),
             "Order Refs": ", ".join(unique_order_numbers),
-            "Invoice Refs": ", ".join(unique_invoice_refs),
+            "Invoice Refs": ", ".join(invoice_refs_with_cams),
         })
 
     if not rows:
