@@ -696,6 +696,7 @@ def create_ticket(
     description: str = "",
     priority: str = "Medium",
     subcategory: str = "",
+    solution_note: str = "",
 ) -> dict:
     from config.settings import canonical_project_name
 
@@ -710,6 +711,7 @@ def create_ticket(
         "description": description,
         "priority": priority,
         "subcategory": subcategory or None,
+        "solution_note": solution_note or None,
         "status": "Open",
     }
     resp = client.table("tickets").insert(row).execute()

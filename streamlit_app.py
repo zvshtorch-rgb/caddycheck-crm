@@ -6383,6 +6383,7 @@ elif page == "🎫 Tickets":
                 t_title_custom = st.text_input("Custom title (optional)", key="nt_title_custom")
                 t_camera_name = st.selectbox("Camera Name", TICKET_CAMERA_OPTIONS, index=0, key="nt_camera_name")
                 t_desc     = st.text_area("Description", height=100, key="nt_desc")
+                t_solution = st.text_area("Solution note", height=80, key="nt_solution")
                 t_subcategory = st.selectbox("Sub-category", TICKET_SUBCATEGORY_OPTIONS, index=0, key="nt_subcat")
                 t_priority = st.selectbox("Priority", ["Low", "Medium", "High", "Critical"], index=1, key="nt_prio")
                 submitted  = st.form_submit_button("Create Ticket", type="primary")
@@ -6399,6 +6400,7 @@ elif page == "🎫 Tickets":
                             t_desc.strip(),
                             t_priority,
                             t_subcategory,
+                            t_solution.strip(),
                         )
                         st.success(f"Ticket {ticket.get('ticket_number', '')} created!")
                         st.rerun()
@@ -6523,6 +6525,7 @@ elif page == "🎫 Tickets":
                 key="upd_subcat",
             )
             new_notes = st.text_area("Notes / update comment", value=sel_ticket.get("notes") or "", height=80, key="upd_notes")
+            new_solution_note = st.text_area("Solution note", value=sel_ticket.get("solution_note") or "", height=80, key="upd_solution_note")
             col_upd, col_del = st.columns([3, 1])
             upd_btn = col_upd.form_submit_button("💾 Update Ticket", type="primary")
             del_btn = col_del.form_submit_button("🗑️ Delete", type="secondary")
@@ -6538,6 +6541,7 @@ elif page == "🎫 Tickets":
                     priority=new_priority,
                     subcategory=new_subcategory,
                     notes=new_notes,
+                    solution_note=new_solution_note,
                 )
                 st.success("Ticket updated!")
                 st.rerun()
