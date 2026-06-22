@@ -4305,6 +4305,21 @@ elif page == "📷 Camera Audit":
         st.caption(f"⚠️ {no_orders} project(s) have no order data yet (still being uploaded).")
 
     # ── Highlighted table ─────────────────────────────────────────────────────
+    camera_audit_display_df = filtered.drop(columns=sort_helper_columns, errors="ignore").copy()
+    summary_row = {column_name: "" for column_name in camera_audit_display_df.columns}
+    summary_row.update({
+        "Project": "TOTAL / SUMMARY",
+        "# Cams (working)": total_working,
+        "Ordered": total_ordered,
+        "Invoiced (max)": total_invoiced,
+        "Δ Ordered": int(filtered["Δ Ordered"].dropna().sum()),
+        "Δ Invoiced": int(filtered["Δ Invoiced"].dropna().sum()),
+    })
+    camera_audit_display_df = pd.concat(
+        [camera_audit_display_df, pd.DataFrame([summary_row])],
+        ignore_index=True,
+    )
+
     def _highlight_delta(val):
         if pd.isna(val):
             return ""
@@ -4312,8 +4327,14 @@ elif page == "📷 Camera Audit":
             return "color: #2e7d32;"  # green = match
         return "background-color: #fdecea; color: #c62828; font-weight: bold;"  # red = mismatch
 
+    def _highlight_summary_row(row):
+        if row.get("Project") == "TOTAL / SUMMARY":
+            return ["background-color: #f6f8fa; font-weight: bold; border-top: 2px solid #d0d7de;" for _ in row]
+        return ["" for _ in row]
+
     styled = (
-        filtered.drop(columns=sort_helper_columns, errors="ignore").style
+        camera_audit_display_df.style
+        .apply(_highlight_summary_row, axis=1)
         .map(_highlight_delta, subset=["Δ Ordered", "Δ Invoiced"])
         .format({
             "Ordered": lambda v: "—" if pd.isna(v) else f"{int(v)}",
@@ -4326,7 +4347,7 @@ elif page == "📷 Camera Audit":
 
     st.download_button(
         "⬇️ Download comparison (CSV)",
-        data=filtered.drop(columns=sort_helper_columns, errors="ignore").to_csv(index=False).encode("utf-8"),
+        data=camera_audit_display_df.to_csv(index=False).encode("utf-8"),
         file_name="camera_audit.csv",
         mime="text/csv",
         key="camaudit_download",
