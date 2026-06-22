@@ -1701,18 +1701,35 @@ def _create_orders(rows: list[dict], orders_source_name: str) -> int:
         return create_orders_supabase(cleaned_rows)
 
     entries = load_orders_records()
+    existing_order_keys = {
+        (
+            _safe_str(row.get("order_number")).strip().lower(),
+            canonical_project_name(_safe_str(row.get("project_name")).strip()).lower(),
+        )
+        for row in entries
+        if _safe_str(row.get("project_name")).strip()
+    }
     next_id = _next_local_order_id(entries)
     timestamp = datetime.datetime.utcnow().isoformat()
+    inserted_count = 0
     for row in cleaned_rows:
         local_row = {key: _serialize_order_value(value) for key, value in row.items()}
+        local_key = (
+            _safe_str(local_row.get("order_number")).strip().lower(),
+            canonical_project_name(_safe_str(local_row.get("project_name")).strip()).lower(),
+        )
+        if local_key in existing_order_keys:
+            continue
+        existing_order_keys.add(local_key)
         local_row["id"] = next_id
         local_row["status"] = _normalize_order_status(local_row.get("status", "New"))
         local_row["created_at"] = timestamp
         local_row["updated_at"] = timestamp
         entries.append(local_row)
         next_id += 1
+        inserted_count += 1
     save_orders_records(entries)
-    return len(cleaned_rows)
+    return inserted_count
 
 
 def _update_order(order_id: int, orders_source_name: str, **fields) -> None:
@@ -3288,7 +3305,7 @@ elif page == "📦 Orders":
                             existing_order_keys = {
                                 (
                                     _safe_str(order.get("order_number")).strip().lower(),
-                                    _safe_str(order.get("project_name")).strip().lower(),
+                                    canonical_project_name(_safe_str(order.get("project_name")).strip()).lower(),
                                 )
                                 for order in orders
                                 if _safe_str(order.get("project_name")).strip()
@@ -3311,7 +3328,7 @@ elif page == "📦 Orders":
                                     if not order_ref_value:
                                         continue
                                     edited_project_name = _safe_str(reviewed_row.get("Project", row["project_name"])).strip() or row["project_name"]
-                                    project_key = edited_project_name.strip().lower()
+                                    project_key = canonical_project_name(edited_project_name).strip().lower()
                                     record_key = (order_ref_value.lower(), project_key)
                                     if record_key in existing_order_keys:
                                         skipped_existing += 1

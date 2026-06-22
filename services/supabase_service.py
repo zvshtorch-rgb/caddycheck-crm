@@ -858,6 +858,14 @@ def _normalize_order_fields(fields: Dict[str, Any]) -> Dict[str, Any]:
     return normalized
 
 
+def _order_identity_key(row: Dict[str, Any]) -> tuple[str, str]:
+    from config.settings import canonical_project_name
+
+    order_number = str(row.get("order_number") or "").strip().lower()
+    project_name = canonical_project_name(str(row.get("project_name") or "").strip()).lower()
+    return order_number, project_name
+
+
 def create_order(**fields) -> dict:
     client = _get_client()
     row = _normalize_order_fields(fields)
@@ -866,7 +874,17 @@ def create_order(**fields) -> dict:
 
 
 def create_orders(rows: List[Dict[str, Any]]) -> int:
-    normalized_rows = [_normalize_order_fields(row) for row in rows if row.get("project_name")]
+    normalized_rows = []
+    seen_keys = set()
+    for row in rows:
+        if not row.get("project_name"):
+            continue
+        normalized = _normalize_order_fields(row)
+        key = _order_identity_key(normalized)
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        normalized_rows.append(normalized)
     if not normalized_rows:
         return 0
     client = _get_client()
