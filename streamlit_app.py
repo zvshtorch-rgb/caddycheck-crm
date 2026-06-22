@@ -3,6 +3,7 @@ import datetime
 import calendar
 import copy
 import hashlib
+import html
 import io
 import logging
 import re
@@ -4348,31 +4349,95 @@ elif page == "📷 Camera Audit":
             return ["background-color: #f6f8fa; font-weight: bold; border-top: 2px solid #d0d7de;" for _ in row]
         return ["" for _ in row]
 
-    invoice_refs_tooltips = pd.DataFrame("", index=camera_audit_display_df.index, columns=camera_audit_display_df.columns)
-    if "Invoice Refs" in camera_audit_display_df.columns:
-        invoice_refs_tooltips["Invoice Refs"] = camera_audit_display_df["Invoice Refs"].fillna("").astype(str)
+    def _format_audit_cell(column_name, value):
+        if column_name in {"Ordered", "Invoiced (max)"}:
+            return "—" if pd.isna(value) else f"{int(value)}"
+        if column_name in {"Δ Ordered", "Δ Invoiced"}:
+            return "—" if pd.isna(value) else f"{int(value):+d}"
+        if pd.isna(value):
+            return ""
+        return _safe_str(value)
 
-    styled = (
-        camera_audit_display_df.style
-        .apply(_highlight_summary_row, axis=1)
-        .map(_highlight_delta, subset=["Δ Ordered", "Δ Invoiced"])
-        .set_tooltips(invoice_refs_tooltips)
-        .format({
-            "Ordered": lambda v: "—" if pd.isna(v) else f"{int(v)}",
-            "Invoiced (max)": lambda v: "—" if pd.isna(v) else f"{int(v)}",
-            "Δ Ordered": lambda v: "—" if pd.isna(v) else f"{int(v):+d}",
-            "Δ Invoiced": lambda v: "—" if pd.isna(v) else f"{int(v):+d}",
-        })
+    def _audit_cell_style(column_name, value, is_summary_row=False):
+        styles = []
+        if is_summary_row:
+            styles.append("background-color: #f6f8fa; font-weight: 700; border-top: 2px solid #d0d7de;")
+        if column_name in {"Δ Ordered", "Δ Invoiced"} and not pd.isna(value):
+            if int(value) == 0:
+                styles.append("color: #2e7d32;")
+            else:
+                styles.append("background-color: #fdecea; color: #c62828; font-weight: 700;")
+        return " ".join(styles)
+
+    audit_columns = list(camera_audit_display_df.columns)
+    audit_header_html = "".join(
+        f'<th>{html.escape(str(column_name))}</th>' for column_name in audit_columns
     )
-    st.dataframe(
-        styled,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Order Refs": st.column_config.TextColumn("Order Refs", width="large"),
-            "Invoice Refs": st.column_config.TextColumn("Invoice Refs", width="large"),
-            "Invoice Ref Count": st.column_config.NumberColumn("Invoice Ref Count", width="small", min_value=0, step=1),
-        },
+    audit_body_html = []
+    for _, row in camera_audit_display_df.iterrows():
+        is_summary_row = row.get("Project") == "TOTAL / SUMMARY"
+        row_cells_html = []
+        for column_name in audit_columns:
+            raw_value = row.get(column_name, "")
+            display_value = _format_audit_cell(column_name, raw_value)
+            cell_style = _audit_cell_style(column_name, raw_value, is_summary_row=is_summary_row)
+            cell_class = f' class="audit-col-{html.escape(str(column_name).lower().replace(" ", "-"))}"'
+            title_attr = ""
+            if column_name == "Invoice Refs":
+                tooltip_value = _safe_str(raw_value).strip()
+                if tooltip_value:
+                    title_attr = f' title="{html.escape(tooltip_value, quote=True)}"'
+            row_cells_html.append(
+                f'<td{cell_class}{title_attr} style="{cell_style}">{html.escape(display_value)}</td>'
+            )
+        audit_body_html.append(f"<tr>{''.join(row_cells_html)}</tr>")
+
+    st.markdown(
+        f"""
+        <style>
+            .camera-audit-wrap {{
+                overflow-x: auto;
+                border: 1px solid #e5e7eb;
+                border-radius: 8px;
+            }}
+            table.camera-audit-table {{
+                width: 100%;
+                border-collapse: collapse;
+                table-layout: fixed;
+                font-size: 0.85rem;
+            }}
+            .camera-audit-table th,
+            .camera-audit-table td {{
+                border-bottom: 1px solid #e5e7eb;
+                padding: 0.35rem 0.45rem;
+                vertical-align: top;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }}
+            .camera-audit-table th {{
+                position: sticky;
+                top: 0;
+                background: #f8fafc;
+                z-index: 1;
+                text-align: left;
+                font-weight: 700;
+            }}
+            .camera-audit-table td.audit-col-invoice-refs {{
+                max-width: 280px;
+            }}
+            .camera-audit-table td.audit-col-order-refs {{
+                max-width: 280px;
+            }}
+        </style>
+        <div class="camera-audit-wrap">
+            <table class="camera-audit-table">
+                <thead><tr>{audit_header_html}</tr></thead>
+                <tbody>{''.join(audit_body_html)}</tbody>
+            </table>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
     st.download_button(
