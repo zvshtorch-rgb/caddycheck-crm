@@ -3312,6 +3312,28 @@ elif page == "📦 Orders":
                         if reviewed_preview_df["Order Ref"].astype(str).str.strip().eq("").any():
                             st.error("Every imported row needs an Order Ref before import.")
                         else:
+                            reviewed_records = reviewed_preview_df.to_dict(orient="records")
+                            selected_project_by_id = {}
+                            if existing_project_names:
+                                st.markdown("**Project to import as**")
+                                project_select_options = [""] + existing_project_names
+                                for reviewed_row in reviewed_records:
+                                    preview_id = _safe_str(reviewed_row.get("_preview_id")).strip()
+                                    order_ref_label = _safe_str(reviewed_row.get("Order Ref")).strip() or "Imported order row"
+                                    current_project_value = (
+                                        _safe_str(reviewed_row.get("Existing Project Match", "")).strip()
+                                        or _safe_str(reviewed_row.get("Project", "")).strip()
+                                    )
+                                    default_project_value = current_project_value if current_project_value in existing_project_names else ""
+                                    default_project_index = project_select_options.index(default_project_value) if default_project_value in project_select_options else 0
+                                    select_key = hashlib.sha1(f"orders-import-project::{preview_id}".encode("utf-8")).hexdigest()[:16]
+                                    selected_project_by_id[preview_id] = st.selectbox(
+                                        order_ref_label,
+                                        options=project_select_options,
+                                        index=default_project_index,
+                                        format_func=lambda value: "Use Project text" if value == "" else value,
+                                        key=f"orders_import_project_select_{select_key}",
+                                    )
                             existing_order_keys = {
                                 (
                                     _safe_str(order.get("order_number")).strip().lower(),
@@ -3326,7 +3348,7 @@ elif page == "📦 Orders":
                             }
                             reviewed_rows_by_id = {
                                 _safe_str(row.get("_preview_id")).strip(): row
-                                for row in reviewed_preview_df.to_dict(orient="records")
+                                for row in reviewed_records
                             }
                             import_rows_to_create = []
                             skipped_existing = 0
@@ -3337,7 +3359,7 @@ elif page == "📦 Orders":
                                     order_ref_value = _safe_str(reviewed_row.get("Order Ref", file_info["default_order_reference"])) .strip()
                                     if not order_ref_value:
                                         continue
-                                    matched_project_name = _safe_str(reviewed_row.get("Existing Project Match", "")).strip()
+                                    matched_project_name = _safe_str(selected_project_by_id.get(preview_id)).strip() or _safe_str(reviewed_row.get("Existing Project Match", "")).strip()
                                     edited_project_name = matched_project_name or _safe_str(reviewed_row.get("Project", row["project_name"])).strip() or row["project_name"]
                                     project_key = _order_dedupe_project_key(edited_project_name)
                                     record_key = (order_ref_value.lower(), project_key)
