@@ -4192,9 +4192,31 @@ elif page == "📷 Camera Audit":
         status_vals = sorted(v for v in audit_df["Status"].unique() if v)
         sel_status = st.selectbox("Status", ["All"] + status_vals, key="camaudit_status")
     with fc4:
-        mismatch_only = st.checkbox("Mismatches only", value=False, key="camaudit_mismatch")
+        audit_view = st.selectbox(
+            "Show rows",
+            [
+                "All",
+                "Δ Ordered != 0",
+                "Δ Invoiced != 0",
+                "Any delta != 0",
+                "Order ID Count > 1",
+                "No order data",
+            ],
+            key="camaudit_view",
+        )
     with fc5:
-        no_order_data_only = st.checkbox("No order data", value=False, key="camaudit_no_order_data")
+        audit_sort = st.selectbox(
+            "Sort by",
+            [
+                "Project A-Z",
+                "Δ Ordered != 0",
+                "Δ Invoiced != 0",
+                "Order ID Count > 1",
+                "Action priority",
+            ],
+            index=4,
+            key="camaudit_sort",
+        )
     with fc6:
         order_search = st.text_input("Search project", key="camaudit_search").strip().lower()
 
@@ -4207,13 +4229,19 @@ elif page == "📷 Camera Audit":
         filtered = filtered[filtered["Status"] == sel_status]
     if order_search:
         filtered = filtered[filtered["Project"].str.lower().str.contains(order_search, na=False)]
-    if no_order_data_only:
+    if audit_view == "No order data":
         filtered = filtered[filtered["Ordered"].isna()]
-    if mismatch_only:
+    elif audit_view == "Δ Ordered != 0":
+        filtered = filtered[(filtered["Δ Ordered"].notna()) & (filtered["Δ Ordered"] != 0)]
+    elif audit_view == "Δ Invoiced != 0":
+        filtered = filtered[(filtered["Δ Invoiced"].notna()) & (filtered["Δ Invoiced"] != 0)]
+    elif audit_view == "Any delta != 0":
         filtered = filtered[
             ((filtered["Δ Ordered"].notna()) & (filtered["Δ Ordered"] != 0))
             | ((filtered["Δ Invoiced"].notna()) & (filtered["Δ Invoiced"] != 0))
         ]
+    elif audit_view == "Order ID Count > 1":
+        filtered = filtered[filtered["Order ID Count"] > 1]
 
     sort_helper_columns = [
         "_sort_delta_ordered",
@@ -4229,16 +4257,31 @@ elif page == "📷 Camera Audit":
         filtered["_sort_multi_order_ids"] = filtered["Order ID Count"] > 1
         filtered["_sort_abs_delta_ordered"] = filtered["Δ Ordered"].abs().fillna(0)
         filtered["_sort_abs_delta_invoiced"] = filtered["Δ Invoiced"].abs().fillna(0)
-        filtered = filtered.sort_values(
-            by=[
+        if audit_sort == "Δ Ordered != 0":
+            sort_columns = ["_sort_delta_ordered", "_sort_abs_delta_ordered", "Project"]
+            sort_ascending = [False, False, True]
+        elif audit_sort == "Δ Invoiced != 0":
+            sort_columns = ["_sort_delta_invoiced", "_sort_abs_delta_invoiced", "Project"]
+            sort_ascending = [False, False, True]
+        elif audit_sort == "Order ID Count > 1":
+            sort_columns = ["_sort_multi_order_ids", "Order ID Count", "Project"]
+            sort_ascending = [False, False, True]
+        elif audit_sort == "Action priority":
+            sort_columns = [
                 "_sort_delta_ordered",
                 "_sort_delta_invoiced",
                 "_sort_multi_order_ids",
                 "_sort_abs_delta_ordered",
                 "_sort_abs_delta_invoiced",
                 "Project",
-            ],
-            ascending=[False, False, False, False, False, True],
+            ]
+            sort_ascending = [False, False, False, False, False, True]
+        else:
+            sort_columns = ["Project"]
+            sort_ascending = [True]
+        filtered = filtered.sort_values(
+            by=sort_columns,
+            ascending=sort_ascending,
             kind="mergesort",
         )
 
