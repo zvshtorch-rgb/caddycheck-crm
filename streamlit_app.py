@@ -4169,6 +4169,7 @@ elif page == "📷 Camera Audit":
             "Invoiced (max)": invoiced if invoiced else None,
             "Δ Ordered": (working - ordered) if ordered is not None else None,
             "Δ Invoiced": (working - invoiced) if invoiced else None,
+            "Order ID Count": len(unique_order_ids),
             "Order IDs": ", ".join(unique_order_ids),
             "Order Refs": ", ".join(unique_order_numbers),
         })
@@ -4214,6 +4215,33 @@ elif page == "📷 Camera Audit":
             | ((filtered["Δ Invoiced"].notna()) & (filtered["Δ Invoiced"] != 0))
         ]
 
+    sort_helper_columns = [
+        "_sort_delta_ordered",
+        "_sort_delta_invoiced",
+        "_sort_multi_order_ids",
+        "_sort_abs_delta_ordered",
+        "_sort_abs_delta_invoiced",
+    ]
+    if not filtered.empty:
+        filtered = filtered.copy()
+        filtered["_sort_delta_ordered"] = filtered["Δ Ordered"].notna() & (filtered["Δ Ordered"] != 0)
+        filtered["_sort_delta_invoiced"] = filtered["Δ Invoiced"].notna() & (filtered["Δ Invoiced"] != 0)
+        filtered["_sort_multi_order_ids"] = filtered["Order ID Count"] > 1
+        filtered["_sort_abs_delta_ordered"] = filtered["Δ Ordered"].abs().fillna(0)
+        filtered["_sort_abs_delta_invoiced"] = filtered["Δ Invoiced"].abs().fillna(0)
+        filtered = filtered.sort_values(
+            by=[
+                "_sort_delta_ordered",
+                "_sort_delta_invoiced",
+                "_sort_multi_order_ids",
+                "_sort_abs_delta_ordered",
+                "_sort_abs_delta_invoiced",
+                "Project",
+            ],
+            ascending=[False, False, False, False, False, True],
+            kind="mergesort",
+        )
+
     # ── Summary metrics ───────────────────────────────────────────────────────
     total_working = int(filtered["# Cams (working)"].sum())
     total_ordered = int(filtered["Ordered"].dropna().sum())
@@ -4240,7 +4268,7 @@ elif page == "📷 Camera Audit":
         return "background-color: #fdecea; color: #c62828; font-weight: bold;"  # red = mismatch
 
     styled = (
-        filtered.style
+        filtered.drop(columns=sort_helper_columns, errors="ignore").style
         .map(_highlight_delta, subset=["Δ Ordered", "Δ Invoiced"])
         .format({
             "Ordered": lambda v: "—" if pd.isna(v) else f"{int(v)}",
@@ -4253,7 +4281,7 @@ elif page == "📷 Camera Audit":
 
     st.download_button(
         "⬇️ Download comparison (CSV)",
-        data=filtered.to_csv(index=False).encode("utf-8"),
+        data=filtered.drop(columns=sort_helper_columns, errors="ignore").to_csv(index=False).encode("utf-8"),
         file_name="camera_audit.csv",
         mime="text/csv",
         key="camaudit_download",
