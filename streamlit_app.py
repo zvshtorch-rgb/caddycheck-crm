@@ -3248,6 +3248,7 @@ elif page == "📦 Orders":
                                 "Order Ref": order_reference,
                                 "Project": resolved_project_name,
                                 "Suggested Match": suggested_project_name,
+                                "Existing Project Match": resolved_project_name if _safe_str(resolved_project_name).strip() in project_name_choices else "",
                                 "Country": resolved_country,
                                 "Ordered Cams": resolved_ordered_cams,
                                 "Payment Amount": resolved_payment_amount,
@@ -3295,6 +3296,11 @@ elif page == "📦 Orders":
                                 "_source_key": None,
                                 "Project": st.column_config.TextColumn("Project", required=True),
                                 "Suggested Match": st.column_config.TextColumn("Suggested Match"),
+                                "Existing Project Match": st.column_config.SelectboxColumn(
+                                    "Existing Project Match",
+                                    options=[""] + project_name_choices,
+                                    help="Choose an existing project to use for the imported order row. If blank, the Project text is used.",
+                                ),
                                 "Ordered Cams": st.column_config.NumberColumn("Ordered Cams", min_value=0, step=1),
                                 "Payment Amount": st.column_config.NumberColumn("Payment Amount", min_value=0.0, step=1.0, format="€ %.2f"),
                             },
@@ -3331,7 +3337,8 @@ elif page == "📦 Orders":
                                     order_ref_value = _safe_str(reviewed_row.get("Order Ref", file_info["default_order_reference"])) .strip()
                                     if not order_ref_value:
                                         continue
-                                    edited_project_name = _safe_str(reviewed_row.get("Project", row["project_name"])).strip() or row["project_name"]
+                                    matched_project_name = _safe_str(reviewed_row.get("Existing Project Match", "")).strip()
+                                    edited_project_name = matched_project_name or _safe_str(reviewed_row.get("Project", row["project_name"])).strip() or row["project_name"]
                                     project_key = _order_dedupe_project_key(edited_project_name)
                                     record_key = (order_ref_value.lower(), project_key)
                                     if record_key in existing_order_keys:
