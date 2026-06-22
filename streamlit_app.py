@@ -4190,7 +4190,9 @@ elif page == "📷 Camera Audit":
         sel_country = st.selectbox("Country", ["All"] + country_vals, key="camaudit_country")
     with fc3:
         status_vals = sorted(v for v in audit_df["Status"].unique() if v)
-        sel_status = st.selectbox("Status", ["All"] + status_vals, key="camaudit_status")
+        status_choices = ["All"] + status_vals
+        default_status_index = status_choices.index("Active") if "Active" in status_choices else 0
+        sel_status = st.selectbox("Status", status_choices, index=default_status_index, key="camaudit_status")
     with fc4:
         audit_view = st.selectbox(
             "Show rows",
