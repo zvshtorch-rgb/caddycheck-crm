@@ -4366,7 +4366,16 @@ elif page == "📷 Camera Audit":
             "Δ Invoiced": lambda v: "—" if pd.isna(v) else f"{int(v):+d}",
         })
     )
-    st.dataframe(styled, use_container_width=True, hide_index=True)
+    st.dataframe(
+        styled,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Order Refs": st.column_config.TextColumn("Order Refs", width="large"),
+            "Invoice Refs": st.column_config.TextColumn("Invoice Refs", width="large"),
+            "Invoice Ref Count": st.column_config.NumberColumn("Invoice Ref Count", width="small", min_value=0, step=1),
+        },
+    )
 
     st.download_button(
         "⬇️ Download comparison (CSV)",
