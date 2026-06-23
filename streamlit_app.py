@@ -3656,14 +3656,12 @@ elif page == "📦 Orders":
 
     st.markdown("---")
     with st.expander("🔍 Filters", expanded=True):
-        fc1, fc2, fc3, fc4, fc5 = st.columns(5)
+        fc1, fc2, fc3 = st.columns(3)
         status_options = ["All"] + sorted({_normalize_order_status(order.get("status", "")) for order in orders if _safe_str(order.get("status"))})
         country_options = ["All"] + sorted({_order_country_label(order.get("country")) for order in orders if _safe_str(order.get("country")).strip()})
         order_status_filter = fc1.selectbox("Status", status_options, key="orders_filter_status")
         order_country_filter = fc2.selectbox("Country", country_options, key="orders_filter_country")
         order_search = fc3.text_input("Search project / order", key="orders_filter_search")
-        zero_cams_only = fc4.checkbox("Ordered Cams = 0", key="orders_filter_zero_cams")
-        missing_only = fc5.checkbox("Only missing projects", key="orders_filter_missing")
 
     filtered_orders = orders
     if order_status_filter != "All":
@@ -3678,14 +3676,6 @@ elif page == "📦 Orders":
             or order_search_lower in _safe_str(order.get("order_number")).lower()
             or order_search_lower == _safe_str(_safe_int(order.get("id"), default=0)).lower()
         ]
-    if zero_cams_only:
-        filtered_orders = [order for order in filtered_orders if _safe_int(order.get("ordered_cameras"), default=0) == 0]
-    if missing_only:
-        filtered_orders = [
-            order for order in filtered_orders
-            if not _order_project_matches(order.get("project_name"), project_name_choices)
-        ]
-
     st.caption(f"Showing {len(filtered_orders)} of {len(orders)} order row(s)")
     if filtered_orders:
         orders_df = pd.DataFrame([
