@@ -2722,14 +2722,21 @@ elif page == "🏗️ Projects":
         ] if "Project Name" in table_df.columns else table_df
         total_projects = len(visible_rows)
         total_cams = sum(_safe_int(value) for value in visible_rows.get("# Cams", []))
+        backtray_cams = sum(_safe_int(value) for value in visible_rows.get("Backtray Cams", []))
+        topdown_cams = sum(_safe_int(value) for value in visible_rows.get("TopDown Cams", []))
+        pushout_cams = sum(_safe_int(value) for value in visible_rows.get("Pushout Cams", []))
 
-        summary_row_df = pd.DataFrame([
-            {
-                "Projects": total_projects,
-                "Cameras": total_cams,
-            }
-        ])
-        st.dataframe(summary_row_df, use_container_width=True, hide_index=True, height=70)
+        summary_cols = st.columns(5)
+        with summary_cols[0]:
+            card("Projects", str(total_projects), "card-projects")
+        with summary_cols[1]:
+            card("Cameras", str(total_cams), "card-cameras")
+        with summary_cols[2]:
+            card("Backtray Cams", str(backtray_cams), "card-cameras")
+        with summary_cols[3]:
+            card("TopDown Cams", str(topdown_cams), "card-cameras")
+        with summary_cols[4]:
+            card("Pushout Cams", str(pushout_cams), "card-cameras")
 
     def color_status(val):
         if str(val).strip().lower() == "active":
