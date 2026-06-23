@@ -1524,6 +1524,17 @@ def _get_order_pdf_bytes(order: dict) -> tuple[bytes, str] | None:
     return None
 
 
+def _get_order_pdf_link(order: dict) -> str:
+    storage_bucket = _safe_str(order.get("pdf_storage_bucket")).strip()
+    storage_path = _safe_str(order.get("pdf_storage_path")).strip()
+    if storage_bucket and storage_path:
+        try:
+            return create_order_pdf_signed_url_supabase(storage_bucket, storage_path)
+        except Exception as exc:
+            logger.warning("Could not create order PDF signed URL: %s", exc)
+    return ""
+
+
 def _expand_uploaded_order_sources(uploaded_order_files) -> list[dict]:
     expanded_sources: list[dict] = []
     for uploaded_file in uploaded_order_files:
@@ -3692,7 +3703,7 @@ elif page == "📦 Orders":
                 "Requested Activation": (_parse_order_date(order.get("requested_activation_date")) or ""),
                 "Status": _normalize_order_status(order.get("status", "")),
                 "Project Exists": "Yes" if _order_project_matches(order.get("project_name"), project_name_choices) else "No",
-                "Source PDF": "Yes" if _safe_str(order.get("pdf_storage_path") or order.get("source_archive_path") or order.get("source_filename")).strip() else "",
+                "Source PDF": _get_order_pdf_link(order),
             }
             for order in filtered_orders
         ])
@@ -3701,6 +3712,9 @@ elif page == "📦 Orders":
             use_container_width=True,
             hide_index=True,
             height=340,
+            column_config={
+                "Source PDF": st.column_config.LinkColumn("Source PDF", display_text="Download"),
+            },
         )
     else:
         st.info("No orders match the current filters.")
@@ -3741,7 +3755,7 @@ elif page == "📦 Orders":
         })
 
     if duplicate_order_rows:
-        with st.expander("Duplicate Orders", expanded=bool(order_search.strip() or missing_only or zero_cams_only)):
+        with st.expander("Duplicate Orders", expanded=bool(order_search.strip())):
             st.caption(
                 "These are repeated order/project combinations. Keep one row and delete or correct the extra rows to avoid double counting in Camera Audit."
             )
