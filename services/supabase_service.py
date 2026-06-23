@@ -174,6 +174,7 @@ def load_projects() -> list:
             status=row.get("status") or "",
             license_eop=_parse_date(row.get("license_eop")),
             caddy_back=row.get("caddy_back") or "",
+            camera_audit_remarks=row.get("camera_audit_remarks") or "",
             maintenance_invoice_numbers=inv_numbers,
             rate_y1_override=row.get("rate_y1_override"),
             rate_y2_override=row.get("rate_y2_override"),
@@ -233,6 +234,34 @@ def upsert_projects(projects: list) -> None:
         client.table("projects").upsert(rows[i:i+batch_size], on_conflict="project_name").execute()
 
     logger.info("Upserted %d projects to Supabase", len(rows))
+
+
+def update_project_camera_audit_remarks(remarks_by_project: Dict[str, str]) -> int:
+    client = _get_client()
+    from config.settings import canonical_project_name
+
+    updated = 0
+    for project_name, remarks in remarks_by_project.items():
+        canonical_name = canonical_project_name(project_name)
+        if not canonical_name:
+            continue
+        resp = (
+            client.table("projects")
+            .update({"camera_audit_remarks": str(remarks or "").strip() or None})
+            .eq("project_name", canonical_name)
+            .execute()
+        )
+        if not resp.data:
+            resp = (
+                client.table("projects")
+                .update({"camera_audit_remarks": str(remarks or "").strip() or None})
+                .ilike("project_name", canonical_name)
+                .execute()
+            )
+        updated += len(resp.data or [])
+
+    logger.info("Updated camera audit remarks for %d project row(s)", updated)
+    return updated
 
 
 def update_project_license_eop(project_name: str, license_eop: Any) -> dict:

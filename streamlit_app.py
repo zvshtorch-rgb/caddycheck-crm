@@ -261,6 +261,7 @@ from services.supabase_service import (
     load_projects,
     load_invoices,
     upsert_projects,
+    update_project_camera_audit_remarks as update_project_camera_audit_remarks_supabase,
     update_project_license_eop as update_project_license_eop_supabase,
     upsert_invoices,
     delete_projects as delete_projects_supabase,
@@ -513,6 +514,24 @@ def _delete_projects(project_names, source_name: str) -> int:
     if _is_excel_source(source_name):
         return delete_projects_from_excel(project_names)
     return delete_projects_supabase(project_names)
+
+
+def _save_camera_audit_remarks(remarks_by_project: dict[str, str], source_name: str) -> int:
+    if not remarks_by_project:
+        return 0
+    project_lookup = {
+        canonical_project_name(_safe_str(project.project_name).strip()): project
+        for project in projects
+        if _safe_str(project.project_name).strip()
+    }
+    for project_name, remarks in remarks_by_project.items():
+        project = project_lookup.get(canonical_project_name(project_name))
+        if project is not None:
+            project.camera_audit_remarks = _safe_str(remarks).strip()
+    if _is_excel_source(source_name):
+        save_projects_to_excel(projects)
+        return len(remarks_by_project)
+    return update_project_camera_audit_remarks_supabase(remarks_by_project)
 
 
 def _rename_invoice_project_names(rename_map, source_name: str) -> int:
@@ -4248,6 +4267,7 @@ elif page == "📷 Camera Audit":
             "Order IDs": ", ".join(unique_order_ids),
             "Order Refs": ", ".join(unique_order_numbers),
             "Invoice Refs": ", ".join(invoice_refs_with_cams),
+            "Remarks": _safe_str(getattr(project, "camera_audit_remarks", "")).strip(),
         })
 
     if not rows:
@@ -4419,15 +4439,58 @@ elif page == "📷 Camera Audit":
             "Δ Invoiced": lambda v: "—" if pd.isna(v) else f"{int(v):+d}",
         })
     )
-    st.dataframe(
-        styled,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Order Refs": st.column_config.TextColumn("Order Refs", width="large"),
-            "Invoice Refs": st.column_config.TextColumn("Invoice Refs", width="large"),
-        },
-    )
+    if not CAN_EDIT:
+        st.dataframe(
+            styled,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Order Refs": st.column_config.TextColumn("Order Refs", width="large"),
+                "Invoice Refs": st.column_config.TextColumn("Invoice Refs", width="large"),
+                "Remarks": st.column_config.TextColumn("Remarks", width="large"),
+            },
+        )
+    else:
+        st.caption("Edit the Remarks column, then click Save Remarks.")
+        editable_audit_df = st.data_editor(
+            camera_audit_display_df,
+            use_container_width=True,
+            hide_index=True,
+            disabled=[column for column in camera_audit_display_df.columns if column != "Remarks"],
+            column_config={
+                "Order Refs": st.column_config.TextColumn("Order Refs", width="large"),
+                "Invoice Refs": st.column_config.TextColumn("Invoice Refs", width="large"),
+                "Remarks": st.column_config.TextColumn("Remarks", width="large"),
+            },
+            key="camera_audit_editor",
+        )
+        if st.button("💾 Save Remarks", key="save_camera_audit_remarks"):
+            original_remarks = {
+                _safe_str(row.get("Project", "")).strip(): _safe_str(row.get("Remarks", "")).strip()
+                for _, row in camera_audit_display_df.iterrows()
+                if _safe_str(row.get("Project", "")).strip() and row.get("Project") != "TOTAL / SUMMARY"
+            }
+            changed_remarks = {}
+            for _, row in editable_audit_df.iterrows():
+                project_name = _safe_str(row.get("Project", "")).strip()
+                if not project_name or project_name == "TOTAL / SUMMARY":
+                    continue
+                new_remarks = _safe_str(row.get("Remarks", "")).strip()
+                if new_remarks != original_remarks.get(project_name, ""):
+                    changed_remarks[project_name] = new_remarks
+
+            if not changed_remarks:
+                st.info("No remark changes to save.")
+            else:
+                try:
+                    _save_camera_audit_remarks(changed_remarks, _data_path)
+                    load_data.clear()
+                    st.session_state.pop("camera_audit_editor", None)
+                    st.session_state["_flash_success"] = f"Saved remarks for {len(changed_remarks)} project(s)."
+                    st.session_state["_flash_success_page"] = "📷 Camera Audit"
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Failed to save remarks: {exc}")
 
     st.download_button(
         "⬇️ Download comparison (CSV)",

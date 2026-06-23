@@ -112,6 +112,7 @@ def load_projects(filepath: Path = None) -> List[Project]:
             status=_safe_str(row.get("Status")),
             license_eop=_safe_datetime(row.get("Licsense EOP ")),
             caddy_back=_safe_str(row.get(" CaddyBack")),
+            camera_audit_remarks=_safe_str(row.get("Camera Audit Remarks")),
             maintenance_invoice_numbers=inv_numbers,
         )
         projects.append(p)
@@ -303,6 +304,15 @@ def _safe_write(ws, row: int, col: int, value):
         cell.value = value
 
 
+def _get_or_create_header_col(ws, header_name: str) -> int:
+    for col_idx in range(1, ws.max_column + 1):
+        if _safe_str(ws.cell(row=1, column=col_idx).value) == header_name:
+            return col_idx
+    col_idx = ws.max_column + 1
+    ws.cell(row=1, column=col_idx).value = header_name
+    return col_idx
+
+
 def save_projects_to_excel(
     projects: List[Project],
     filepath: Path = None,
@@ -317,6 +327,7 @@ def save_projects_to_excel(
     logger.info("Saving %d projects to %s", len(projects), filepath)
     wb = openpyxl.load_workbook(filepath)
     ws = wb[SHEET_PROJECTS_OVERVIEW]
+    camera_audit_remarks_col = _get_or_create_header_col(ws, "Camera Audit Remarks")
 
     # Build lookup: project_name -> Project
     proj_map = {canonical_project_name(p.project_name).strip(): p for p in projects}
@@ -342,6 +353,7 @@ def save_projects_to_excel(
         _safe_write(ws, row_idx, _PROJ_COL["VIM Version"],        proj.vim_version or None)
         _safe_write(ws, row_idx, _PROJ_COL["Status"],             proj.status or None)
         _safe_write(ws, row_idx, _PROJ_COL["Licsense EOP "],      proj.license_eop)
+        _safe_write(ws, row_idx, camera_audit_remarks_col,         proj.camera_audit_remarks or None)
 
     # Append rows for brand-new projects not yet in the sheet
     for proj in projects:
@@ -359,6 +371,9 @@ def save_projects_to_excel(
         row_data[_PROJ_COL["VIM Version"] - 1]        = proj.vim_version or None
         row_data[_PROJ_COL["Status"] - 1]             = proj.status or None
         row_data[_PROJ_COL["Licsense EOP "] - 1]      = proj.license_eop
+        if len(row_data) < camera_audit_remarks_col:
+            row_data.extend([None] * (camera_audit_remarks_col - len(row_data)))
+        row_data[camera_audit_remarks_col - 1]         = proj.camera_audit_remarks or None
         ws.append(row_data)
         logger.info("Appended new project row: %s", canonical_name)
 
