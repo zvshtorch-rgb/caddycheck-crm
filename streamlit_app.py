@@ -4439,41 +4439,43 @@ elif page == "📷 Camera Audit":
             "Δ Invoiced": lambda v: "—" if pd.isna(v) else f"{int(v):+d}",
         })
     )
-    if not CAN_EDIT:
-        st.dataframe(
-            styled,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Order Refs": st.column_config.TextColumn("Order Refs", width="large"),
-                "Invoice Refs": st.column_config.TextColumn("Invoice Refs", width="large"),
-                "Remarks": st.column_config.TextColumn("Remarks", width="large"),
-            },
-        )
-    else:
-        st.caption("Edit the Remarks column, then click Save Remarks.")
+    st.dataframe(
+        styled,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Order Refs": st.column_config.TextColumn("Order Refs", width="large"),
+            "Invoice Refs": st.column_config.TextColumn("Invoice Refs", width="large"),
+            "Remarks": st.column_config.TextColumn("Remarks", width="large"),
+        },
+    )
+
+    if CAN_EDIT:
+        st.caption("Edit remarks below, then click Save Remarks. The audit table above keeps the red/bold delta highlighting.")
+        remarks_editor_df = camera_audit_display_df[
+            camera_audit_display_df["Project"] != "TOTAL / SUMMARY"
+        ][["Project", "Remarks"]].reset_index(drop=True)
         editable_audit_df = st.data_editor(
-            camera_audit_display_df,
+            remarks_editor_df,
             use_container_width=True,
             hide_index=True,
-            disabled=[column for column in camera_audit_display_df.columns if column != "Remarks"],
+            disabled=["Project"],
             column_config={
-                "Order Refs": st.column_config.TextColumn("Order Refs", width="large"),
-                "Invoice Refs": st.column_config.TextColumn("Invoice Refs", width="large"),
+                "Project": st.column_config.TextColumn("Project", width="medium"),
                 "Remarks": st.column_config.TextColumn("Remarks", width="large"),
             },
-            key="camera_audit_editor",
+            key="camera_audit_remarks_editor",
         )
         if st.button("💾 Save Remarks", key="save_camera_audit_remarks"):
             original_remarks = {
                 _safe_str(row.get("Project", "")).strip(): _safe_str(row.get("Remarks", "")).strip()
-                for _, row in camera_audit_display_df.iterrows()
-                if _safe_str(row.get("Project", "")).strip() and row.get("Project") != "TOTAL / SUMMARY"
+                for _, row in remarks_editor_df.iterrows()
+                if _safe_str(row.get("Project", "")).strip()
             }
             changed_remarks = {}
             for _, row in editable_audit_df.iterrows():
                 project_name = _safe_str(row.get("Project", "")).strip()
-                if not project_name or project_name == "TOTAL / SUMMARY":
+                if not project_name:
                     continue
                 new_remarks = _safe_str(row.get("Remarks", "")).strip()
                 if new_remarks != original_remarks.get(project_name, ""):
@@ -4485,7 +4487,7 @@ elif page == "📷 Camera Audit":
                 try:
                     _save_camera_audit_remarks(changed_remarks, _data_path)
                     load_data.clear()
-                    st.session_state.pop("camera_audit_editor", None)
+                    st.session_state.pop("camera_audit_remarks_editor", None)
                     st.session_state["_flash_success"] = f"Saved remarks for {len(changed_remarks)} project(s)."
                     st.session_state["_flash_success_page"] = "📷 Camera Audit"
                     st.rerun()
