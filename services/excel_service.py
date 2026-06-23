@@ -52,6 +52,11 @@ def _safe_str(val) -> str:
         return ""
 
 
+def _safe_bool(val) -> bool:
+    text = _safe_str(val).strip().lower()
+    return text in {"1", "true", "yes", "y", "approved", "x"}
+
+
 def _safe_datetime(val) -> Optional[datetime.datetime]:
     if val is None:
         return None
@@ -113,6 +118,7 @@ def load_projects(filepath: Path = None) -> List[Project]:
             license_eop=_safe_datetime(row.get("Licsense EOP ")),
             caddy_back=_safe_str(row.get(" CaddyBack")),
             camera_audit_remarks=_safe_str(row.get("Camera Audit Remarks")),
+            camera_audit_approved=_safe_bool(row.get("Camera Audit Approved")),
             maintenance_invoice_numbers=inv_numbers,
         )
         projects.append(p)
@@ -328,6 +334,7 @@ def save_projects_to_excel(
     wb = openpyxl.load_workbook(filepath)
     ws = wb[SHEET_PROJECTS_OVERVIEW]
     camera_audit_remarks_col = _get_or_create_header_col(ws, "Camera Audit Remarks")
+    camera_audit_approved_col = _get_or_create_header_col(ws, "Camera Audit Approved")
 
     # Build lookup: project_name -> Project
     proj_map = {canonical_project_name(p.project_name).strip(): p for p in projects}
@@ -354,6 +361,7 @@ def save_projects_to_excel(
         _safe_write(ws, row_idx, _PROJ_COL["Status"],             proj.status or None)
         _safe_write(ws, row_idx, _PROJ_COL["Licsense EOP "],      proj.license_eop)
         _safe_write(ws, row_idx, camera_audit_remarks_col,         proj.camera_audit_remarks or None)
+        _safe_write(ws, row_idx, camera_audit_approved_col,        "Yes" if proj.camera_audit_approved else None)
 
     # Append rows for brand-new projects not yet in the sheet
     for proj in projects:
@@ -374,6 +382,9 @@ def save_projects_to_excel(
         if len(row_data) < camera_audit_remarks_col:
             row_data.extend([None] * (camera_audit_remarks_col - len(row_data)))
         row_data[camera_audit_remarks_col - 1]         = proj.camera_audit_remarks or None
+        if len(row_data) < camera_audit_approved_col:
+            row_data.extend([None] * (camera_audit_approved_col - len(row_data)))
+        row_data[camera_audit_approved_col - 1]        = "Yes" if proj.camera_audit_approved else None
         ws.append(row_data)
         logger.info("Appended new project row: %s", canonical_name)
 

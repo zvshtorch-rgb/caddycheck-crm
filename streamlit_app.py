@@ -68,6 +68,12 @@ def _safe_str(v):
     return str(v)
 
 
+def _safe_bool(v) -> bool:
+    if isinstance(v, bool):
+        return v
+    return _safe_str(v).strip().lower() in {"1", "true", "yes", "y", "approved", "x"}
+
+
 def _normalize_project_name_key(value: object) -> str:
     text = _safe_str(value).strip().lower()
     return re.sub(r"[^a-z0-9]+", "", text)
@@ -526,23 +532,26 @@ def _delete_projects(project_names, source_name: str) -> int:
     return delete_projects_supabase(project_names)
 
 
-def _save_camera_audit_remarks(remarks_by_project: dict[str, str], source_name: str) -> int:
-    if not remarks_by_project:
+def _save_camera_audit_settings(settings_by_project: dict[str, dict], source_name: str) -> int:
+    if not settings_by_project:
         return 0
     project_lookup = {
         canonical_project_name(_safe_str(project.project_name).strip()): project
         for project in projects
         if _safe_str(project.project_name).strip()
     }
-    for project_name, remarks in remarks_by_project.items():
+    for project_name, settings in settings_by_project.items():
         project = project_lookup.get(canonical_project_name(project_name))
         if project is not None:
-            project.camera_audit_remarks = _safe_str(remarks).strip()
+            if "remarks" in settings:
+                project.camera_audit_remarks = _safe_str(settings.get("remarks")).strip()
+            if "approved" in settings:
+                project.camera_audit_approved = bool(settings.get("approved"))
     if _is_excel_source(source_name):
         save_projects_to_excel(projects)
-        return len(remarks_by_project)
-    from services.supabase_service import update_project_camera_audit_remarks
-    return update_project_camera_audit_remarks(remarks_by_project)
+        return len(settings_by_project)
+    from services.supabase_service import update_project_camera_audit_settings
+    return update_project_camera_audit_settings(settings_by_project)
 
 
 def _rename_invoice_project_names(rename_map, source_name: str) -> int:
@@ -4282,6 +4291,7 @@ elif page == "📷 Camera Audit":
             "Order IDs": ", ".join(unique_order_ids),
             "Order Refs": ", ".join(unique_order_numbers),
             "Invoice Refs": ", ".join(invoice_refs_with_cams),
+            "Approved": _safe_bool(getattr(project, "camera_audit_approved", False)),
             "Remarks": _safe_str(getattr(project, "camera_audit_remarks", "")).strip(),
         })
 
@@ -4332,6 +4342,12 @@ elif page == "📷 Camera Audit":
         )
     with fc6:
         order_search = st.text_input("Search project", key="camaudit_search").strip().lower()
+    hide_approved = st.checkbox(
+        "Hide approved discrepancies",
+        value=True,
+        key="camaudit_hide_approved",
+        help="Approved rows are accepted exceptions and are hidden from the mismatch list while this is checked.",
+    )
 
     filtered = audit_df.copy()
     if sel_net != "All":
@@ -4355,6 +4371,8 @@ elif page == "📷 Camera Audit":
         ]
     elif audit_view == "Order ID Count > 1":
         filtered = filtered[filtered["Order ID Count"] > 1]
+    if hide_approved and "Approved" in filtered.columns:
+        filtered = filtered[~filtered["Approved"].map(_safe_bool)]
 
     sort_helper_columns = [
         "_sort_delta_ordered",
@@ -4405,6 +4423,7 @@ elif page == "📷 Camera Audit":
     order_mismatches = int(((filtered["Δ Ordered"].notna()) & (filtered["Δ Ordered"] != 0)).sum())
     invoice_mismatches = int(((filtered["Δ Invoiced"].notna()) & (filtered["Δ Invoiced"] != 0)).sum())
     no_orders = int(filtered["Ordered"].isna().sum())
+    approved_hidden = int(audit_df["Approved"].map(_safe_bool).sum()) if hide_approved and "Approved" in audit_df.columns else 0
 
     m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("Working Cams", total_working)
@@ -4414,6 +4433,8 @@ elif page == "📷 Camera Audit":
     m5.metric("Invoice Mismatches", invoice_mismatches)
     if no_orders:
         st.caption(f"⚠️ {no_orders} project(s) have no order data yet (still being uploaded).")
+    if approved_hidden:
+        st.caption(f"{approved_hidden} approved discrepancy row(s) are hidden. Clear Hide approved discrepancies to review them.")
 
     # ── Highlighted table ─────────────────────────────────────────────────────
     camera_audit_display_df = filtered.drop(columns=["Order ID Count", "Invoice Ref Count"] + sort_helper_columns, errors="ignore").copy()
@@ -4461,15 +4482,16 @@ elif page == "📷 Camera Audit":
         column_config={
             "Order Refs": st.column_config.TextColumn("Order Refs", width="large"),
             "Invoice Refs": st.column_config.TextColumn("Invoice Refs", width="large"),
+            "Approved": st.column_config.CheckboxColumn("Approved"),
             "Remarks": st.column_config.TextColumn("Remarks", width="large"),
         },
     )
 
     if CAN_EDIT:
-        st.caption("Edit remarks below, then click Save Remarks. The audit table above keeps the red/bold delta highlighting.")
+        st.caption("Approve accepted discrepancies or edit remarks below, then click Save Audit Settings. Approved rows can be hidden from the mismatch list.")
         remarks_editor_df = camera_audit_display_df[
             camera_audit_display_df["Project"] != "TOTAL / SUMMARY"
-        ][["Project", "Remarks"]].reset_index(drop=True)
+        ][["Project", "Approved", "Remarks"]].reset_index(drop=True)
         editable_audit_df = st.data_editor(
             remarks_editor_df,
             use_container_width=True,
@@ -4477,37 +4499,46 @@ elif page == "📷 Camera Audit":
             disabled=["Project"],
             column_config={
                 "Project": st.column_config.TextColumn("Project", width="medium"),
+                "Approved": st.column_config.CheckboxColumn("Approved"),
                 "Remarks": st.column_config.TextColumn("Remarks", width="large"),
             },
             key="camera_audit_remarks_editor",
         )
-        if st.button("💾 Save Remarks", key="save_camera_audit_remarks"):
-            original_remarks = {
-                _safe_str(row.get("Project", "")).strip(): _safe_str(row.get("Remarks", "")).strip()
+        if st.button("💾 Save Audit Settings", key="save_camera_audit_remarks"):
+            original_settings = {
+                _safe_str(row.get("Project", "")).strip(): {
+                    "remarks": _safe_str(row.get("Remarks", "")).strip(),
+                    "approved": _safe_bool(row.get("Approved", False)),
+                }
                 for _, row in remarks_editor_df.iterrows()
                 if _safe_str(row.get("Project", "")).strip()
             }
-            changed_remarks = {}
+            changed_settings = {}
             for _, row in editable_audit_df.iterrows():
                 project_name = _safe_str(row.get("Project", "")).strip()
                 if not project_name:
                     continue
                 new_remarks = _safe_str(row.get("Remarks", "")).strip()
-                if new_remarks != original_remarks.get(project_name, ""):
-                    changed_remarks[project_name] = new_remarks
+                new_approved = _safe_bool(row.get("Approved", False))
+                original = original_settings.get(project_name, {"remarks": "", "approved": False})
+                if new_remarks != original["remarks"] or new_approved != original["approved"]:
+                    changed_settings[project_name] = {
+                        "remarks": new_remarks,
+                        "approved": new_approved,
+                    }
 
-            if not changed_remarks:
-                st.info("No remark changes to save.")
+            if not changed_settings:
+                st.info("No audit setting changes to save.")
             else:
                 try:
-                    _save_camera_audit_remarks(changed_remarks, _data_path)
+                    _save_camera_audit_settings(changed_settings, _data_path)
                     load_data.clear()
                     st.session_state.pop("camera_audit_remarks_editor", None)
-                    st.session_state["_flash_success"] = f"Saved remarks for {len(changed_remarks)} project(s)."
+                    st.session_state["_flash_success"] = f"Saved audit settings for {len(changed_settings)} project(s)."
                     st.session_state["_flash_success_page"] = "📷 Camera Audit"
                     st.rerun()
                 except Exception as exc:
-                    st.error(f"Failed to save remarks: {exc}")
+                    st.error(f"Failed to save audit settings: {exc}")
 
     st.download_button(
         "⬇️ Download comparison (CSV)",

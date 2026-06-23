@@ -175,6 +175,7 @@ def load_projects() -> list:
             license_eop=_parse_date(row.get("license_eop")),
             caddy_back=row.get("caddy_back") or "",
             camera_audit_remarks=row.get("camera_audit_remarks") or "",
+            camera_audit_approved=bool(row.get("camera_audit_approved") or False),
             maintenance_invoice_numbers=inv_numbers,
             rate_y1_override=row.get("rate_y1_override"),
             rate_y2_override=row.get("rate_y2_override"),
@@ -237,30 +238,44 @@ def upsert_projects(projects: list) -> None:
 
 
 def update_project_camera_audit_remarks(remarks_by_project: Dict[str, str]) -> int:
+    return update_project_camera_audit_settings({
+        project_name: {"remarks": remarks}
+        for project_name, remarks in remarks_by_project.items()
+    })
+
+
+def update_project_camera_audit_settings(settings_by_project: Dict[str, Dict[str, Any]]) -> int:
     client = _get_client()
     from config.settings import canonical_project_name
 
     updated = 0
-    for project_name, remarks in remarks_by_project.items():
+    for project_name, settings in settings_by_project.items():
         canonical_name = canonical_project_name(project_name)
         if not canonical_name:
             continue
+        row: Dict[str, Any] = {}
+        if "remarks" in settings:
+            row["camera_audit_remarks"] = str(settings.get("remarks") or "").strip() or None
+        if "approved" in settings:
+            row["camera_audit_approved"] = bool(settings.get("approved"))
+        if not row:
+            continue
         resp = (
             client.table("projects")
-            .update({"camera_audit_remarks": str(remarks or "").strip() or None})
+            .update(row)
             .eq("project_name", canonical_name)
             .execute()
         )
         if not resp.data:
             resp = (
                 client.table("projects")
-                .update({"camera_audit_remarks": str(remarks or "").strip() or None})
+                .update(row)
                 .ilike("project_name", canonical_name)
                 .execute()
             )
         updated += len(resp.data or [])
 
-    logger.info("Updated camera audit remarks for %d project row(s)", updated)
+    logger.info("Updated camera audit settings for %d project row(s)", updated)
     return updated
 
 

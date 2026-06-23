@@ -24,6 +24,7 @@ class Project:
     license_eop: Optional[datetime.datetime] = None
     caddy_back: str = ""
     camera_audit_remarks: str = ""
+    camera_audit_approved: bool = False
 
     # Raw M-1Y..M-9Y values (invoice numbers assigned per maintenance year)
     maintenance_invoice_numbers: dict = field(default_factory=dict)
