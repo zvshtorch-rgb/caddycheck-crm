@@ -2717,48 +2717,19 @@ elif page == "🏗️ Projects":
         if table_df is None or table_df.empty:
             return
 
-        total_projects = len(table_df)
-        total_cams = sum(_safe_int(value) for value in table_df.get("# Cams", []))
-        active_projects = sum(1 for value in table_df.get("Status", []) if _normalize_project_status(value) == "Active")
-        offline_projects = sum(1 for value in table_df.get("Status", []) if _normalize_project_status(value) == "Offline")
-        active_cams = sum(
-            _safe_int(cams)
-            for cams, status in zip(table_df.get("# Cams", []), table_df.get("Status", []))
-            if _normalize_project_status(status) == "Active"
-        )
-        offline_cams = sum(
-            _safe_int(cams)
-            for cams, status in zip(table_df.get("# Cams", []), table_df.get("Status", []))
-            if _normalize_project_status(status) == "Offline"
-        )
+        visible_rows = table_df[
+            table_df.get("Project Name", pd.Series(dtype=str)).astype(str).str.strip() != ""
+        ] if "Project Name" in table_df.columns else table_df
+        total_projects = len(visible_rows)
+        total_cams = sum(_safe_int(value) for value in visible_rows.get("# Cams", []))
 
         summary_row_df = pd.DataFrame([
             {
-                "Project Name": f"TOTAL ({total_projects} projects)",
-                "Country": "",
-                "# Cams": str(total_cams),
-                "Payment Month": "",
-                "Install Year": "",
-                "Activation Date": "",
-                "Detection Type": "",
-                "Backtray Cams": "",
-                "TopDown Cams": "",
-                "Pushout Cams": "",
-                "VIM Version": "",
-                "Status": "",
-                "License EOP": "",
-            }
-        ])
-        summary_metrics = pd.DataFrame([
-            {
-                "Active Projects": active_projects,
-                "Offline Projects": offline_projects,
-                "Active Cams": active_cams,
-                "Offline Cams": offline_cams,
+                "Projects": total_projects,
+                "Cameras": total_cams,
             }
         ])
         st.dataframe(summary_row_df, use_container_width=True, hide_index=True, height=70)
-        st.dataframe(summary_metrics, use_container_width=True, hide_index=True, height=70)
 
     def color_status(val):
         if str(val).strip().lower() == "active":
@@ -2835,6 +2806,7 @@ elif page == "🏗️ Projects":
             key="proj_editor",
         )
         projects_summary_df = edited_df
+        _render_projects_bottom_summary(projects_summary_df)
         if save_projects_clicked:
             from models.project import Project as ProjectModel
             original_project_map = {
@@ -3142,8 +3114,7 @@ elif page == "🏗️ Projects":
             use_container_width=True,
             height=600,
         )
-
-    _render_projects_bottom_summary(projects_summary_df)
+        _render_projects_bottom_summary(df)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE: ORDERS
