@@ -5507,10 +5507,15 @@ elif page == "💸 Debt Report":
     if widget_debt_type not in debt_type_options:
         widget_debt_type = active_debt_type
         st.session_state["dr_debt_type_widget"] = widget_debt_type
+    y1_split_options = ["All", "Before 8673", "8673 and after"]
+    widget_y1_split = st.session_state.get("dr_y1_split_widget", "All")
+    if widget_y1_split not in y1_split_options:
+        widget_y1_split = "All"
+        st.session_state["dr_y1_split_widget"] = widget_y1_split
 
     # ── Filters ───────────────────────────────────────────────────────────────
     with st.expander("🔍 Filters", expanded=False):
-        fc1, fc2, fc3, fc4 = st.columns(4)
+        fc1, fc2, fc3, fc4, fc5 = st.columns(5)
         debt_years    = sorted({inv.year for inv in invoices if inv.year}, reverse=True)
         dsel_year     = fc1.selectbox("Year", ["All"] + [str(y) for y in debt_years], key="dr_year")
         debt_countries = sorted({
@@ -5527,6 +5532,13 @@ elif page == "💸 Debt Report":
             key="dr_debt_type_widget",
         )
         st.session_state["dr_debt_type"] = dsel_debt_type
+        dsel_y1_split = fc5.selectbox(
+            "Y1 split",
+            y1_split_options,
+            index=y1_split_options.index(widget_y1_split),
+            key="dr_y1_split_widget",
+        )
+        st.session_state["dr_y1_split"] = dsel_y1_split
 
     # Only unpaid invoices
     debt_inv = [i for i in invoices if i.is_unpaid()]
@@ -5679,6 +5691,11 @@ elif page == "💸 Debt Report":
         debt_inv = [i for i in debt_inv if _is_paid_trial_category(i)]
     elif dsel_debt_type == "Maintenance (Y2+)":
         debt_inv = [i for i in debt_inv if _is_maintenance_category(i)]
+    if dsel_debt_type == "New Installation (Y1)" and dsel_y1_split != "All":
+        if dsel_y1_split == "Before 8673":
+            debt_inv = [i for i in debt_inv if _safe_int(i.invoice_number, default=0) > 0 and _safe_int(i.invoice_number, default=0) < 8673]
+        elif dsel_y1_split == "8673 and after":
+            debt_inv = [i for i in debt_inv if _safe_int(i.invoice_number, default=0) >= 8673]
     debt_inv = _dedupe_invoice_project_rows(debt_inv)
 
     # Build invoice-level country hints from known rows.
@@ -5708,6 +5725,11 @@ elif page == "💸 Debt Report":
         all_unpaid = [i for i in all_unpaid if _get_country(i.project_name) == dsel_country]
     if dsel_search.strip():
         all_unpaid = [i for i in all_unpaid if dsel_search.lower() in i.project_name.lower()]
+    if dsel_debt_type == "New Installation (Y1)" and dsel_y1_split != "All":
+        if dsel_y1_split == "Before 8673":
+            all_unpaid = [i for i in all_unpaid if _safe_int(i.invoice_number, default=0) > 0 and _safe_int(i.invoice_number, default=0) < 8673]
+        elif dsel_y1_split == "8673 and after":
+            all_unpaid = [i for i in all_unpaid if _safe_int(i.invoice_number, default=0) >= 8673]
     all_unpaid = _dedupe_invoice_project_rows(all_unpaid)
 
     total_debt_amt  = sum(i.payment_amount for i in all_unpaid)
@@ -5862,6 +5884,8 @@ elif page == "💸 Debt Report":
 
     if dsel_debt_type == "New Installation (Y1)":
         st.caption("Showing only first-year debt (Y1).")
+        if dsel_y1_split != "All":
+            st.caption(f"Y1 rows are split by invoice number: {dsel_y1_split}.")
     elif dsel_debt_type == "Paid Trials":
         st.caption("Showing only paid-trial debt.")
     elif dsel_debt_type == "Maintenance (Y2+)":
