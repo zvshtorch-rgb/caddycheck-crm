@@ -6016,14 +6016,53 @@ elif page == "💸 Debt Report":
 elif page == "📅 Monthly Invoice":
     st.title("📅 Monthly Invoice")
 
-    col1, col2, col3 = st.columns([2, 1, 2])
+    col1, col2 = st.columns([2, 1])
     with col1:
         sel_month = st.selectbox("Month", MONTH_ORDER, index=datetime.date.today().month - 1)
     with col2:
         sel_year = st.number_input("Year", min_value=2015, max_value=2035,
                                    value=datetime.date.today().year, step=1)
+
+    base_month_projects = get_monthly_invoice_projects(projects, sel_month, int(sel_year))
+    monthly_network_options = _ordered_project_networks({
+        _project_network(project.project_name)
+        for project in base_month_projects
+        if _safe_str(project.project_name).strip()
+    })
+    default_excluded_networks = [network for network in ["Edeka"] if network in monthly_network_options]
+    exclude_col1, exclude_col2 = st.columns([1, 2])
+    excluded_monthly_networks = exclude_col1.multiselect(
+        "Exclude networks",
+        monthly_network_options,
+        default=default_excluded_networks,
+        key="monthly_exclude_networks",
+        help="Projects from these networks are removed from this monthly invoice preview and generated invoice.",
+    )
+    network_filtered_month_projects = [
+        project for project in base_month_projects
+        if _project_network(project.project_name) not in excluded_monthly_networks
+    ]
+    excluded_project_options = sorted({
+        _safe_str(project.project_name).strip()
+        for project in network_filtered_month_projects
+        if _safe_str(project.project_name).strip()
+    })
+    excluded_monthly_projects = exclude_col2.multiselect(
+        "Exclude individual projects",
+        excluded_project_options,
+        key="monthly_exclude_projects",
+        help="Remove selected projects from only this monthly invoice batch.",
+    )
+    month_projects = [
+        project for project in network_filtered_month_projects
+        if _safe_str(project.project_name).strip() not in set(excluded_monthly_projects)
+    ]
+    excluded_count = len(base_month_projects) - len(month_projects)
+    if excluded_count:
+        st.caption(f"Excluded {excluded_count} project(s) from this monthly invoice batch.")
+
+    col3, _invoice_spacer = st.columns([2, 3])
     with col3:
-        month_projects = get_monthly_invoice_projects(projects, sel_month, int(sel_year))
         suggested_inv_no = _suggest_month_invoice_number(month_projects, invoices, int(sel_year), _data_path)
         invoice_number = st.number_input("Invoice Number",
                                          min_value=1, value=suggested_inv_no, step=1)
