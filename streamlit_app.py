@@ -1771,6 +1771,50 @@ def load_orders_data(source_name: str) -> tuple[list[dict], str]:
         raise
 
 
+def _aggregate_ordered_cameras_by_project(
+    orders: list[dict],
+    project_names: list[str],
+) -> tuple[dict[str, int], set[str]]:
+    """Map each project to its total ordered cameras using smart name matching.
+
+    Returns (ordered_by_project, has_order_for_project) keyed by project name.
+    Mirrors the matching logic used by the Camera Audit page.
+    """
+    project_name_by_key: dict[str, str] = {}
+    for project_name in project_names:
+        canonical_name = canonical_project_name(project_name)
+        project_name_by_key[_normalize_project_name_key(project_name)] = project_name
+        project_name_by_key[_normalize_project_name_key(canonical_name)] = project_name
+        project_name_by_key[_normalize_order_project_match_key(project_name)] = project_name
+        project_name_by_key[_normalize_order_project_match_key(canonical_name)] = project_name
+
+    ordered_by_project: dict[str, int] = {}
+    has_order_for_project: set[str] = set()
+    for order in orders:
+        order_project_name = _safe_str(order.get("project_name")).strip()
+        matched_project_name = project_name_by_key.get(
+            _normalize_project_name_key(canonical_project_name(order_project_name))
+        )
+        if matched_project_name is None:
+            matched_project_name = project_name_by_key.get(
+                _normalize_order_project_match_key(order_project_name)
+            )
+        if matched_project_name is None:
+            suggested_project_name, suggested_project_score = _suggest_best_order_project_match(
+                order_project_name, project_names
+            )
+            if suggested_project_score >= 0.55:
+                matched_project_name = suggested_project_name
+        if not matched_project_name:
+            continue
+        has_order_for_project.add(matched_project_name)
+        ordered_by_project[matched_project_name] = (
+            ordered_by_project.get(matched_project_name, 0)
+            + _safe_int(order.get("ordered_cameras"), default=0)
+        )
+    return ordered_by_project, has_order_for_project
+
+
 def _is_local_orders_source(orders_source_name: str) -> bool:
     return not orders_source_name.startswith("Supabase")
 
@@ -6035,6 +6079,79 @@ elif page == "💸 Debt Report":
     else:
         st.success("No unpaid invoices match the current filters.")
 
+    # ── Order-Site Discrepancies (ordered > working cameras) ──────────────────
+    discrepancy_year = int(dsel_year) if dsel_year != "All" else datetime.date.today().year
+    order_site_rows = []
+    order_site_total = 0.0
+    try:
+        dr_orders, _dr_orders_source = load_orders_data(_data_path)
+    except Exception:
+        dr_orders = []
+    if dr_orders:
+        dr_project_names = [
+            _safe_str(project.project_name).strip()
+            for project in projects
+            if _safe_str(project.project_name).strip()
+        ]
+        dr_ordered_by_project, dr_has_order = _aggregate_ordered_cameras_by_project(
+            dr_orders, dr_project_names
+        )
+        for project in projects:
+            name = _safe_str(project.project_name).strip()
+            if not name or name not in dr_has_order:
+                continue
+            working = _safe_int(project.num_cams, default=0)
+            ordered = dr_ordered_by_project.get(name, 0)
+            delta_ordered = working - ordered
+            if delta_ordered >= 0:
+                continue
+            units = abs(delta_ordered)
+            rate = project.get_rate(discrepancy_year)
+            amount = units * rate
+            order_site_total += amount
+            order_site_rows.append({
+                "Project": name,
+                "Country": _normalize_country(_safe_str(_get_country(name)).strip()),
+                "Working": working,
+                "Ordered": ordered,
+                "Δ Ordered": delta_ordered,
+                "Units": units,
+                "Rate (€)": rate,
+                "Amount (€)": amount,
+            })
+
+    order_site_rows.sort(key=lambda r: r["Amount (€)"], reverse=True)
+
+    st.subheader("📦 Order-Site Discrepancies")
+    st.caption(
+        "Projects where more cameras were ordered than are currently working "
+        "(Δ Ordered < 0). Billable difference = |Δ Ordered| × rate."
+    )
+    if order_site_rows:
+        order_site_df = pd.DataFrame(order_site_rows)
+        st.dataframe(
+            order_site_df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Rate (€)": st.column_config.NumberColumn(format="%.0f"),
+                "Amount (€)": st.column_config.NumberColumn(format="%.0f"),
+            },
+        )
+        st.metric(
+            f"Order-Site Discrepancy Total ({len(order_site_rows)} project(s))",
+            f"€{order_site_total:,.0f}",
+        )
+        st.download_button(
+            "⬇️ Download Order-Site Discrepancies CSV",
+            data=order_site_df.to_csv(index=False).encode("utf-8"),
+            file_name="order_site_discrepancies.csv",
+            mime="text/csv",
+            key="dr_order_site_csv",
+        )
+    else:
+        st.success("No order-site discrepancies (no project has Δ Ordered < 0).")
+
     st.markdown("---")
 
     # ── Download debt report PDF and email section ───────────────────────────
@@ -6156,6 +6273,40 @@ elif page == "💸 Debt Report":
                 elems.append(_make_section_table(y2_rows, rl_colors))
             else:
                 elems.append(Paragraph("No Y2+ unpaid invoices.", styles["Normal"]))
+            elems.append(Spacer(1, 0.6*cm))
+
+            # Section E: Order-Site Discrepancies (ordered > working cameras)
+            elems.append(Paragraph(
+                f"E. Order-Site Discrepancies  —  €{order_site_total:,.0f}", sec_style))
+            elems.append(Spacer(1, 0.2*cm))
+            if order_site_rows:
+                os_hdr_color = rl_colors.HexColor("#1B3A6B")
+                os_tbl_data = [["Project Name", "Country", "Δ Ordered", "Units", "Amount (€)"]]
+                for r in order_site_rows:
+                    os_tbl_data.append([
+                        r["Project"],
+                        r["Country"],
+                        f"{int(r['Δ Ordered']):+d}",
+                        str(int(r["Units"])),
+                        f"€{r['Amount (€)']:,.0f}",
+                    ])
+                os_table = Table(os_tbl_data, repeatRows=1,
+                                 colWidths=[7*cm, 2.5*cm, 2.5*cm, 2*cm, 3.5*cm])
+                os_table.setStyle(TableStyle([
+                    ("BACKGROUND",     (0, 0), (-1, 0), os_hdr_color),
+                    ("TEXTCOLOR",      (0, 0), (-1, 0), rl_colors.white),
+                    ("FONTNAME",       (0, 0), (-1, 0), "Helvetica-Bold"),
+                    ("FONTSIZE",       (0, 0), (-1, -1), 8),
+                    ("ROWBACKGROUNDS", (0, 1), (-1, -1),
+                     [rl_colors.white, rl_colors.HexColor("#EBF5FB")]),
+                    ("GRID",           (0, 0), (-1, -1), 0.4, rl_colors.HexColor("#BDC3C7")),
+                    ("BOTTOMPADDING",  (0, 0), (-1, -1), 4),
+                    ("TOPPADDING",     (0, 0), (-1, -1), 4),
+                    ("ALIGN",          (2, 0), (-1, -1), "RIGHT"),
+                ]))
+                elems.append(os_table)
+            else:
+                elems.append(Paragraph("No order-site discrepancies (Δ Ordered < 0).", styles["Normal"]))
 
             doc.build(elems)
             debt_pdf_bytes = pdf_buf.getvalue()
@@ -6174,6 +6325,7 @@ elif page == "💸 Debt Report":
                 f"  • Y1 from {y1_cutoff_invoice} onward: €{y1_after_total:,.0f}\n"
                 f"Y2+ debt: €{y2_total:,.0f}\n"
                 f"Paid Trials debt: €{trial_total:,.0f}\n"
+                f"Order-site discrepancies: €{order_site_total:,.0f}\n"
                 f"Projects with debt: {proj_with_debt}\n\n"
                 "Best regards,\n"
                 "CaddyCheck CRM"
