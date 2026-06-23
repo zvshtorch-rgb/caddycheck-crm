@@ -6213,12 +6213,13 @@ elif page == "📅 Monthly Invoice":
             month_abbr = sel_month[:3]
             pdf_filename = f"CC_M-inv_{inv_no}_{month_abbr}_{int(sel_year)}.pdf"
             xlsx_filename = f"CC_M-inv_{inv_no}_{month_abbr}_{int(sel_year)}.xlsx"
+            show_excel_invoice_generation = (not _is_streamlit_cloud()) and paths["invoice_template"].exists()
 
-            if _is_streamlit_cloud():
+            if show_excel_invoice_generation:
+                col_pdf, col_xlsx = st.columns(2)
+            else:
                 col_pdf = st.container()
                 col_xlsx = None
-            else:
-                col_pdf, col_xlsx = st.columns(2)
 
             with col_pdf:
                 try:
@@ -6240,32 +6241,28 @@ elif page == "📅 Monthly Invoice":
 
             if col_xlsx is not None:
                 with col_xlsx:
-                    template_ok = paths["invoice_template"].exists()
-                    if not template_ok:
-                        st.warning("Excel template not found.")
-                    else:
-                        if st.button("Generate Excel Invoice"):
-                            import tempfile
-                            with tempfile.TemporaryDirectory() as tmp_dir:
-                                try:
-                                    out_path = generate_monthly_invoice(
-                                        projects=month_projects,
-                                        month_name=sel_month,
-                                        year=int(sel_year),
-                                        invoice_number=inv_no,
-                                        output_dir=Path(tmp_dir),
-                                        template_path=paths["invoice_template"],
-                                    )
-                                    with open(out_path, "rb") as f:
-                                        file_bytes = f.read()
-                                    st.download_button(
-                                        label=f"Download {out_path.name}",
-                                        data=file_bytes,
-                                        file_name=out_path.name,
-                                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                    )
-                                except Exception as e:
-                                    st.error(f"Excel generation failed: {e}")
+                    if st.button("Generate Excel Invoice"):
+                        import tempfile
+                        with tempfile.TemporaryDirectory() as tmp_dir:
+                            try:
+                                out_path = generate_monthly_invoice(
+                                    projects=month_projects,
+                                    month_name=sel_month,
+                                    year=int(sel_year),
+                                    invoice_number=inv_no,
+                                    output_dir=Path(tmp_dir),
+                                    template_path=paths["invoice_template"],
+                                )
+                                with open(out_path, "rb") as f:
+                                    file_bytes = f.read()
+                                st.download_button(
+                                    label=f"Download {out_path.name}",
+                                    data=file_bytes,
+                                    file_name=out_path.name,
+                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                )
+                            except Exception as e:
+                                st.error(f"Excel generation failed: {e}")
 
             # ── Save to Ledger ─────────────────────────────────────────────
             st.markdown("---")
