@@ -550,8 +550,30 @@ def _save_camera_audit_settings(settings_by_project: dict[str, dict], source_nam
     if _is_excel_source(source_name):
         save_projects_to_excel(projects)
         return len(settings_by_project)
-    from services.supabase_service import update_project_camera_audit_settings
-    return update_project_camera_audit_settings(settings_by_project)
+    from services import supabase_service as supabase_mod
+
+    updater = getattr(supabase_mod, "update_project_camera_audit_settings", None)
+    if callable(updater):
+        return updater(settings_by_project)
+
+    client = supabase_mod._get_client()
+    updated = 0
+    for project_name, settings in settings_by_project.items():
+        canonical_name = canonical_project_name(project_name)
+        if not canonical_name:
+            continue
+        row = {}
+        if "remarks" in settings:
+            row["camera_audit_remarks"] = _safe_str(settings.get("remarks")).strip() or None
+        if "approved" in settings:
+            row["camera_audit_approved"] = bool(settings.get("approved"))
+        if not row:
+            continue
+        resp = client.table("projects").update(row).eq("project_name", canonical_name).execute()
+        if not resp.data:
+            resp = client.table("projects").update(row).ilike("project_name", canonical_name).execute()
+        updated += len(resp.data or [])
+    return updated
 
 
 def _rename_invoice_project_names(rename_map, source_name: str) -> int:
