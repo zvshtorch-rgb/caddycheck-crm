@@ -5,6 +5,7 @@ import copy
 import hashlib
 import io
 import logging
+import os
 import re
 import sys
 import zipfile
@@ -23,6 +24,16 @@ sys.path.insert(0, str(Path(__file__).parent))
 import math
 
 logger = logging.getLogger(__name__)
+
+
+def _is_streamlit_cloud() -> bool:
+    if os.environ.get("STREAMLIT_SHARING_MODE"):
+        return True
+    try:
+        return bool(st.secrets.get("supabase", {}).get("url")) and not (Path.cwd() / ".streamlit" / "secrets.toml").exists()
+    except Exception:
+        return False
+
 
 def _safe_int(v, default=0):
     """Convert v to int safely, returning default for None/NaN/empty."""
@@ -6203,7 +6214,11 @@ elif page == "📅 Monthly Invoice":
             pdf_filename = f"CC_M-inv_{inv_no}_{month_abbr}_{int(sel_year)}.pdf"
             xlsx_filename = f"CC_M-inv_{inv_no}_{month_abbr}_{int(sel_year)}.xlsx"
 
-            col_pdf, col_xlsx = st.columns(2)
+            if _is_streamlit_cloud():
+                col_pdf = st.container()
+                col_xlsx = None
+            else:
+                col_pdf, col_xlsx = st.columns(2)
 
             with col_pdf:
                 try:
@@ -6223,33 +6238,34 @@ elif page == "📅 Monthly Invoice":
                 except Exception as e:
                     st.error(f"PDF generation failed: {e}")
 
-            with col_xlsx:
-                template_ok = paths["invoice_template"].exists()
-                if not template_ok:
-                    st.warning("Excel template not found.")
-                else:
-                    if st.button("Generate Excel Invoice"):
-                        import tempfile
-                        with tempfile.TemporaryDirectory() as tmp_dir:
-                            try:
-                                out_path = generate_monthly_invoice(
-                                    projects=month_projects,
-                                    month_name=sel_month,
-                                    year=int(sel_year),
-                                    invoice_number=inv_no,
-                                    output_dir=Path(tmp_dir),
-                                    template_path=paths["invoice_template"],
-                                )
-                                with open(out_path, "rb") as f:
-                                    file_bytes = f.read()
-                                st.download_button(
-                                    label=f"Download {out_path.name}",
-                                    data=file_bytes,
-                                    file_name=out_path.name,
-                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                )
-                            except Exception as e:
-                                st.error(f"Excel generation failed: {e}")
+            if col_xlsx is not None:
+                with col_xlsx:
+                    template_ok = paths["invoice_template"].exists()
+                    if not template_ok:
+                        st.warning("Excel template not found.")
+                    else:
+                        if st.button("Generate Excel Invoice"):
+                            import tempfile
+                            with tempfile.TemporaryDirectory() as tmp_dir:
+                                try:
+                                    out_path = generate_monthly_invoice(
+                                        projects=month_projects,
+                                        month_name=sel_month,
+                                        year=int(sel_year),
+                                        invoice_number=inv_no,
+                                        output_dir=Path(tmp_dir),
+                                        template_path=paths["invoice_template"],
+                                    )
+                                    with open(out_path, "rb") as f:
+                                        file_bytes = f.read()
+                                    st.download_button(
+                                        label=f"Download {out_path.name}",
+                                        data=file_bytes,
+                                        file_name=out_path.name,
+                                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                    )
+                                except Exception as e:
+                                    st.error(f"Excel generation failed: {e}")
 
             # ── Save to Ledger ─────────────────────────────────────────────
             st.markdown("---")
