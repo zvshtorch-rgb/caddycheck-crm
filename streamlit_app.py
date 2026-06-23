@@ -4562,6 +4562,120 @@ elif page == "📷 Camera Audit":
                 except Exception as exc:
                     st.error(f"Failed to save audit settings: {exc}")
 
+    # ── Invoice over-ordered cameras (Δ Ordered < 0) ──────────────────────────
+    if CAN_EDIT:
+        st.markdown("---")
+        st.subheader("🧾 Invoice Over-Ordered Cameras (Δ Ordered < 0)")
+        st.caption(
+            "Generates an invoice only for projects where more cameras were ordered "
+            "than are currently working. Each project is billed for the difference "
+            "(|Δ Ordered|) cameras."
+        )
+
+        over_ordered_df = audit_df[
+            audit_df["Δ Ordered"].notna() & (audit_df["Δ Ordered"] < 0)
+        ].copy()
+
+        if over_ordered_df.empty:
+            st.info("No projects with Δ Ordered < 0.")
+        else:
+            project_by_name = {
+                _safe_str(p.project_name).strip(): p for p in projects
+            }
+            oc1, oc2, oc3 = st.columns([2, 1, 1])
+            over_inv_month = oc1.selectbox(
+                "Invoice Month",
+                MONTH_ORDER,
+                index=datetime.date.today().month - 1,
+                key="over_ordered_month",
+            )
+            over_inv_year = oc2.number_input(
+                "Invoice Year",
+                min_value=2015,
+                max_value=2035,
+                value=datetime.date.today().year,
+                step=1,
+                key="over_ordered_year",
+            )
+            over_inv_number = oc3.number_input(
+                "Invoice Number",
+                min_value=1,
+                value=1,
+                step=1,
+                key="over_ordered_invoice_number",
+            )
+
+            from dataclasses import replace as _dataclass_replace
+
+            delta_projects = []
+            preview_rows = []
+            for _, row in over_ordered_df.iterrows():
+                name = _safe_str(row.get("Project", "")).strip()
+                base_project = project_by_name.get(name)
+                if base_project is None:
+                    continue
+                units = abs(int(row["Δ Ordered"]))
+                if units <= 0:
+                    continue
+                billed_project = _dataclass_replace(base_project, num_cams=units)
+                delta_projects.append(billed_project)
+                rate = billed_project.get_rate(int(over_inv_year))
+                label = billed_project.get_maintenance_year_label(int(over_inv_year))
+                preview_rows.append({
+                    "Project": name,
+                    "Working": int(row["# Cams (working)"]),
+                    "Ordered": int(row["Ordered"]),
+                    "Billed Units (|Δ Ordered|)": units,
+                    "Year": label,
+                    "Rate (€)": rate,
+                    "Line Total (€)": units * rate,
+                })
+
+            if not delta_projects:
+                st.info("No billable over-ordered cameras found.")
+            else:
+                preview_df = pd.DataFrame(preview_rows)
+                total_amount = float(preview_df["Line Total (€)"].sum())
+                st.dataframe(
+                    preview_df,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Rate (€)": st.column_config.NumberColumn(format="%.0f"),
+                        "Line Total (€)": st.column_config.NumberColumn(format="%.0f"),
+                    },
+                )
+                st.metric(
+                    f"Total ({len(delta_projects)} project(s))",
+                    f"€{total_amount:,.0f}",
+                )
+
+                if st.button("📄 Generate Over-Ordered Invoice PDF", key="gen_over_ordered_pdf"):
+                    try:
+                        out_path = generate_monthly_invoice_pdf(
+                            delta_projects,
+                            over_inv_month,
+                            int(over_inv_year),
+                            invoice_number=int(over_inv_number),
+                        )
+                        with open(out_path, "rb") as pdf_file:
+                            st.session_state["over_ordered_pdf_bytes"] = pdf_file.read()
+                            st.session_state["over_ordered_pdf_name"] = out_path.name
+                        st.success(f"Generated invoice PDF: {out_path.name}")
+                    except Exception as exc:
+                        st.error(f"Failed to generate invoice PDF: {exc}")
+
+                if st.session_state.get("over_ordered_pdf_bytes"):
+                    st.download_button(
+                        "⬇️ Download Over-Ordered Invoice PDF",
+                        data=st.session_state["over_ordered_pdf_bytes"],
+                        file_name=st.session_state.get(
+                            "over_ordered_pdf_name", "over_ordered_invoice.pdf"
+                        ),
+                        mime="application/pdf",
+                        key="download_over_ordered_pdf",
+                    )
+
     st.download_button(
         "⬇️ Download comparison (CSV)",
         data=camera_audit_display_df.to_csv(index=False).encode("utf-8"),
