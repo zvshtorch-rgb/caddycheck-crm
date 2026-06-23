@@ -261,7 +261,6 @@ from services.supabase_service import (
     load_projects,
     load_invoices,
     upsert_projects,
-    update_project_camera_audit_remarks as update_project_camera_audit_remarks_supabase,
     update_project_license_eop as update_project_license_eop_supabase,
     upsert_invoices,
     delete_projects as delete_projects_supabase,
@@ -531,7 +530,8 @@ def _save_camera_audit_remarks(remarks_by_project: dict[str, str], source_name: 
     if _is_excel_source(source_name):
         save_projects_to_excel(projects)
         return len(remarks_by_project)
-    return update_project_camera_audit_remarks_supabase(remarks_by_project)
+    from services.supabase_service import update_project_camera_audit_remarks
+    return update_project_camera_audit_remarks(remarks_by_project)
 
 
 def _rename_invoice_project_names(rename_map, source_name: str) -> int:
