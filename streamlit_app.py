@@ -212,6 +212,20 @@ def _is_maintenance_category(invoice) -> bool:
             pass
     return not _is_new_installation_category(invoice) and not _is_paid_trial_category(invoice)
 
+
+def _dedupe_invoice_project_rows(invoice_rows):
+    deduped_rows = []
+    seen_invoice_project_keys = set()
+    for inv in invoice_rows:
+        invoice_number_key = _safe_int(getattr(inv, "invoice_number", None), default=0) or 0
+        project_key = _normalize_project_name_key(canonical_project_name(_safe_str(getattr(inv, "project_name", "")).strip()))
+        dedupe_key = (invoice_number_key, project_key)
+        if project_key and dedupe_key in seen_invoice_project_keys:
+            continue
+        seen_invoice_project_keys.add(dedupe_key)
+        deduped_rows.append(inv)
+    return deduped_rows
+
 from config.settings import (
     MONTH_ORDER,
     normalize_month,
@@ -4699,16 +4713,7 @@ elif page == "🧾 Invoice Details":
     if amt_max > 0:
         filtered_inv = [i for i in filtered_inv if i.payment_amount <= amt_max]
 
-    deduped_filtered_inv = []
-    seen_invoice_project_keys = set()
-    for inv in filtered_inv:
-        invoice_number_key = _safe_int(inv.invoice_number) or 0
-        project_key = _normalize_project_name_key(canonical_project_name(_safe_str(inv.project_name).strip()))
-        dedupe_key = (invoice_number_key, project_key)
-        if project_key and dedupe_key in seen_invoice_project_keys:
-            continue
-        seen_invoice_project_keys.add(dedupe_key)
-        deduped_filtered_inv.append(inv)
+    deduped_filtered_inv = _dedupe_invoice_project_rows(filtered_inv)
     if len(deduped_filtered_inv) != len(filtered_inv):
         filtered_inv = deduped_filtered_inv
 
@@ -5511,6 +5516,7 @@ elif page == "💸 Debt Report":
         debt_inv = [i for i in debt_inv if _is_paid_trial_category(i)]
     elif dsel_debt_type == "Maintenance (Y2+)":
         debt_inv = [i for i in debt_inv if _is_maintenance_category(i)]
+    debt_inv = _dedupe_invoice_project_rows(debt_inv)
 
     # Build invoice-level country hints from known rows.
     invoice_country_votes: dict[int, dict[str, int]] = {}
@@ -5539,6 +5545,7 @@ elif page == "💸 Debt Report":
         all_unpaid = [i for i in all_unpaid if _get_country(i.project_name) == dsel_country]
     if dsel_search.strip():
         all_unpaid = [i for i in all_unpaid if dsel_search.lower() in i.project_name.lower()]
+    all_unpaid = _dedupe_invoice_project_rows(all_unpaid)
 
     total_debt_amt  = sum(i.payment_amount for i in all_unpaid)
     proj_with_debt  = len({i.project_name for i in all_unpaid})
