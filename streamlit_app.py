@@ -6464,6 +6464,20 @@ elif page == "💸 Debt Report":
                 "CaddyCheck CRM"
             )
 
+            debt_body_signature = (
+                total_debt_amt,
+                y1_total_amt,
+                y1_before_total,
+                y1_after_total,
+                y2_total,
+                trial_total,
+                order_site_total,
+                proj_with_debt,
+            )
+            if st.session_state.get("debt_report_email_body_signature") != debt_body_signature:
+                st.session_state["debt_report_email_body"] = default_body
+                st.session_state["debt_report_email_body_signature"] = debt_body_signature
+
             with st.form("debt_report_email_form"):
                 debt_to_addrs = st.text_input(
                     "To (comma-separated)",
