@@ -217,7 +217,7 @@ def _is_new_installation_category(invoice) -> bool:
             return bool(checker())
         except Exception:
             pass
-    return _invoice_category_label(invoice) == "y1"
+    return _invoice_category_label(invoice) in {"y1", "credit"}
 
 
 def _is_maintenance_category(invoice) -> bool:
