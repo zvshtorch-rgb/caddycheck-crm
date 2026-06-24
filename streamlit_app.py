@@ -7202,6 +7202,7 @@ elif page == "✅ Order Approvals":
                     _ac1, _ac2, _ac3 = st.columns(3)
                     if _ac1.button("✅ Approve", key=f"appr_{_o['id']}", use_container_width=True):
                         _oas.update_purchase_order(_o["id"], status="approved")
+                        _oas.auto_create_invoice_for_approved_order(_o["id"])
                         st.rerun()
                     if _ac2.button("❌ Reject", key=f"rej_{_o['id']}", use_container_width=True):
                         _oas.update_purchase_order(_o["id"], status="rejected")

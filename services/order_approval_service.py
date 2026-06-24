@@ -383,11 +383,171 @@ def apply_decision(
     # Raise a CRM notification so the change surfaces on the dashboard.
     _notify_status_change(order or {}, new_status, comment=comment, source="approval link")
 
+    # On approval, automatically create a draft CRM invoice (idempotent).
+    if new_status == "approved":
+        auto_create_invoice_for_approved_order(approval["purchase_order_id"])
+
     return {
         "success": True,
         "message": f"Purchase order {label}.",
         "order": order,
     }
+
+
+# ── Auto invoice creation from approved purchase orders ──────────────────
+
+
+def get_invoice_for_purchase_order(purchase_order_id: str) -> Optional[dict]:
+    """Return the invoice already created from this purchase order, or None."""
+    if not purchase_order_id:
+        return None
+    client = _get_client()
+    resp = (
+        client.table("invoices")
+        .select("*")
+        .eq("source_purchase_order_id", purchase_order_id)
+        .limit(1)
+        .execute()
+    )
+    return resp.data[0] if resp.data else None
+
+
+def _next_invoice_number(client) -> int:
+    resp = client.table("invoices").select("invoice_number").execute()
+    max_no = 0
+    for row in resp.data or []:
+        try:
+            n = int(row["invoice_number"])
+            if n > max_no:
+                max_no = n
+        except Exception:
+            pass
+    return max_no + 1
+
+
+def create_invoice_from_purchase_order(purchase_order_id: str) -> dict:
+    """
+    Idempotently create a draft ("ready_to_send") invoice from an approved PO.
+
+    The invoice is NOT emailed to the customer; it is stored in the existing
+    ``invoices`` table with ``send_status='ready_to_send'`` for manual review.
+
+    Returns ``{"created": bool, "invoice"?: dict, "message": str}``.
+    """
+    order = get_purchase_order(purchase_order_id)
+    if not order:
+        return {"created": False, "message": "Purchase order not found."}
+
+    existing = get_invoice_for_purchase_order(purchase_order_id)
+    if existing:
+        return {
+            "created": False,
+            "invoice": existing,
+            "message": "Invoice already exists for this purchase order.",
+        }
+
+    client = _get_client()
+    invoice_number = _next_invoice_number(client)
+
+    created_at = str(order.get("created_at") or "")
+    year = datetime.datetime.utcnow().year
+    if len(created_at) >= 4 and created_at[:4].isdigit():
+        year = int(created_at[:4])
+
+    customer = order.get("customer_name") or order.get("customer_email") or "Unknown customer"
+    currency = order.get("currency") or "EUR"
+    amount = order.get("amount")
+    summary = (order.get("summary") or "").strip()
+
+    pdf_ref = ""
+    if order.get("pdf_storage_bucket") and order.get("pdf_storage_path"):
+        pdf_ref = f"{order['pdf_storage_bucket']}/{order['pdf_storage_path']}"
+
+    description_lines = [
+        "Auto-created from approved purchase order.",
+        f"Customer: {customer}",
+        f"PO reference: {order.get('order_reference') or 'n/a'}",
+        f"Order date: {created_at[:10] or 'n/a'}",
+        f"Amount: {amount if amount is not None else 'n/a'} {currency}",
+    ]
+    if summary:
+        description_lines.append(f"Summary: {summary[:500]}")
+    if pdf_ref:
+        description_lines.append(f"PDF: {pdf_ref}")
+    description = "\n".join(description_lines)
+
+    now_iso = datetime.datetime.utcnow().isoformat()
+    row = {
+        "invoice_number": str(invoice_number),
+        "project_name": order.get("project_name") or customer,
+        "maintenance_year": "Purchase Order",
+        "payment_amount": float(amount) if amount is not None else 0.0,
+        "cameras_number": None,
+        "payment_date": None,
+        "paid": "No",
+        "year": year,
+        "invoice_type": "Purchase Order",
+        "description": description,
+        "source_type": "purchase_order",
+        "source_purchase_order_id": purchase_order_id,
+        "auto_created": True,
+        "auto_created_at": now_iso,
+        "send_status": "ready_to_send",
+    }
+    resp = client.table("invoices").insert(row).execute()
+    invoice = resp.data[0] if resp.data else {}
+    logger.info(
+        "Auto-created invoice #%s from purchase order %s",
+        invoice_number,
+        purchase_order_id,
+    )
+    return {"created": True, "invoice": invoice, "message": "Invoice created (ready to send)."}
+
+
+def auto_create_invoice_for_approved_order(purchase_order_id: str) -> dict:
+    """
+    Best-effort wrapper used after a PO is approved.
+
+    Never raises: on success it posts a ``success`` CRM notification, on failure
+    it leaves the PO approved and posts an ``error`` notification instead.
+    """
+    try:
+        result = create_invoice_from_purchase_order(purchase_order_id)
+    except Exception as exc:  # noqa: BLE001 - approval must not be rolled back
+        logger.error(
+            "Auto invoice creation failed for purchase order %s: %s",
+            purchase_order_id,
+            exc,
+        )
+        try:
+            create_notification(
+                title="Auto invoice creation failed",
+                message=(
+                    "The purchase order was approved, but an invoice could not be "
+                    f"created automatically: {exc}"
+                ),
+                severity="error",
+                purchase_order_id=purchase_order_id,
+            )
+        except Exception:
+            pass
+        return {"created": False, "message": str(exc)}
+
+    if result.get("created"):
+        invoice = result.get("invoice") or {}
+        try:
+            create_notification(
+                title="Invoice created automatically from approved purchase order",
+                message=(
+                    f"Invoice #{invoice.get('invoice_number')} was created and marked "
+                    "ready to send (not emailed to the customer yet)."
+                ),
+                severity="success",
+                purchase_order_id=purchase_order_id,
+            )
+        except Exception:
+            pass
+    return result
 
 
 # ── CRM notifications ────────────────────────────────────────────────────
