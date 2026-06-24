@@ -256,8 +256,71 @@ py order_intake_poll.py            # process new emails
 py order_intake_poll.py --dry-run  # inspect without writing anything
 ```
 
-Schedule it with cron, Windows Task Scheduler, or a GitHub Action (similar to the
-monthly invoice job).
+`order_intake_poll.py` is a **standalone Python process** — it does *not* need the
+Streamlit runtime. The Streamlit Cloud app cannot run the poller reliably (it only
+executes while a browser session is open), so schedule the poller externally using
+one of the options below.
+
+#### Option 1 — Windows Task Scheduler
+
+Create a scheduled task that runs the poller every few minutes.
+
+**Program/script:**
+
+```text
+py
+```
+
+**Add arguments:**
+
+```text
+order_intake_poll.py
+```
+
+**Start in (working directory):**
+
+```text
+F:\caddycheck-crm
+```
+
+To capture logs to a file, point the task at a small wrapper instead. Create
+`run_order_intake_poll.bat` in the repo root:
+
+```bat
+@echo off
+cd /d F:\caddycheck-crm
+py order_intake_poll.py >> logs\order_intake_poll.log 2>&1
+```
+
+Then set the task **Program/script** to the `.bat` file. The required environment
+variables (see the table below) must be set as **system or user environment
+variables**, or exported at the top of the `.bat` file with `set NAME=value`.
+Recommended trigger: *Daily*, repeat task every *5 or 10 minutes* for a duration of
+*1 day*, *indefinitely*.
+
+#### Option 2 — GitHub Actions scheduled workflow
+
+A ready-made workflow lives at
+[.github/workflows/order_intake_poll.yml](.github/workflows/order_intake_poll.yml).
+It runs every 10 minutes (change the `cron` to `*/5 * * * *` for every 5 minutes),
+installs `requirements.txt`, and runs `python order_intake_poll.py`.
+
+Add the configuration as **GitHub repository secrets**
+(*Settings → Secrets and variables → Actions → New repository secret*):
+
+- Supabase: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`
+- Approval links / recipients: `APP_BASE_URL`, `ORDER_APPROVAL_CEO_EMAIL`
+- Mailbox (IMAP): `ORDER_INTAKE_PROVIDER`, `ORDER_INTAKE_IMAP_HOST`,
+  `ORDER_INTAKE_IMAP_PORT`, `ORDER_INTAKE_IMAP_USERNAME`,
+  `ORDER_INTAKE_IMAP_PASSWORD`, `ORDER_INTAKE_IMAP_FOLDER`
+- Mailbox (Graph, only if `ORDER_INTAKE_PROVIDER=graph`):
+  `ORDER_INTAKE_GRAPH_TENANT_ID`, `ORDER_INTAKE_GRAPH_CLIENT_ID`,
+  `ORDER_INTAKE_GRAPH_CLIENT_SECRET`, `ORDER_INTAKE_GRAPH_MAILBOX`,
+  `ORDER_INTAKE_GRAPH_FOLDER`
+- SMTP: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USE_TLS`, `SMTP_USERNAME`,
+  `SMTP_PASSWORD`, `SMTP_SENDER_EMAIL`, `SMTP_SENDER_NAME`
+
+You can also trigger a run manually from the **Actions** tab (`workflow_dispatch`).
 
 ### Configuration
 
@@ -291,7 +354,19 @@ Microsoft Graph provider (`ORDER_INTAKE_PROVIDER=graph`, preferred for Office 36
 | `ORDER_INTAKE_GRAPH_MAILBOX` | Mailbox UPN/object id to read. |
 | `ORDER_INTAKE_GRAPH_FOLDER` | Default `Inbox`. |
 
-Email sending reuses the existing SMTP settings (see **Email Configuration**).
+Email sending reuses the existing SMTP settings. When the poller runs standalone
+(Task Scheduler / GitHub Actions) it has no Streamlit secrets, so configure SMTP
+via these environment variables (they override the app config only when set):
+
+| Setting | Description |
+| --- | --- |
+| `SMTP_HOST` | SMTP server host, e.g. `smtp.gmail.com`. |
+| `SMTP_PORT` | Default `587`. |
+| `SMTP_USE_TLS` | `true` (STARTTLS) or `false` (SSL). Default `true`. |
+| `SMTP_USERNAME` | SMTP username / login. |
+| `SMTP_PASSWORD` | SMTP password / app password. |
+| `SMTP_SENDER_EMAIL` | From address (defaults to `SMTP_USERNAME`). |
+| `SMTP_SENDER_NAME` | Display name, e.g. `CaddyCheck CRM`. |
 
 ### Security
 

@@ -217,6 +217,30 @@ def get_email_config() -> dict:
             defaults["smtp_password"] = session_password
     except Exception:
         pass
+    # 3. Override with environment variables when present (standalone processes
+    #    such as the order-intake poller run outside Streamlit and have no
+    #    secrets file). Only non-empty env vars take effect, so the app is
+    #    unaffected when they are absent.
+    _env_map = {
+        "smtp_host": "SMTP_HOST",
+        "smtp_username": "SMTP_USERNAME",
+        "smtp_password": "SMTP_PASSWORD",
+        "sender_name": "SMTP_SENDER_NAME",
+        "sender_email": "SMTP_SENDER_EMAIL",
+    }
+    for cfg_key, env_key in _env_map.items():
+        env_val = os.environ.get(env_key, "").strip()
+        if env_val:
+            defaults[cfg_key] = env_val
+    _env_port = os.environ.get("SMTP_PORT", "").strip()
+    if _env_port:
+        try:
+            defaults["smtp_port"] = int(_env_port)
+        except ValueError:
+            pass
+    _env_tls = os.environ.get("SMTP_USE_TLS", "").strip().lower()
+    if _env_tls:
+        defaults["smtp_use_tls"] = _env_tls in {"1", "true", "yes", "y", "on"}
     return defaults
 
 

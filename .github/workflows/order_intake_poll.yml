@@ -1,0 +1,65 @@
+name: Order intake poller
+
+# Runs the standalone purchase-order email poller on a schedule.
+# This does NOT use the Streamlit runtime — it is a plain Python process.
+
+on:
+  schedule:
+    # Every 10 minutes (UTC). Use "*/5 * * * *" for every 5 minutes.
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}  # allow manual runs from the Actions tab
+
+# Prevent overlapping runs if a poll takes longer than the interval.
+concurrency:
+  group: order-intake-poll
+  cancel-in-progress: false
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run order intake poller
+        env:
+          # Supabase
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # Approval links / recipients
+          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+          ORDER_APPROVAL_CEO_EMAIL: ${{ secrets.ORDER_APPROVAL_CEO_EMAIL }}
+          # Mailbox (IMAP provider shown; switch to graph vars if needed)
+          ORDER_INTAKE_PROVIDER: ${{ secrets.ORDER_INTAKE_PROVIDER }}
+          ORDER_INTAKE_IMAP_HOST: ${{ secrets.ORDER_INTAKE_IMAP_HOST }}
+          ORDER_INTAKE_IMAP_PORT: ${{ secrets.ORDER_INTAKE_IMAP_PORT }}
+          ORDER_INTAKE_IMAP_USERNAME: ${{ secrets.ORDER_INTAKE_IMAP_USERNAME }}
+          ORDER_INTAKE_IMAP_PASSWORD: ${{ secrets.ORDER_INTAKE_IMAP_PASSWORD }}
+          ORDER_INTAKE_IMAP_FOLDER: ${{ secrets.ORDER_INTAKE_IMAP_FOLDER }}
+          # Microsoft Graph provider (only needed if ORDER_INTAKE_PROVIDER=graph)
+          ORDER_INTAKE_GRAPH_TENANT_ID: ${{ secrets.ORDER_INTAKE_GRAPH_TENANT_ID }}
+          ORDER_INTAKE_GRAPH_CLIENT_ID: ${{ secrets.ORDER_INTAKE_GRAPH_CLIENT_ID }}
+          ORDER_INTAKE_GRAPH_CLIENT_SECRET: ${{ secrets.ORDER_INTAKE_GRAPH_CLIENT_SECRET }}
+          ORDER_INTAKE_GRAPH_MAILBOX: ${{ secrets.ORDER_INTAKE_GRAPH_MAILBOX }}
+          ORDER_INTAKE_GRAPH_FOLDER: ${{ secrets.ORDER_INTAKE_GRAPH_FOLDER }}
+          # SMTP (for the CEO approval email)
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USE_TLS: ${{ secrets.SMTP_USE_TLS }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_SENDER_EMAIL: ${{ secrets.SMTP_SENDER_EMAIL }}
+          SMTP_SENDER_NAME: ${{ secrets.SMTP_SENDER_NAME }}
+        run: python order_intake_poll.py
