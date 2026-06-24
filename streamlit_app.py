@@ -495,6 +495,93 @@ if _renew_token:
     else:
         st.error(f"❌ {_result['message']}")
         st.caption("Contact your account manager if you believe this is an error.")
+
+# ── Public purchase-order approval handler (no login required) ────────────────
+_approval_token = st.query_params.get("approval", "")
+if _approval_token:
+    from services import order_approval_service as _oas
+
+    st.markdown("## 🧾 Purchase Order Approval")
+    if not _oas.is_valid_token_format(_approval_token):
+        st.error("❌ Invalid approval link.")
+        st.stop()
+
+    _approval = _oas.get_approval_by_token(_approval_token)
+    if not _approval:
+        st.error("❌ This approval link is not valid.")
+        st.stop()
+
+    _order = _oas.get_purchase_order(_approval.get("purchase_order_id", ""))
+    if not _order:
+        st.error("❌ The related purchase order could not be found.")
+        st.stop()
+
+    _amount = _order.get("amount")
+    _amount_str = (
+        f"{_amount:,.2f} {_order.get('currency') or 'EUR'}" if _amount is not None else "—"
+    )
+    st.markdown(
+        f"**Project / Customer:** {_order.get('project_name') or _order.get('customer_name') or '—'}  \n"
+        f"**Reference:** {_order.get('order_reference') or '—'}  \n"
+        f"**Amount:** {_amount_str}  \n"
+        f"**From:** {_order.get('customer_email') or '—'}  \n"
+        f"**Summary:** {_order.get('summary') or '—'}"
+    )
+
+    _pdf_url = _oas.create_purchase_order_signed_url(
+        _order.get("pdf_storage_bucket", ""), _order.get("pdf_storage_path", "")
+    )
+    if _pdf_url:
+        st.markdown(f"📄 [Open the purchase-order PDF]({_pdf_url}) (link expires shortly)")
+    else:
+        st.caption("No PDF preview is available for this order.")
+
+    if _approval.get("status") != "pending":
+        _decided = {
+            "approved": "✅ This order was already approved.",
+            "rejected": "❌ This order was already rejected.",
+            "needs_correction": "✏️ A correction was already requested for this order.",
+            "expired": "⌛ This approval link has expired.",
+        }.get(_approval.get("status"), "This approval link has already been used.")
+        st.info(_decided)
+        st.stop()
+
+    st.markdown("---")
+    _comment = st.text_area("Comment (optional)", key="_approval_comment")
+    _c1, _c2, _c3 = st.columns(3)
+    _decision = None
+    if _c1.button("✅ Approve", type="primary", use_container_width=True):
+        _decision = "approve"
+    if _c2.button("❌ Reject", use_container_width=True):
+        _decision = "reject"
+    if _c3.button("✏️ Request correction", use_container_width=True):
+        _decision = "request_correction"
+
+    if _decision:
+        _client_ip = ""
+        _client_ua = ""
+        try:
+            _headers = dict(st.context.headers)
+            _client_ip = (
+                _headers.get("X-Forwarded-For", "").split(",")[0].strip()
+                or _headers.get("X-Real-Ip", "")
+            )
+            _client_ua = _headers.get("User-Agent", "")
+        except Exception:
+            pass
+        _res = _oas.apply_decision(
+            _approval_token,
+            _decision,
+            comment=_comment,
+            approved_by_ip=_client_ip,
+            user_agent=_client_ua,
+        )
+        if _res.get("success"):
+            st.success(f"✅ {_res['message']} You can close this page.")
+        else:
+            st.error(f"❌ {_res['message']}")
+    st.stop()
+
 # ── Data loading (cached) ─────────────────────────────────────────────────────
 @st.cache_data(ttl=300)
 def load_data():
@@ -1956,7 +2043,7 @@ st.sidebar.title("📊 CaddyCheck CRM")
 st.sidebar.markdown("---")
 page = st.sidebar.radio(
     "Navigation",
-    ["📊 Dashboard", "❓ Ask Data", "🏗️ Projects", "📦 Orders", "📷 Camera Audit", "🔐 Licenses", "🧾 Invoice Details", "💸 Debt Report", "📅 Monthly Invoice", "🎫 Tickets", "🏦 Bank Payment", "⚙️ Settings"],
+    ["📊 Dashboard", "❓ Ask Data", "🏗️ Projects", "📦 Orders", "📷 Camera Audit", "🔐 Licenses", "🧾 Invoice Details", "💸 Debt Report", "📅 Monthly Invoice", "🎫 Tickets", "🏦 Bank Payment", "✅ Order Approvals", "⚙️ Settings"],
     label_visibility="collapsed",
 )
 st.sidebar.markdown("---")
@@ -1988,6 +2075,31 @@ if page_flash_success:
 # ══════════════════════════════════════════════════════════════════════════════
 if page == "📊 Dashboard":
     st.title("📊 Dashboard")
+
+    # CRM notifications feed (purchase-order approval status changes, etc.)
+    try:
+        from services import order_approval_service as _dash_oas
+
+        _notes = _dash_oas.list_notifications(limit=10)
+        _unread = sum(1 for _n in _notes if not _n.get("is_read"))
+        if _notes:
+            with st.expander(f"🔔 Notifications ({_unread} unread)", expanded=_unread > 0):
+                _severity_icons = {"success": "✅", "warning": "⚠️", "error": "❌", "info": "🔵"}
+                for _n in _notes:
+                    if _n.get("is_read"):
+                        _icon = "⚪"
+                    else:
+                        _icon = _severity_icons.get(_n.get("severity"), "🔵")
+                    _ts = (_n.get("created_at") or "")[:16].replace("T", " ")
+                    st.markdown(f"{_icon} **{_n.get('title', '')}**  \n<small>{_ts}</small>", unsafe_allow_html=True)
+                    if _n.get("message"):
+                        st.caption(_n["message"])
+                if CAN_EDIT and _unread > 0 and st.button("Mark all as read", key="_mark_notes_read"):
+                    _dash_oas.mark_all_notifications_read()
+                    st.rerun()
+    except Exception:
+        pass
+
     if page_flash_success:
         st.success(page_flash_success)
 
@@ -6990,6 +7102,78 @@ elif page == "📅 Monthly Invoice":
                 st.info("No invoice PDFs have been logged as sent yet.")
         else:
             st.info("Invoice generation requires Admin access.")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: ORDER APPROVALS
+# ══════════════════════════════════════════════════════════════════════════════
+elif page == "✅ Order Approvals":
+    st.title("✅ Order Approvals")
+    st.caption("Customer purchase orders received by email and their approval status.")
+
+    from services import order_approval_service as _oas
+
+    try:
+        _orders = _oas.list_purchase_orders(limit=300)
+    except Exception as _exc:
+        st.error(f"Could not load purchase orders: {_exc}")
+        _orders = []
+
+    _status_labels = {
+        "pending_approval": "⏳ Pending approval",
+        "approved": "✅ Approved",
+        "rejected": "❌ Rejected",
+        "needs_correction": "✏️ Needs correction",
+        "superseded": "♻️ Superseded by newer revision",
+    }
+
+    if not _orders:
+        st.info("No purchase orders have been received yet.")
+    else:
+        _counts = {}
+        for _o in _orders:
+            _counts[_o.get("status")] = _counts.get(_o.get("status"), 0) + 1
+        _m1, _m2, _m3, _m4 = st.columns(4)
+        _m1.metric("Pending", _counts.get("pending_approval", 0))
+        _m2.metric("Approved", _counts.get("approved", 0))
+        _m3.metric("Rejected", _counts.get("rejected", 0))
+        _m4.metric("Needs correction", _counts.get("needs_correction", 0))
+
+        st.markdown("---")
+        for _o in _orders:
+            _title = _o.get("project_name") or _o.get("customer_name") or _o.get("customer_email") or "(unknown)"
+            _label = _status_labels.get(_o.get("status"), _o.get("status") or "—")
+            with st.expander(f"{_label} — {_title}"):
+                _amount = _o.get("amount")
+                _amount_str = (
+                    f"{_amount:,.2f} {_o.get('currency') or 'EUR'}" if _amount is not None else "—"
+                )
+                st.markdown(
+                    f"**Reference:** {_o.get('order_reference') or '—'}  \n"
+                    f"**Customer email:** {_o.get('customer_email') or '—'}  \n"
+                    f"**Amount:** {_amount_str}  \n"
+                    f"**Summary:** {_o.get('summary') or '—'}  \n"
+                    f"**Received:** {(_o.get('created_at') or '')[:19].replace('T', ' ')}  \n"
+                    f"**Decision comment:** {_o.get('decision_comment') or '—'}"
+                )
+                _pdf_url = _oas.create_purchase_order_signed_url(
+                    _o.get("pdf_storage_bucket", ""), _o.get("pdf_storage_path", "")
+                )
+                if _pdf_url:
+                    st.markdown(f"📄 [Open PDF]({_pdf_url})")
+
+                if CAN_EDIT and _o.get("status") == "pending_approval":
+                    st.markdown("**Manual decision (admin):**")
+                    _ac1, _ac2, _ac3 = st.columns(3)
+                    if _ac1.button("✅ Approve", key=f"appr_{_o['id']}", use_container_width=True):
+                        _oas.update_purchase_order(_o["id"], status="approved")
+                        st.rerun()
+                    if _ac2.button("❌ Reject", key=f"rej_{_o['id']}", use_container_width=True):
+                        _oas.update_purchase_order(_o["id"], status="rejected")
+                        st.rerun()
+                    if _ac3.button("✏️ Needs correction", key=f"corr_{_o['id']}", use_container_width=True):
+                        _oas.update_purchase_order(_o["id"], status="needs_correction")
+                        st.rerun()
 
 
 # ══════════════════════════════════════════════════════════════════════════════

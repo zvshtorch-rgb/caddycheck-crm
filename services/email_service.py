@@ -115,6 +115,71 @@ def send_invoice_email(
     logger.info("Email sent successfully.")
 
 
+def send_simple_email(
+    subject: str,
+    body: str,
+    recipients: List[str],
+    cc: Optional[List[str]] = None,
+    html_body: Optional[str] = None,
+    config: Optional[dict] = None,
+) -> None:
+    """
+    Send a plain-text (optionally HTML) email with no attachment.
+
+    Used for notifications such as the CEO purchase-order approval request.
+    Reuses the same SMTP configuration as :func:`send_invoice_email`.
+    """
+    if config is None:
+        config = get_email_config()
+
+    smtp_host = config.get("smtp_host", "")
+    smtp_port = int(config.get("smtp_port", 587))
+    use_tls = bool(config.get("smtp_use_tls", True))
+    username = config.get("smtp_username", "")
+    password = config.get("smtp_password", "")
+    sender_name = config.get("sender_name", "CaddyCheck CRM")
+    sender_email = config.get("sender_email", username)
+
+    if not smtp_host:
+        raise ValueError("SMTP host is not configured.")
+    if not sender_email:
+        raise ValueError("Sender email is not configured.")
+    if not recipients:
+        raise ValueError("No recipients specified.")
+
+    msg = MIMEMultipart("alternative")
+    msg["From"] = f"{sender_name} <{sender_email}>"
+    msg["To"] = ", ".join(recipients)
+    if cc:
+        msg["Cc"] = ", ".join(cc)
+    msg["Subject"] = subject
+
+    msg.attach(MIMEText(body, "plain", "utf-8"))
+    if html_body:
+        msg.attach(MIMEText(html_body, "html", "utf-8"))
+
+    all_recipients = list(recipients) + (cc or [])
+
+    logger.info("Sending notification '%s' to %s", subject, all_recipients)
+
+    if use_tls:
+        context = ssl.create_default_context()
+        with smtplib.SMTP(smtp_host, smtp_port, timeout=30) as server:
+            server.ehlo()
+            server.starttls(context=context)
+            server.ehlo()
+            if username and password:
+                server.login(username, password)
+            server.sendmail(sender_email, all_recipients, msg.as_string())
+    else:
+        with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=30) as server:
+            if username and password:
+                server.login(username, password)
+            server.sendmail(sender_email, all_recipients, msg.as_string())
+
+    logger.info("Notification email sent successfully.")
+
+
 def test_smtp_connection(config: dict) -> tuple:
     """
     Test SMTP connection with provided config.

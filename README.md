@@ -221,6 +221,88 @@ Storage behavior:
 
 ---
 
+## Purchase-Order Approval Workflow (MVP)
+
+Customer purchase orders that arrive **by email as a PDF** can be automatically
+ingested and routed to the CEO for approval via a secure email link.
+
+> Note: this uses a dedicated `purchase_orders` table (separate from the internal
+> camera-ordering `orders` table) so it cannot affect existing CRM data.
+
+### One-time setup
+
+1. Run `migrations/create_purchase_order_approvals.sql` in the Supabase SQL editor.
+   This creates `incoming_order_emails`, `purchase_orders`, and `order_approvals`,
+   and the private `purchase-order-pdfs` storage bucket is created automatically on
+   first upload.
+2. Add the configuration below as environment variables (for the poller / cron) or
+   in Streamlit secrets (for the app).
+
+### How it works
+
+1. `order_intake_poll.py` reads the configured mailbox for unread emails with a PDF.
+2. Each PDF is stored privately in Supabase; a `purchase_orders` row is created.
+3. A secure, single-use approval token (valid 7 days) is generated — **only its
+   SHA-256 hash is stored** — and the CEO is emailed a link
+   `https://<app>/?approval=<token>`.
+4. The CEO opens the link (no login required), reviews the order and a short-lived
+   signed PDF URL, then **Approves / Rejects / Requests correction**.
+5. Admins can review all orders and statuses on the `✅ Order Approvals` page.
+
+### Running the poller
+
+```bash
+py order_intake_poll.py            # process new emails
+py order_intake_poll.py --dry-run  # inspect without writing anything
+```
+
+Schedule it with cron, Windows Task Scheduler, or a GitHub Action (similar to the
+monthly invoice job).
+
+### Configuration
+
+Shared:
+
+| Setting | Description |
+| --- | --- |
+| `SUPABASE_URL` | Supabase project URL (poller only; app uses secrets). |
+| `SUPABASE_SERVICE_ROLE_KEY` | Service role key (poller only). |
+| `APP_BASE_URL` | Public base URL of the Streamlit app, e.g. `https://your-app.streamlit.app`. |
+| `ORDER_APPROVAL_CEO_EMAIL` | CEO recipient(s), comma-separated. |
+| `ORDER_INTAKE_PROVIDER` | `imap` (default, also Gmail/O365 IMAP) or `graph`. |
+
+IMAP provider (`ORDER_INTAKE_PROVIDER=imap`):
+
+| Setting | Description |
+| --- | --- |
+| `ORDER_INTAKE_IMAP_HOST` | e.g. `imap.gmail.com` or `outlook.office365.com`. |
+| `ORDER_INTAKE_IMAP_PORT` | Default `993`. |
+| `ORDER_INTAKE_IMAP_USERNAME` | Mailbox username. |
+| `ORDER_INTAKE_IMAP_PASSWORD` | Mailbox password / app password. |
+| `ORDER_INTAKE_IMAP_FOLDER` | Default `INBOX`. |
+
+Microsoft Graph provider (`ORDER_INTAKE_PROVIDER=graph`, preferred for Office 365):
+
+| Setting | Description |
+| --- | --- |
+| `ORDER_INTAKE_GRAPH_TENANT_ID` | Azure AD tenant id. |
+| `ORDER_INTAKE_GRAPH_CLIENT_ID` | App registration client id. |
+| `ORDER_INTAKE_GRAPH_CLIENT_SECRET` | App registration secret. |
+| `ORDER_INTAKE_GRAPH_MAILBOX` | Mailbox UPN/object id to read. |
+| `ORDER_INTAKE_GRAPH_FOLDER` | Default `Inbox`. |
+
+Email sending reuses the existing SMTP settings (see **Email Configuration**).
+
+### Security
+
+- Approval links use a cryptographically random token; only the SHA-256 hash is
+  stored in the database.
+- Tokens expire after 7 days and become single-use once a decision is recorded.
+- Purchase-order PDFs live in a private bucket and are only ever exposed through
+  short-lived signed URLs.
+
+---
+
 ## Slide Content: Supabase, Streamlit, and GitHub
 
 If you want a single slide that explains how the app is connected, you can use this:
