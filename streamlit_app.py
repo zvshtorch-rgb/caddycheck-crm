@@ -6162,7 +6162,7 @@ elif page == "💸 Debt Report":
     elif dsel_debt_type == "Maintenance (Y2+)":
         st.caption("Showing only maintenance debt (Y2+).")
 
-    y1_all_inv = [i for i in debt_inv if _is_new_installation_category(i)]
+    y1_all_inv = [i for i in all_unpaid if _is_new_installation_category(i)]
     # Always differentiate Y1 debt by the cutoff invoice, independent of the
     # detail-table dropdown, so the report/email always show both groups.
     y1_before_inv = [i for i in y1_all_inv if _safe_int(i.invoice_number, default=0) > 0 and _safe_int(i.invoice_number, default=0) < y1_cutoff_invoice]
@@ -6281,10 +6281,11 @@ elif page == "💸 Debt Report":
             from reportlab.lib import colors as rl_colors
             from io import BytesIO
 
-            # Split unpaid invoices into Y1, paid trials, and Y2+
-            y1_inv  = [i for i in debt_inv if _is_new_installation_category(i)]
-            trial_inv = [i for i in debt_inv if _is_paid_trial_category(i)]
-            y2_inv  = [i for i in debt_inv if _is_maintenance_category(i)]
+            # Split the base unpaid set into Y1, paid trials, and Y2+. This is
+            # intentionally independent of the detail-table debt-type filter.
+            y1_inv  = [i for i in all_unpaid if _is_new_installation_category(i)]
+            trial_inv = [i for i in all_unpaid if _is_paid_trial_category(i)]
+            y2_inv  = [i for i in all_unpaid if _is_maintenance_category(i)]
 
             def _proj_debt_rows(inv_list):
                 pd_: dict = defaultdict(lambda: {"inv_nos": set(), "total": 0.0, "country": ""})
