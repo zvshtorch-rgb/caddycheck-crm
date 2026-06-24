@@ -211,6 +211,8 @@ def _is_paid_trial_category(invoice) -> bool:
 
 
 def _is_new_installation_category(invoice) -> bool:
+    if _invoice_category_label(invoice) == "credit":
+        return True
     checker = getattr(invoice, "is_new_installation_category", None)
     if callable(checker):
         try:
@@ -221,6 +223,8 @@ def _is_new_installation_category(invoice) -> bool:
 
 
 def _is_maintenance_category(invoice) -> bool:
+    if _invoice_category_label(invoice) == "credit":
+        return False
     checker = getattr(invoice, "is_maintenance_category", None)
     if callable(checker):
         try:
