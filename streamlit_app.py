@@ -6165,13 +6165,29 @@ elif page == "💸 Debt Report":
     y1_all_inv = [i for i in all_unpaid if _is_new_installation_category(i)]
     # Always differentiate Y1 debt by the cutoff invoice, independent of the
     # detail-table dropdown, so the report/email always show both groups.
-    y1_before_inv = [i for i in y1_all_inv if _safe_int(i.invoice_number, default=0) > 0 and _safe_int(i.invoice_number, default=0) < y1_cutoff_invoice]
-    y1_after_inv = [i for i in y1_all_inv if _safe_int(i.invoice_number, default=0) >= y1_cutoff_invoice]
+    y1_before_inv = [
+        i for i in y1_all_inv
+        if _invoice_category_label(i) == "credit"
+        or (0 < _safe_int(i.invoice_number, default=0) < y1_cutoff_invoice)
+    ]
+    y1_after_inv = [
+        i for i in y1_all_inv
+        if _invoice_category_label(i) != "credit"
+        and _safe_int(i.invoice_number, default=0) >= y1_cutoff_invoice
+    ]
     if dsel_debt_type == "New Installation (Y1)" and dsel_y1_split != "All":
         if dsel_y1_split == "Before 8673":
-            debt_inv = [i for i in debt_inv if _safe_int(i.invoice_number, default=0) > 0 and _safe_int(i.invoice_number, default=0) < y1_cutoff_invoice]
+            debt_inv = [
+                i for i in debt_inv
+                if _invoice_category_label(i) == "credit"
+                or (0 < _safe_int(i.invoice_number, default=0) < y1_cutoff_invoice)
+            ]
         elif dsel_y1_split == "8673 and after":
-            debt_inv = [i for i in debt_inv if _safe_int(i.invoice_number, default=0) >= y1_cutoff_invoice]
+            debt_inv = [
+                i for i in debt_inv
+                if _invoice_category_label(i) != "credit"
+                and _safe_int(i.invoice_number, default=0) >= y1_cutoff_invoice
+            ]
     # ── Detailed table: one row per unpaid invoice ────────────────────────────
     st.subheader("Unpaid Invoices Detail")
     if grouped_unpaid_rows:
