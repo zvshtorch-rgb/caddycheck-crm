@@ -4901,6 +4901,8 @@ elif page == "🔐 Licenses":
             ["All"] + sorted({row["Country"] for row in license_rows if row["Country"]}),
             key="license_country",
         )
+        if st.session_state.pop("_license_status_reset_pending", False):
+            st.session_state["license_status"] = "All"
         license_status = lf2.selectbox(
             "License Status",
             ["All", "Active", "Licensed Through Next Month", "Update Next Month", "Expired", "Missing", "Cancelled"],
@@ -4990,9 +4992,8 @@ elif page == "🔐 Licenses":
                         "source_name": _data_path,
                     })
                 load_data.clear()
-                # Reset License Status filter to "All" so the updated project is visible
-                # (it may move from "Expired" to "Active" and would otherwise be hidden).
-                st.session_state["license_status"] = "All"
+                # Reset License Status filter on the next rerun so the updated project stays visible.
+                st.session_state["_license_status_reset_pending"] = True
                 st.session_state["_flash_success"] = (
                     f"License EOP updated for {selected_project.project_name}: {target_license_date.strftime('%Y-%m-%d')}"
                 )
