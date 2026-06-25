@@ -1,6 +1,7 @@
 """Supabase service — cloud storage for projects, invoices, and tickets."""
 import datetime
 import logging
+import os
 import re
 from pathlib import Path
 from typing import List, Optional, Dict, Any
@@ -11,6 +12,7 @@ ORDER_PDF_BUCKET = "order-pdfs"
 BANK_PAYMENT_BUCKET = "bank-payments"
 TICKET_ATTACHMENT_BUCKET = "ticket-attachments"
 LICENSE_CHANGE_LOG_TABLE = "license_change_log"
+LICENSE_EXPIRY_ALERT_LOG_TABLE = "license_expiry_alert_log"
 PROJECT_CHANGE_LOG_TABLE = "project_change_log"
 BANK_PAYMENTS_TABLE = "bank_payments"
 BANK_PAYMENT_ALLOCATIONS_TABLE = "bank_payment_allocations"
@@ -20,16 +22,23 @@ SUPABASE_PAGE_SIZE = 1000
 
 def _get_client():
     from supabase import create_client
+    url = os.environ.get("SUPABASE_URL", "").strip()
+    key = (
+        os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+        or os.environ.get("SUPABASE_KEY", "").strip()
+    )
     try:
         import streamlit as st
         cfg = st.secrets.get("supabase", {})
-        url = cfg.get("url", "")
-        key = cfg.get("service_role_key", cfg.get("anon_key", ""))
+        url = url or cfg.get("url", "")
+        key = key or cfg.get("service_role_key", cfg.get("anon_key", ""))
     except Exception:
-        url = ""
-        key = ""
+        pass
     if not url or not key:
-        raise RuntimeError("Supabase credentials not configured in st.secrets[supabase]")
+        raise RuntimeError(
+            "Supabase credentials not configured. Set SUPABASE_URL and "
+            "SUPABASE_SERVICE_ROLE_KEY env vars, or st.secrets[supabase]."
+        )
     return create_client(url, key)
 
 
@@ -1407,6 +1416,36 @@ def append_license_change_log(entry: Dict[str, Any]) -> dict:
     client = _get_client()
     row = _normalize_license_change_log_entry(entry)
     resp = client.table(LICENSE_CHANGE_LOG_TABLE).insert(row).execute()
+    return resp.data[0] if resp.data else {}
+
+
+def has_license_expiry_alert_sent(project_name: str, license_eop: datetime.date, days_before: int) -> bool:
+    client = _get_client()
+    resp = (
+        client.table(LICENSE_EXPIRY_ALERT_LOG_TABLE)
+        .select("id")
+        .eq("project_name", str(project_name or "").strip())
+        .eq("license_eop", license_eop.isoformat())
+        .eq("days_before", int(days_before))
+        .limit(1)
+        .execute()
+    )
+    return bool(resp.data)
+
+
+def append_license_expiry_alert_log(entry: Dict[str, Any]) -> dict:
+    client = _get_client()
+    row = {
+        "project_name": str(entry.get("project_name") or "").strip() or None,
+        "license_eop": str(entry.get("license_eop") or "").strip() or None,
+        "days_before": int(entry.get("days_before") or 3),
+        "sent_to": str(entry.get("sent_to") or "").strip() or None,
+        "sent_cc": str(entry.get("sent_cc") or "").strip() or None,
+    }
+    resp = client.table(LICENSE_EXPIRY_ALERT_LOG_TABLE).upsert(
+        row,
+        on_conflict="project_name,license_eop,days_before",
+    ).execute()
     return resp.data[0] if resp.data else {}
 
 

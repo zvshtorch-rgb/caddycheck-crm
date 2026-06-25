@@ -1,0 +1,48 @@
+name: License expiry alert
+
+# Runs the standalone license expiry email alert once per day.
+# This does NOT use the Streamlit runtime — it is a plain Python process.
+
+on:
+  schedule:
+    # Daily at 06:00 UTC. Adjust if you prefer a different local time.
+    - cron: "0 6 * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: license-expiry-alert
+  cancel-in-progress: false
+
+jobs:
+  alert:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run license expiry alert
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USE_TLS: ${{ secrets.SMTP_USE_TLS }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_SENDER_EMAIL: ${{ secrets.SMTP_SENDER_EMAIL }}
+          SMTP_SENDER_NAME: ${{ secrets.SMTP_SENDER_NAME }}
+          EMAIL_DEFAULT_RECIPIENTS: ${{ secrets.EMAIL_DEFAULT_RECIPIENTS }}
+          EMAIL_DEFAULT_CC: ${{ secrets.EMAIL_DEFAULT_CC }}
+        run: python license_expiry_alert.py --days-before 3 --source supabase

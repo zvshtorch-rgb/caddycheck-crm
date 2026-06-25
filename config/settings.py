@@ -241,6 +241,12 @@ def get_email_config() -> dict:
     _env_tls = os.environ.get("SMTP_USE_TLS", "").strip().lower()
     if _env_tls:
         defaults["smtp_use_tls"] = _env_tls in {"1", "true", "yes", "y", "on"}
+    _env_recipients = os.environ.get("EMAIL_DEFAULT_RECIPIENTS", "").strip()
+    if _env_recipients:
+        defaults["default_recipients"] = [x.strip() for x in _env_recipients.split(",") if x.strip()]
+    _env_cc = os.environ.get("EMAIL_DEFAULT_CC", "").strip()
+    if _env_cc:
+        defaults["default_cc"] = [x.strip() for x in _env_cc.split(",") if x.strip()]
     return defaults
 
 
