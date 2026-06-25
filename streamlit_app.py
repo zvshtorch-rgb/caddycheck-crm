@@ -5621,6 +5621,15 @@ elif page == "🧾 Invoice Details":
                         key="quick_invoice_type",
                     )
 
+                    qc1, qc2, qc3 = st.columns(3)
+                    quick_cameras = qc1.number_input(
+                        "Cameras",
+                        min_value=0,
+                        step=1,
+                        value=0,
+                        key="quick_invoice_cameras",
+                    )
+
                     quick_for_month = st.selectbox(
                         "For Month",
                         invoice_for_month_options,
@@ -5658,6 +5667,7 @@ elif page == "🧾 Invoice Details":
                                     project_name=quick_project_clean,
                                     maintenance_year=_safe_str(quick_maint_year).strip(),
                                     payment_amount=_safe_float(quick_amount),
+                                    cameras_number=_safe_int(quick_cameras, default=0) or None,
                                     year=_safe_int(quick_year) or None,
                                     description=_safe_str(quick_description).strip() or None,
                                     invoice_type=_normalize_invoice_type(quick_type),
