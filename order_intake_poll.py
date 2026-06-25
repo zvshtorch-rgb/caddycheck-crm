@@ -216,6 +216,14 @@ def main() -> int:
         logger.error("Could not initialise email provider: %s", exc)
         return 1
 
+    if not provider.is_configured():
+        logger.info(
+            "Order intake mailbox is not configured (no '%s' credentials set); "
+            "nothing to poll. Skipping.",
+            provider.name,
+        )
+        return 0
+
     logger.info("Polling inbox via '%s' provider...", provider.name)
     try:
         messages = provider.fetch_unread_with_pdf()

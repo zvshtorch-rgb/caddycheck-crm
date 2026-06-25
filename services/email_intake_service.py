@@ -90,6 +90,10 @@ def _decode(value: Optional[str]) -> str:
 class EmailProvider:
     name = "base"
 
+    def is_configured(self) -> bool:
+        """Return True only when the credentials needed to poll are present."""
+        return False
+
     def fetch_unread_with_pdf(self) -> List[IncomingMessage]:
         raise NotImplementedError
 
@@ -109,6 +113,9 @@ class ImapEmailProvider(EmailProvider):
         self.password = _get_setting("ORDER_INTAKE_IMAP_PASSWORD")
         self.folder = _get_setting("ORDER_INTAKE_IMAP_FOLDER", "INBOX") or "INBOX"
         self._seen_uids: List[bytes] = []
+
+    def is_configured(self) -> bool:
+        return bool(self.host and self.username and self.password)
 
     def _connect(self) -> imaplib.IMAP4_SSL:
         if not self.host or not self.username or not self.password:
@@ -218,6 +225,9 @@ class GraphEmailProvider(EmailProvider):
         self.mailbox = _get_setting("ORDER_INTAKE_GRAPH_MAILBOX")  # user UPN/objectId
         self.folder = _get_setting("ORDER_INTAKE_GRAPH_FOLDER", "Inbox") or "Inbox"
         self._processed_ids: List[str] = []
+
+    def is_configured(self) -> bool:
+        return bool(self.tenant_id and self.client_id and self.client_secret and self.mailbox)
 
     def _token(self) -> str:
         import requests
