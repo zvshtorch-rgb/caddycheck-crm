@@ -5887,20 +5887,40 @@ elif page == "🧾 Invoice Details":
             # Rebuild the invoice list from tracked objects only; any original row
             # that was deleted in the editor is simply not tracked and drops out.
             invoices[:] = kept_objects
+            grid_save_succeeded = False
             try:
                 _save_invoices(invoices, _data_path)
                 if deleted_invoice_ids:
                     from services.supabase_service import delete_invoice_by_ids
                     delete_invoice_by_ids(deleted_invoice_ids)
+                grid_save_succeeded = True
+            except Exception as e:
+                st.error(f"Save failed: {e}")
+
+            # Refresh + rerun must run OUTSIDE the try/except: st.rerun() signals
+            # via an exception that a broad `except Exception` would swallow,
+            # leaving the saved row invisible until a manual refresh.
+            if grid_save_succeeded:
                 load_data.clear()
                 st.session_state.pop("add_inv_row", None)
                 st.session_state.pop("inv_editor", None)
+                # Reset filters so any newly added (Unpaid) row is visible after
+                # rerun instead of being hidden by a leftover filter.
+                for _flt_key, _flt_default in (
+                    ("inv_year", "All"),
+                    ("inv_paid", "All"),
+                    ("inv_country", "All"),
+                    ("inv_search", ""),
+                    ("inv_maint", "All"),
+                    ("inv_no_search", ""),
+                    ("inv_amt_min", 0),
+                    ("inv_amt_max", 0),
+                ):
+                    st.session_state[_flt_key] = _flt_default
                 msg = f"Saved! {new_count} new invoice(s) added." if new_count else "Invoices saved successfully!"
                 st.session_state["_flash_success"] = msg
                 st.session_state["_flash_success_page"] = "🧾 Invoice Details"
                 st.rerun()
-            except Exception as e:
-                st.error(f"Save failed: {e}")
     else:
         df_inv_display = (
             df_inv.style
