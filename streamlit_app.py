@@ -4953,8 +4953,11 @@ elif page == "🔐 Licenses":
             )
             base_license_date = current_license_date or today
             default_license_date = current_license_date or _add_months(today, 12)
-            if st.session_state.get("_license_project_for_date") != selected_project_name:
+            license_form_is_submitting = bool(st.session_state.pop("_license_form_submitting", False))
+            if st.session_state.get("_license_project_for_date") != selected_project_name and not license_form_is_submitting:
                 st.session_state["license_new_date_from_today"] = default_license_date
+                st.session_state["_license_project_for_date"] = selected_project_name
+            elif st.session_state.get("_license_project_for_date") != selected_project_name:
                 st.session_state["_license_project_for_date"] = selected_project_name
             new_license_date = st.date_input(
                 "New License EOP",
@@ -4965,7 +4968,10 @@ elif page == "🔐 Licenses":
                 st.caption(f"Current License EOP: {current_license_date.strftime('%Y-%m-%d')}")
             else:
                 st.caption("Current License EOP: not set")
-            submit_license = st.form_submit_button("Save License Update")
+            submit_license = st.form_submit_button(
+                "Save License Update",
+                on_click=lambda: st.session_state.__setitem__("_license_form_submitting", True),
+            )
 
         if submit_license and selected_project is not None:
             previous_license_date = current_license_date
