@@ -714,7 +714,12 @@ def insert_invoice_adjustment_row(
         "description": str(description or "").strip() or None,
     }
     resp = client.table("invoices").insert(row).execute()
-    return resp.data[0] if resp.data else {}
+    if not resp.data:
+        raise RuntimeError(
+            "Invoice insert returned no row (the database rejected it — check "
+            "permissions/RLS or required columns)."
+        )
+    return resp.data[0]
 
 
 def load_unpaid_credit_rows(project_name: Optional[str] = None) -> List[dict]:

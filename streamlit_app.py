@@ -5674,6 +5674,21 @@ elif page == "🧾 Invoice Details":
                             if quick_add_succeeded:
                                 load_data.clear()
                                 st.session_state.pop("inv_editor", None)
+                                # Reset the Invoice Details filters so the freshly
+                                # added (Unpaid) row is always visible after rerun;
+                                # otherwise a leftover Year/Paid/Country/Search
+                                # filter silently hides it and looks like a no-save.
+                                for _flt_key, _flt_default in (
+                                    ("inv_year", "All"),
+                                    ("inv_paid", "All"),
+                                    ("inv_country", "All"),
+                                    ("inv_search", ""),
+                                    ("inv_maint", "All"),
+                                    ("inv_no_search", ""),
+                                    ("inv_amt_min", 0),
+                                    ("inv_amt_max", 0),
+                                ):
+                                    st.session_state[_flt_key] = _flt_default
                                 st.session_state["_flash_success"] = (
                                     f"Added invoice #{int(quick_invoice_number)} row for {quick_project_clean}."
                                 )
