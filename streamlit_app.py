@@ -5690,6 +5690,14 @@ elif page == "🧾 Invoice Details":
         else:
             df_inv_edit = df_inv.reset_index(drop=True)
 
+        # Rebuild the editor whenever the underlying invoice set changes (e.g. a
+        # Quick Add insert or a save). A fixed key would otherwise let Streamlit
+        # keep a stale row set and silently drop newly inserted rows on save.
+        _invoice_db_ids = tuple(sorted(
+            getattr(inv, "db_id", None) or 0 for inv in invoices
+        ))
+        _invoice_editor_signature = f"{len(invoices)}_{hash(_invoice_db_ids)}_{n_new_inv}"
+
         edited_inv = st.data_editor(
             df_inv_edit,
             use_container_width=True,
@@ -5738,7 +5746,7 @@ elif page == "🧾 Invoice Details":
                     "Description",
                 ),
             },
-            key="inv_editor",
+            key=f"inv_editor_{_invoice_editor_signature}",
         )
         _render_invoice_bottom_summary(edited_inv)
         if save_invoice_clicked:
