@@ -289,6 +289,7 @@ from services.supabase_service import (
     replace_invoice_rows,
     get_next_invoice_number as _supa_next_inv_no,
     append_invoice_rows as _supa_append_invoice,
+    insert_invoice_adjustment_row as _supa_insert_invoice_row,
     load_orders as load_orders_supabase,
     create_orders as create_orders_supabase,
     update_order as update_order_supabase,
@@ -5572,6 +5573,104 @@ elif page == "🧾 Invoice Details":
                 invoice_maint_options.append(label)
 
         next_invoice_number = _get_next_invoice_number(invoices, _data_path)
+
+        with st.expander("➕ Quick Add Invoice Row", expanded=False):
+            st.caption(
+                "Use this when you need another row under an existing invoice number. "
+                "It inserts one new ledger row directly, then refreshes the table."
+            )
+            if _is_excel_source(_data_path):
+                st.warning("Quick add is available only when connected to Supabase. Use the editable table for Excel mode.")
+            else:
+                with st.form("quick_add_invoice_row_form"):
+                    qa1, qa2, qa3 = st.columns(3)
+                    quick_invoice_number = qa1.number_input(
+                        "Invoice #",
+                        min_value=1,
+                        step=1,
+                        value=next_invoice_number,
+                        key="quick_invoice_number",
+                    )
+                    quick_project = qa2.selectbox(
+                        "Project",
+                        invoice_project_options,
+                        key="quick_invoice_project",
+                    )
+                    quick_amount = qa3.number_input(
+                        "Amount (€)",
+                        step=1.0,
+                        value=0.0,
+                        key="quick_invoice_amount",
+                    )
+
+                    qb1, qb2, qb3 = st.columns(3)
+                    quick_maint_year = qb1.selectbox(
+                        "Maint. Year",
+                        invoice_maint_options,
+                        key="quick_invoice_maint_year",
+                    )
+                    quick_year = qb2.selectbox(
+                        "Year",
+                        invoice_year_options,
+                        index=invoice_year_options.index(str(datetime.date.today().year)) if str(datetime.date.today().year) in invoice_year_options else 0,
+                        key="quick_invoice_year",
+                    )
+                    quick_type = qb3.selectbox(
+                        "Type",
+                        invoice_type_options,
+                        key="quick_invoice_type",
+                    )
+
+                    quick_for_month = st.selectbox(
+                        "For Month",
+                        invoice_for_month_options,
+                        key="quick_invoice_for_month",
+                    )
+                    quick_description = st.text_input(
+                        "Description",
+                        value="Order-Site Discrepancies",
+                        key="quick_invoice_description",
+                    )
+                    quick_add_submitted = st.form_submit_button("Add Invoice Row", type="primary")
+
+                if quick_add_submitted:
+                    quick_project_clean = _safe_str(quick_project).strip()
+                    if not quick_project_clean:
+                        st.error("Choose a project before adding the invoice row.")
+                    elif _safe_float(quick_amount) == 0:
+                        st.error("Enter a non-zero amount before adding the invoice row.")
+                    else:
+                        existing_same_invoice_project = [
+                            inv for inv in invoices
+                            if _safe_int(inv.invoice_number, default=0) == int(quick_invoice_number)
+                            and canonical_project_name(_safe_str(inv.project_name).strip()).lower() == canonical_project_name(quick_project_clean).lower()
+                        ]
+                        if existing_same_invoice_project:
+                            st.error(
+                                "That invoice number already has a row for this project. "
+                                "Choose a different project, or edit the existing row directly."
+                            )
+                        else:
+                            try:
+                                _supa_insert_invoice_row(
+                                    invoice_number=int(quick_invoice_number),
+                                    project_name=quick_project_clean,
+                                    maintenance_year=_safe_str(quick_maint_year).strip(),
+                                    payment_amount=_safe_float(quick_amount),
+                                    year=_safe_int(quick_year) or None,
+                                    description=_safe_str(quick_description).strip() or None,
+                                    invoice_type=_normalize_invoice_type(quick_type),
+                                    for_month=_safe_str(quick_for_month).strip() or None,
+                                )
+                                load_data.clear()
+                                st.session_state.pop("inv_editor", None)
+                                st.session_state["_flash_success"] = (
+                                    f"Added invoice #{int(quick_invoice_number)} row for {quick_project_clean}."
+                                )
+                                st.session_state["_flash_success_page"] = "🧾 Invoice Details"
+                                st.rerun()
+                            except Exception as exc:
+                                st.error(f"Failed to add invoice row: {exc}")
 
         _empty_inv = {"_invoice_index": None, "Invoice #": None, "Project": "", "Maint. Year": "Y1",
                       "Amount (€)": 0.0, "Cameras": 0,
