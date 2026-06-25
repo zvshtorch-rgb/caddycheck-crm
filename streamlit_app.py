@@ -4989,13 +4989,20 @@ elif page == "🔐 Licenses":
             else:
                 target_license_date = _add_months(max(base_license_date, today), 12)
 
-            selected_project.license_eop = datetime.datetime.combine(target_license_date, datetime.time.min)
+            target_license_datetime = datetime.datetime.combine(target_license_date, datetime.time.min)
+            selected_project.license_eop = target_license_datetime
             try:
                 with st.spinner("Saving license update..."):
                     if _is_excel_source(_data_path):
+                        for project in projects:
+                            if project.project_name == selected_project.project_name:
+                                project.license_eop = target_license_datetime
                         _save_projects(projects, _data_path)
                     else:
                         update_project_license_eop_supabase(selected_project.project_name, target_license_date)
+                        for project in projects:
+                            if project.project_name == selected_project.project_name:
+                                project.license_eop = target_license_datetime
                     append_license_change_log({
                         "project_name": selected_project.project_name,
                         "country": selected_project.country,

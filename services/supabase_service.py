@@ -292,6 +292,31 @@ def update_project_license_eop(project_name: str, license_eop: Any) -> dict:
         license_value = None
 
     row = {"license_eop": license_value}
+    matching_raw_names = {canonical_name}
+    try:
+        all_rows = client.table("projects").select("project_name").execute()
+        matching_raw_names.update(
+            str(existing.get("project_name") or "")
+            for existing in (all_rows.data or [])
+            if canonical_project_name(existing.get("project_name")) == canonical_name
+        )
+        matching_raw_names.discard("")
+    except Exception:
+        pass
+
+    updated_rows = []
+    for raw_name in sorted(matching_raw_names):
+        resp = (
+            client.table("projects")
+            .update(row)
+            .eq("project_name", raw_name)
+            .execute()
+        )
+        updated_rows.extend(resp.data or [])
+
+    if updated_rows:
+        return updated_rows[0]
+
     resp = (
         client.table("projects")
         .update(row)
