@@ -5651,6 +5651,7 @@ elif page == "🧾 Invoice Details":
                                 "Choose a different project, or edit the existing row directly."
                             )
                         else:
+                            quick_add_succeeded = False
                             try:
                                 _supa_insert_invoice_row(
                                     invoice_number=int(quick_invoice_number),
@@ -5662,6 +5663,15 @@ elif page == "🧾 Invoice Details":
                                     invoice_type=_normalize_invoice_type(quick_type),
                                     for_month=_safe_str(quick_for_month).strip() or None,
                                 )
+                                quick_add_succeeded = True
+                            except Exception as exc:
+                                st.error(f"Failed to add invoice row: {exc}")
+
+                            # Refresh + rerun must happen OUTSIDE the try/except:
+                            # st.rerun() signals via an exception that an over-broad
+                            # `except Exception` would swallow, leaving the inserted
+                            # row invisible until a manual refresh.
+                            if quick_add_succeeded:
                                 load_data.clear()
                                 st.session_state.pop("inv_editor", None)
                                 st.session_state["_flash_success"] = (
@@ -5669,8 +5679,6 @@ elif page == "🧾 Invoice Details":
                                 )
                                 st.session_state["_flash_success_page"] = "🧾 Invoice Details"
                                 st.rerun()
-                            except Exception as exc:
-                                st.error(f"Failed to add invoice row: {exc}")
 
         _empty_inv = {"_invoice_index": None, "Invoice #": None, "Project": "", "Maint. Year": "Y1",
                       "Amount (€)": 0.0, "Cameras": 0,
