@@ -4862,22 +4862,38 @@ elif page == "🔐 Licenses":
         calendar.monthrange(next_month_year, next_month)[1],
     )
 
-    license_rows = []
-    for project in projects:
-        license_date = _project_license_date(project)
-        license_rows.append({
-            "Project": _safe_str(project.project_name),
-            "Country": _safe_str(project.country),
-            "Cameras": _safe_int(project.num_cams),
-            "Status": _safe_str(project.status),
-            "License EOP": license_date.strftime("%Y-%m-%d") if license_date else "",
-            "License Status": _license_status(project, today),
-            "Licensed Through Next Month": (
-                license_date is not None
-                and license_date >= next_month_end
-                and _normalize_project_status(project.status).lower() != "cancelled"
-            ),
-        })
+    def _build_license_rows() -> list[dict]:
+        rows = []
+        for project in projects:
+            license_date = _project_license_date(project)
+            rows.append({
+                "Project": _safe_str(project.project_name),
+                "Country": _safe_str(project.country),
+                "Cameras": _safe_int(project.num_cams),
+                "Status": _safe_str(project.status),
+                "License EOP": license_date.strftime("%Y-%m-%d") if license_date else "",
+                "License Status": _license_status(project, today),
+                "Licensed Through Next Month": (
+                    license_date is not None
+                    and license_date >= next_month_end
+                    and _normalize_project_status(project.status).lower() != "cancelled"
+                ),
+            })
+        return rows
+
+    def _filter_license_rows(rows: list[dict]) -> list[dict]:
+        return [
+            row for row in rows
+            if (license_country == "All" or row["Country"] == license_country)
+            and (
+                license_status == "All"
+                or (license_status == "Licensed Through Next Month" and row.get("Licensed Through Next Month"))
+                or row["License Status"] == license_status
+            )
+            and (not license_search.strip() or license_search.lower() in row["Project"].lower())
+        ]
+
+    license_rows = _build_license_rows()
 
     next_month_rows = [
         row for row in license_rows
@@ -4910,16 +4926,7 @@ elif page == "🔐 Licenses":
         )
         license_search = lf3.text_input("Search project", key="license_search")
 
-    filtered_license_rows = [
-        row for row in license_rows
-        if (license_country == "All" or row["Country"] == license_country)
-        and (
-            license_status == "All"
-            or (license_status == "Licensed Through Next Month" and row.get("Licensed Through Next Month"))
-            or row["License Status"] == license_status
-        )
-        and (not license_search.strip() or license_search.lower() in row["Project"].lower())
-    ]
+    filtered_license_rows = _filter_license_rows(license_rows)
     if license_status == "Licensed Through Next Month":
         st.caption(
             f"Showing non-cancelled projects with License EOP on or after {next_month_end.strftime('%Y-%m-%d')} "
@@ -5010,6 +5017,8 @@ elif page == "🔐 Licenses":
 
     st.markdown("---")
     st.subheader("All Project Licenses")
+    license_rows = _build_license_rows()
+    filtered_license_rows = _filter_license_rows(license_rows)
     license_table_columns = [
         "Project",
         "Country",
