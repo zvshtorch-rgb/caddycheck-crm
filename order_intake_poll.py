@@ -201,6 +201,19 @@ def _process_message(message: IncomingMessage, dry_run: bool) -> bool:
     return True
 
 
+def _is_auth_error(exc: Exception) -> bool:
+    """Return True for IMAP LOGIN failures and HTTP 401/403 auth rejections."""
+    msg = str(exc).lower()
+    return (
+        "login failed" in msg
+        or "authentication failed" in msg
+        or "invalid credentials" in msg
+        or "[authenticationfailed]" in msg
+        or "401" in msg
+        or "403" in msg
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Poll inbox for purchase-order emails.")
     parser.add_argument(
@@ -228,6 +241,13 @@ def main() -> int:
     try:
         messages = provider.fetch_unread_with_pdf()
     except Exception as exc:
+        if _is_auth_error(exc):
+            logger.warning(
+                "Mailbox authentication failed (%s); skipping this run. "
+                "Check ORDER_INTAKE_IMAP_PASSWORD / app-password settings.",
+                exc,
+            )
+            return 0
         logger.error("Failed to fetch emails: %s", exc)
         return 1
 
