@@ -206,6 +206,7 @@ def _is_auth_error(exc: Exception) -> bool:
     msg = str(exc).lower()
     return (
         "login failed" in msg
+        or "authenticate failed" in msg
         or "authentication failed" in msg
         or "invalid credentials" in msg
         or "[authenticationfailed]" in msg
