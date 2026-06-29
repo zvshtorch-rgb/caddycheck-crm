@@ -5,8 +5,8 @@ name: Order intake poller
 
 on:
   schedule:
-    # Every 10 minutes (UTC). Use "*/5 * * * *" for every 5 minutes.
-    - cron: "*/10 * * * *"
+    # Every 12 hours (UTC): at 00:00 and 12:00.
+    - cron: "0 0,12 * * *"
   workflow_dispatch: {}  # allow manual runs from the Actions tab
 
 # Prevent overlapping runs if a poll takes longer than the interval.
