@@ -17,6 +17,7 @@ README under "Purchase-order approval workflow".
 from __future__ import annotations
 
 import argparse
+import imaplib
 import logging
 import os
 import sys
@@ -58,6 +59,16 @@ def _app_base_url() -> str:
 def _ceo_recipients() -> list[str]:
     raw = _get_setting("ORDER_APPROVAL_CEO_EMAIL", "")
     return [addr.strip() for addr in raw.split(",") if addr.strip()]
+
+
+def _should_skip_fetch_error(exc: Exception) -> bool:
+    """Return True for mailbox access failures that should not fail the schedule."""
+    if isinstance(exc, imaplib.IMAP4.error):
+        message = str(exc).lower()
+        return "login failed" in message or "authenticate" in message
+
+    status_code = getattr(getattr(exc, "response", None), "status_code", None)
+    return status_code in {401, 403}
 
 
 def _build_approval_email(order: dict, token: str) -> tuple[str, str, str]:
@@ -228,6 +239,9 @@ def main() -> int:
     try:
         messages = provider.fetch_unread_with_pdf()
     except Exception as exc:
+        if _should_skip_fetch_error(exc):
+            logger.warning("Mailbox access failed for provider '%s': %s. Skipping.", provider.name, exc)
+            return 0
         logger.error("Failed to fetch emails: %s", exc)
         return 1
 
