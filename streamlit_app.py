@@ -294,6 +294,7 @@ from services.supabase_service import (
     create_orders as create_orders_supabase,
     update_order as update_order_supabase,
     delete_order as delete_order_supabase,
+    load_project_job_status as load_project_job_status_supabase,
     download_sent_invoice_pdf as download_sent_invoice_pdf_supabase,
     upload_sent_invoice_pdf as upload_sent_invoice_pdf_supabase,
     upload_order_pdf as upload_order_pdf_supabase,
@@ -2048,7 +2049,7 @@ st.sidebar.title("📊 CaddyCheck CRM")
 st.sidebar.markdown("---")
 page = st.sidebar.radio(
     "Navigation",
-    ["📊 Dashboard", "❓ Ask Data", "🏗️ Projects", "📦 Orders", "📷 Camera Audit", "🔐 Licenses", "🧾 Invoice Details", "💸 Debt Report", "📅 Monthly Invoice", "🎫 Tickets", "🏦 Bank Payment", "✅ Order Approvals", "⚙️ Settings"],
+    ["📊 Dashboard", "❓ Ask Data", "🏗️ Projects", "📦 Orders", "📷 Camera Audit", "� Job Capacity", "�🔐 Licenses", "🧾 Invoice Details", "💸 Debt Report", "📅 Monthly Invoice", "🎫 Tickets", "🏦 Bank Payment", "✅ Order Approvals", "⚙️ Settings"],
     label_visibility="collapsed",
 )
 st.sidebar.markdown("---")
@@ -4844,6 +4845,184 @@ elif page == "📷 Camera Audit":
         mime="text/csv",
         key="camaudit_download",
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: JOB CAPACITY MONITOR
+# ══════════════════════════════════════════════════════════════════════════════
+elif page == "📡 Job Capacity":
+    st.title("📡 Job Capacity Monitor")
+    st.caption(
+        "Live job/camera usage reported by each project PC (Video Profiler agent), "
+        "compared against the cameras approved in the customer's order."
+    )
+
+    # 1. Load the per-PC status rows reported by job_reporter.py.
+    try:
+        job_status_rows = load_project_job_status_supabase()
+        job_status_source = "Supabase"
+    except Exception as exc:
+        job_status_rows = []
+        job_status_source = "unavailable"
+        if "Supabase credentials not configured" in str(exc):
+            st.warning(
+                "Supabase is not configured, so reported job usage is unavailable."
+            )
+        elif _is_missing_supabase_table_error(exc, "project_job_status"):
+            st.info(
+                "No job usage has been reported yet. Run the `project_job_status` "
+                "migration in Supabase and deploy `job_reporter.py` on the project PCs."
+            )
+        else:
+            st.warning(f"Could not load job usage ({exc}).")
+
+    # 2. Load orders so we can derive approved cameras per project.
+    try:
+        jc_orders, _jc_orders_source = load_orders_data(_data_path)
+    except Exception as exc:
+        jc_orders, _jc_orders_source = [], "unavailable"
+        st.warning(f"Could not load orders ({exc}). Approved cameras will show as blank.")
+
+    project_names_for_jobs = [
+        _safe_str(project.project_name).strip()
+        for project in projects
+        if _safe_str(project.project_name).strip()
+    ]
+    ordered_by_project, has_order_for_project = _aggregate_ordered_cameras_by_project(
+        jc_orders, project_names_for_jobs
+    )
+
+    # 3. Aggregate the latest reported usage per project.
+    #    Keep only the most recent report per machine (rows arrive newest-first),
+    #    then sum active/total jobs and machine counts per mapped project.
+    seen_machines: set[str] = set()
+    project_name_by_key = {
+        _normalize_project_name_key(canonical_project_name(name)): name
+        for name in project_names_for_jobs
+    }
+
+    usage_by_project: dict[str, dict] = {}
+    unmapped_rows: list[dict] = []
+    for row in job_status_rows:
+        machine = _safe_str(row.get("machine_name")).strip()
+        if machine:
+            if machine in seen_machines:
+                continue
+            seen_machines.add(machine)
+
+        reported_project = _safe_str(row.get("project_name")).strip()
+        matched_project = project_name_by_key.get(
+            _normalize_project_name_key(canonical_project_name(reported_project))
+        )
+        if not matched_project:
+            unmapped_rows.append(row)
+            continue
+
+        bucket = usage_by_project.setdefault(
+            matched_project,
+            {"active": 0, "total": 0, "machines": 0, "last_reported": None},
+        )
+        bucket["active"] += _safe_int(row.get("active_jobs"), default=0)
+        bucket["total"] += _safe_int(row.get("total_jobs"), default=0)
+        bucket["machines"] += 1
+        reported_at = _safe_str(row.get("reported_at")).strip()
+        if reported_at and (bucket["last_reported"] is None or reported_at > bucket["last_reported"]):
+            bucket["last_reported"] = reported_at
+
+    # 4. Build the comparison table.
+    rows = []
+    over_capacity_count = 0
+    for project in projects:
+        name = _safe_str(project.project_name).strip()
+        if not name:
+            continue
+        usage = usage_by_project.get(name)
+        if usage is None and name not in has_order_for_project:
+            # No reported usage and no order for this project — skip noise.
+            continue
+
+        approved = ordered_by_project.get(name) if name in has_order_for_project else None
+        active = usage["active"] if usage else None
+        total = usage["total"] if usage else None
+        machines = usage["machines"] if usage else 0
+        last_reported = usage["last_reported"] if usage else None
+
+        if active is not None and approved is not None and active > approved:
+            status_flag = "⚠️ Over capacity"
+            over_capacity_count += 1
+        elif active is None:
+            status_flag = "—"
+        elif approved is None:
+            status_flag = "❔ No order"
+        else:
+            status_flag = "✅ OK"
+
+        rows.append({
+            "Project": name,
+            "Network": _project_network(name),
+            "Approved cameras": approved,
+            "Active jobs": active,
+            "Total jobs": total,
+            "PCs reporting": machines,
+            "Δ (active − approved)": (active - approved) if (active is not None and approved is not None) else None,
+            "Status": status_flag,
+            "Last reported": last_reported,
+        })
+
+    # 5. Summary metrics.
+    metric_cols = st.columns(4)
+    metric_cols[0].metric("PCs reporting", len(seen_machines))
+    metric_cols[1].metric("Projects monitored", len(usage_by_project))
+    metric_cols[2].metric("Total active jobs", sum(b["active"] for b in usage_by_project.values()))
+    metric_cols[3].metric("⚠️ Over capacity", over_capacity_count)
+
+    if over_capacity_count:
+        st.error(
+            f"{over_capacity_count} project(s) are running more active jobs than "
+            "the cameras approved in their order."
+        )
+
+    if rows:
+        job_capacity_df = pd.DataFrame(rows)
+        # Show over-capacity projects first.
+        job_capacity_df["_sort"] = job_capacity_df["Status"].map(
+            {"⚠️ Over capacity": 0, "❔ No order": 1, "✅ OK": 2, "—": 3}
+        ).fillna(4)
+        job_capacity_df = job_capacity_df.sort_values(
+            ["_sort", "Project"]
+        ).drop(columns=["_sort"]).reset_index(drop=True)
+
+        st.dataframe(job_capacity_df, use_container_width=True, hide_index=True)
+
+        st.download_button(
+            "⬇️ Download job capacity (CSV)",
+            data=job_capacity_df.to_csv(index=False).encode("utf-8"),
+            file_name="job_capacity.csv",
+            mime="text/csv",
+            key="jobcap_download",
+        )
+    else:
+        st.info("No job usage to display yet.")
+
+    if unmapped_rows:
+        with st.expander(f"⚠️ {len(unmapped_rows)} reported PC(s) not matched to a project"):
+            st.caption(
+                "These machines reported usage but their PROJECT_NAME does not match "
+                "a CRM project. Fix the PROJECT_NAME in the PC's .bat file."
+            )
+            st.dataframe(
+                pd.DataFrame([
+                    {
+                        "Machine": _safe_str(r.get("machine_name")).strip(),
+                        "Reported project": _safe_str(r.get("project_name")).strip(),
+                        "Active jobs": _safe_int(r.get("active_jobs"), default=0),
+                        "Last reported": _safe_str(r.get("reported_at")).strip(),
+                    }
+                    for r in unmapped_rows
+                ]),
+                use_container_width=True,
+                hide_index=True,
+            )
 
 
 # ══════════════════════════════════════════════════════════════════════════════

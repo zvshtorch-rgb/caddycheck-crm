@@ -927,6 +927,18 @@ def load_orders() -> List[dict]:
     return rows
 
 
+def load_project_job_status() -> List[dict]:
+    """Per-PC job/camera usage reported by the Video Profiler agent."""
+    client = _get_client()
+    resp = (
+        client.table("project_job_status")
+        .select("*")
+        .order("reported_at", desc=True)
+        .execute()
+    )
+    return resp.data or []
+
+
 def _normalize_order_fields(fields: Dict[str, Any]) -> Dict[str, Any]:
     from config.settings import canonical_project_name
 
