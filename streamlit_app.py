@@ -7422,23 +7422,8 @@ elif page == "⚙️ Settings":
     else:
         email_cfg = get_email_config()
 
-        st.subheader("Email / SMTP Configuration")
+        st.subheader("Default Recipients")
         with st.form("smtp_form"):
-            col1, col2 = st.columns(2)
-            with col1:
-                smtp_host = st.text_input("SMTP Host", email_cfg.get("smtp_host", "smtp.gmail.com"))
-                smtp_user = st.text_input("Username / Email", email_cfg.get("smtp_username", ""))
-                sender_name = st.text_input("Sender Name", email_cfg.get("sender_name", "CaddyCheck CRM"))
-            with col2:
-                smtp_port = st.number_input("SMTP Port", min_value=1, max_value=65535,
-                                            value=int(email_cfg.get("smtp_port", 587)))
-                smtp_pass = st.text_input("Password", email_cfg.get("smtp_password", ""),
-                                          type="password")
-                sender_email = st.text_input("Sender Email", email_cfg.get("sender_email", ""))
-            use_tls = st.checkbox("Use STARTTLS", value=bool(email_cfg.get("smtp_use_tls", True)))
-
-            st.markdown("---")
-            st.subheader("Default Recipients")
             recipients = st.text_input("To (comma-separated)",
                                        ", ".join(email_cfg.get("default_recipients", [])))
             cc = st.text_input("CC (comma-separated)",
@@ -7453,44 +7438,23 @@ elif page == "⚙️ Settings":
 
         if save_btn:
             new_cfg = {
-                "smtp_host": smtp_host.strip(),
-                "smtp_port": int(smtp_port),
-                "smtp_use_tls": use_tls,
-                "smtp_username": smtp_user.strip(),
-                "smtp_password": smtp_pass,
-                "sender_name": sender_name.strip(),
-                "sender_email": sender_email.strip(),
+                "smtp_host": email_cfg.get("smtp_host", ""),
+                "smtp_port": email_cfg.get("smtp_port", 587),
+                "smtp_use_tls": email_cfg.get("smtp_use_tls", True),
+                "smtp_username": email_cfg.get("smtp_username", ""),
+                "smtp_password": email_cfg.get("smtp_password", ""),
+                "sender_name": email_cfg.get("sender_name", "CaddyCheck CRM"),
+                "sender_email": email_cfg.get("sender_email", ""),
                 "default_recipients": [r.strip() for r in recipients.split(",") if r.strip()],
                 "default_cc": [c.strip() for c in cc.split(",") if c.strip()],
                 "default_subject_template": subject_tpl.strip(),
                 "default_body_template": body_tpl,
             }
             try:
-                st.session_state["_smtp_password_override"] = smtp_pass
                 save_email_config(new_cfg)
-                st.success("Settings saved. SMTP password is kept only for this session unless configured in Streamlit secrets.")
+                st.success("Settings saved.")
             except Exception as e:
                 st.error(f"Save failed: {e}")
-
-        st.markdown("---")
-        st.subheader("Test SMTP Connection")
-        if st.button("Test Connection"):
-            from services.email_service import test_smtp_connection
-            cfg_to_test = {
-                "smtp_host": email_cfg.get("smtp_host", ""),
-                "smtp_port": email_cfg.get("smtp_port", 587),
-                "smtp_use_tls": email_cfg.get("smtp_use_tls", True),
-                "smtp_username": email_cfg.get("smtp_username", ""),
-                "smtp_password": email_cfg.get("smtp_password", ""),
-            }
-            try:
-                success, msg = test_smtp_connection(cfg_to_test)
-                if success:
-                    st.success(msg)
-                else:
-                    st.error(msg)
-            except Exception as e:
-                st.error(str(e))
 
         st.markdown("---")
         st.subheader("Historical EUR to ILS Rates")
