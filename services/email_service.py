@@ -228,6 +228,9 @@ def send_graph_invoice_email(
         else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" if suffix in (".xlsx", ".xlsm")
         else "application/octet-stream"
     )
+    # Use a dedicated invoice sender mailbox if configured, otherwise fall back
+    # to the default Graph mailbox (ORDER_INTAKE_GRAPH_MAILBOX).
+    sender = _get_graph_setting("INVOICE_SENDER_MAILBOX") or None
     send_graph_email(
         subject=subject,
         body=body,
@@ -236,6 +239,7 @@ def send_graph_invoice_email(
         attachment_bytes=attachment_bytes,
         attachment_filename=attachment_path.name,
         attachment_content_type=content_type,
+        sender_mailbox=sender,
     )
 
 
