@@ -180,6 +180,65 @@ def send_simple_email(
     logger.info("Notification email sent successfully.")
 
 
+def _get_graph_setting(key: str) -> str:
+    """Read a Graph credential from env var, then st.secrets [order_intake]."""
+    import os
+    value = os.environ.get(key, "").strip()
+    if value:
+        return value
+    try:
+        import streamlit as st
+        cfg = st.secrets.get("order_intake", {})
+        value = str(cfg.get(key, "")).strip()
+        if value:
+            return value
+        value = str(st.secrets.get(key, "")).strip()
+        return value
+    except Exception:
+        return ""
+
+
+def graph_email_available() -> bool:
+    """Return True when all required Graph credentials are reachable."""
+    return all(
+        _get_graph_setting(k)
+        for k in (
+            "ORDER_INTAKE_GRAPH_TENANT_ID",
+            "ORDER_INTAKE_GRAPH_CLIENT_ID",
+            "ORDER_INTAKE_GRAPH_CLIENT_SECRET",
+            "ORDER_INTAKE_GRAPH_MAILBOX",
+        )
+    )
+
+
+def send_graph_invoice_email(
+    attachment_path: Path,
+    subject: str,
+    body: str,
+    recipients: List[str],
+    cc: Optional[List[str]] = None,
+) -> None:
+    """Send an invoice email with a file attachment via Microsoft Graph API."""
+    if not attachment_path or not attachment_path.exists():
+        raise ValueError(f"Attachment not found: {attachment_path}")
+    attachment_bytes = attachment_path.read_bytes()
+    suffix = attachment_path.suffix.lower()
+    content_type = (
+        "application/pdf" if suffix == ".pdf"
+        else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" if suffix in (".xlsx", ".xlsm")
+        else "application/octet-stream"
+    )
+    send_graph_email(
+        subject=subject,
+        body=body,
+        recipients=recipients,
+        cc=cc,
+        attachment_bytes=attachment_bytes,
+        attachment_filename=attachment_path.name,
+        attachment_content_type=content_type,
+    )
+
+
 def send_graph_email(
     subject: str,
     body: str,
@@ -198,13 +257,12 @@ def send_graph_email(
     (ORDER_INTAKE_GRAPH_TENANT_ID / CLIENT_ID / CLIENT_SECRET / MAILBOX).
     Avoids SMTP entirely — no Basic Auth required.
     """
-    import os
     import requests
 
-    tenant_id = os.environ.get("ORDER_INTAKE_GRAPH_TENANT_ID", "").strip()
-    client_id = os.environ.get("ORDER_INTAKE_GRAPH_CLIENT_ID", "").strip()
-    client_secret = os.environ.get("ORDER_INTAKE_GRAPH_CLIENT_SECRET", "").strip()
-    mailbox = sender_mailbox or os.environ.get("ORDER_INTAKE_GRAPH_MAILBOX", "").strip()
+    tenant_id = _get_graph_setting("ORDER_INTAKE_GRAPH_TENANT_ID")
+    client_id = _get_graph_setting("ORDER_INTAKE_GRAPH_CLIENT_ID")
+    client_secret = _get_graph_setting("ORDER_INTAKE_GRAPH_CLIENT_SECRET")
+    mailbox = sender_mailbox or _get_graph_setting("ORDER_INTAKE_GRAPH_MAILBOX")
 
     if not all([tenant_id, client_id, client_secret, mailbox]):
         raise ValueError(

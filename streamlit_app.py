@@ -6682,10 +6682,11 @@ elif page == "💸 Debt Report":
                 debt_send_btn = st.form_submit_button("Send Debt Report")
 
             if debt_send_btn:
-                if not email_cfg.get("smtp_username"):
-                    st.error("SMTP not configured. Go to ⚙️ Settings to set up email.")
+                from services.email_service import graph_email_available, send_graph_invoice_email, send_invoice_email
+                _use_graph = graph_email_available()
+                if not _use_graph and not email_cfg.get("smtp_username"):
+                    st.error("Email not configured. Set up Graph API credentials or SMTP in ⚙️ Settings.")
                 else:
-                    from services.email_service import send_invoice_email
                     import tempfile
 
                     debt_recipients = [r.strip() for r in debt_to_addrs.split(",") if r.strip()]
@@ -6697,14 +6698,23 @@ elif page == "💸 Debt Report":
                             debt_pdf_path = Path(tmp_dir) / "debt_report.pdf"
                             debt_pdf_path.write_bytes(debt_pdf_bytes)
                             try:
-                                send_invoice_email(
-                                    attachment_path=debt_pdf_path,
-                                    recipients=debt_recipients,
-                                    cc=debt_cc_list,
-                                    subject=debt_subject,
-                                    body=debt_body,
-                                    config=email_cfg,
-                                )
+                                if _use_graph:
+                                    send_graph_invoice_email(
+                                        attachment_path=debt_pdf_path,
+                                        recipients=debt_recipients,
+                                        cc=debt_cc_list,
+                                        subject=debt_subject,
+                                        body=debt_body,
+                                    )
+                                else:
+                                    send_invoice_email(
+                                        attachment_path=debt_pdf_path,
+                                        recipients=debt_recipients,
+                                        cc=debt_cc_list,
+                                        subject=debt_subject,
+                                        body=debt_body,
+                                        config=email_cfg,
+                                    )
                                 st.success("Debt report email sent.")
                             except Exception as exc:
                                 st.error(f"Debt report email failed: {exc}")
@@ -6995,10 +7005,11 @@ elif page == "📅 Monthly Invoice":
                 send_btn = st.form_submit_button("Send Email")
 
             if send_btn:
-                if not email_cfg.get("smtp_username"):
-                    st.error("SMTP not configured. Go to ⚙️ Settings to set up email.")
+                from services.email_service import graph_email_available, send_graph_invoice_email, send_invoice_email
+                _use_graph = graph_email_available()
+                if not _use_graph and not email_cfg.get("smtp_username"):
+                    st.error("Email not configured. Set up Graph API credentials or SMTP in ⚙️ Settings.")
                 else:
-                    from services.email_service import send_invoice_email
                     import tempfile
                     with tempfile.TemporaryDirectory() as tmp_dir:
                         try:
@@ -7021,14 +7032,23 @@ elif page == "📅 Monthly Invoice":
                             archived_pdf_path = archive_sent_invoice_pdf(out_path)
                             recipients = [r.strip() for r in to_addrs.split(",") if r.strip()]
                             cc_list = [c.strip() for c in cc_addrs.split(",") if c.strip()]
-                            send_invoice_email(
-                                attachment_path=out_path,
-                                recipients=recipients,
-                                cc=cc_list,
-                                subject=subject,
-                                body=body,
-                                config=email_cfg,
-                            )
+                            if _use_graph:
+                                send_graph_invoice_email(
+                                    attachment_path=out_path,
+                                    recipients=recipients,
+                                    cc=cc_list,
+                                    subject=subject,
+                                    body=body,
+                                )
+                            else:
+                                send_invoice_email(
+                                    attachment_path=out_path,
+                                    recipients=recipients,
+                                    cc=cc_list,
+                                    subject=subject,
+                                    body=body,
+                                    config=email_cfg,
+                                )
                             append_sent_invoice_log({
                                 "sent_at": datetime.datetime.utcnow().isoformat(),
                                 "invoice_number": inv_no,
