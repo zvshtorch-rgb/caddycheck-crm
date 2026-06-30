@@ -180,12 +180,38 @@ def incoming_email_exists(message_id: str) -> bool:
     client = _get_client()
     resp = (
         client.table("incoming_order_emails")
-        .select("id")
+        .select("id, processing_status")
         .eq("message_id", message_id)
         .limit(1)
         .execute()
     )
-    return bool(resp.data)
+    if not resp.data:
+        return False
+    # Error records are retried, not skipped
+    return resp.data[0].get("processing_status") != "error"
+
+
+def get_incoming_email_status(message_id: str) -> Optional[str]:
+    """Return the processing_status of an existing record, or None if absent."""
+    if not message_id:
+        return None
+    client = _get_client()
+    resp = (
+        client.table("incoming_order_emails")
+        .select("processing_status")
+        .eq("message_id", message_id)
+        .limit(1)
+        .execute()
+    )
+    if not resp.data:
+        return None
+    return resp.data[0].get("processing_status")
+
+
+def delete_incoming_email_by_message_id(message_id: str) -> None:
+    """Delete a previously failed (error) incoming-email record so it can be retried."""
+    client = _get_client()
+    client.table("incoming_order_emails").delete().eq("message_id", message_id).execute()
 
 
 def record_incoming_email(**fields) -> dict:

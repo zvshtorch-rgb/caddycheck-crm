@@ -56,7 +56,7 @@ def send_invoice_email(
     username = config.get("smtp_username", "")
     password = config.get("smtp_password", "")
     sender_name = config.get("sender_name", "CaddyCheck CRM")
-    sender_email = config.get("sender_email", username)
+    sender_email = config.get("sender_email", "") or username
 
     if not smtp_host:
         raise ValueError("SMTP host is not configured.")
@@ -138,7 +138,7 @@ def send_simple_email(
     username = config.get("smtp_username", "")
     password = config.get("smtp_password", "")
     sender_name = config.get("sender_name", "CaddyCheck CRM")
-    sender_email = config.get("sender_email", username)
+    sender_email = config.get("sender_email", "") or username
 
     if not smtp_host:
         raise ValueError("SMTP host is not configured.")
@@ -178,6 +178,93 @@ def send_simple_email(
             server.sendmail(sender_email, all_recipients, msg.as_string())
 
     logger.info("Notification email sent successfully.")
+
+
+def send_graph_email(
+    subject: str,
+    body: str,
+    recipients: List[str],
+    cc: Optional[List[str]] = None,
+    html_body: Optional[str] = None,
+    sender_mailbox: Optional[str] = None,
+    attachment_bytes: Optional[bytes] = None,
+    attachment_filename: Optional[str] = None,
+    attachment_content_type: str = "application/pdf",
+) -> None:
+    """
+    Send an email via Microsoft Graph API (app-only client credentials).
+
+    Uses the same Graph credentials as the order-intake provider
+    (ORDER_INTAKE_GRAPH_TENANT_ID / CLIENT_ID / CLIENT_SECRET / MAILBOX).
+    Avoids SMTP entirely — no Basic Auth required.
+    """
+    import os
+    import requests
+
+    tenant_id = os.environ.get("ORDER_INTAKE_GRAPH_TENANT_ID", "").strip()
+    client_id = os.environ.get("ORDER_INTAKE_GRAPH_CLIENT_ID", "").strip()
+    client_secret = os.environ.get("ORDER_INTAKE_GRAPH_CLIENT_SECRET", "").strip()
+    mailbox = sender_mailbox or os.environ.get("ORDER_INTAKE_GRAPH_MAILBOX", "").strip()
+
+    if not all([tenant_id, client_id, client_secret, mailbox]):
+        raise ValueError(
+            "Graph credentials not fully configured. "
+            "Set ORDER_INTAKE_GRAPH_TENANT_ID, CLIENT_ID, CLIENT_SECRET, MAILBOX."
+        )
+
+    # Acquire app-only token
+    token_url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
+    token_resp = requests.post(
+        token_url,
+        data={
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "scope": "https://graph.microsoft.com/.default",
+            "grant_type": "client_credentials",
+        },
+        timeout=30,
+    )
+    token_resp.raise_for_status()
+    access_token = token_resp.json()["access_token"]
+
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+    }
+
+    to_recipients = [{"emailAddress": {"address": r}} for r in recipients]
+    cc_recipients = [{"emailAddress": {"address": r}} for r in (cc or [])]
+
+    content_type = "html" if html_body else "text"
+    content_value = html_body if html_body else body
+
+    message_payload: dict = {
+        "subject": subject,
+        "body": {"contentType": content_type, "content": content_value},
+        "toRecipients": to_recipients,
+        "ccRecipients": cc_recipients,
+    }
+
+    if attachment_bytes and attachment_filename:
+        import base64
+        message_payload["attachments"] = [
+            {
+                "@odata.type": "#microsoft.graph.fileAttachment",
+                "name": attachment_filename,
+                "contentType": attachment_content_type,
+                "contentBytes": base64.b64encode(attachment_bytes).decode("ascii"),
+            }
+        ]
+
+    payload = {
+        "message": message_payload,
+        "saveToSentItems": "true",
+    }
+
+    send_url = f"https://graph.microsoft.com/v1.0/users/{mailbox}/sendMail"
+    resp = requests.post(send_url, json=payload, headers=headers, timeout=30)
+    resp.raise_for_status()
+    logger.info("Graph email '%s' sent to %s", subject, recipients)
 
 
 def test_smtp_connection(config: dict) -> tuple:
