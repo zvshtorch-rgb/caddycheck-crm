@@ -65,7 +65,9 @@ def _count_jobs() -> tuple[int, int, str]:
         cursor.execute("SELECT COUNT(*) FROM dbo.Jobs")
         total_jobs = int(cursor.fetchone()[0] or 0)
 
-        cursor.execute("SELECT COUNT(*) FROM dbo.Jobs WHERE CompletedTime IS NULL")
+        # Status=1 means running; CompletedTime uses 9999-12-31 as "never completed"
+        # sentinel rather than NULL, so we rely on Status instead.
+        cursor.execute("SELECT COUNT(*) FROM dbo.Jobs WHERE Status = 1")
         active_jobs = int(cursor.fetchone()[0] or 0)
 
         cursor.execute(
