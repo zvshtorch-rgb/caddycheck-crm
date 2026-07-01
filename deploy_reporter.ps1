@@ -113,7 +113,7 @@ $batPath = "`"$INSTALL_DIR\run_reporter.bat`""
 
 foreach ($day in @(1, 15)) {
     $taskName = if ($day -eq 1) { $TASK_NAME_1 } else { $TASK_NAME_2 }
-    schtasks /Delete /TN $taskName /F 2>$null | Out-Null
+    try { schtasks /Delete /TN $taskName /F 2>&1 | Out-Null } catch { }
     $result = schtasks /Create `
         /TN $taskName `
         /TR $batPath `
