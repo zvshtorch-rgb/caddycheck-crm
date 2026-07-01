@@ -21,8 +21,8 @@
 #>
 
 param(
-    [Parameter(Mandatory = $true)]
-    [string]$ProjectName
+    [Parameter(Mandatory = $false)]
+    [string]$ProjectName = ""   # Optional: auto-discovered from machines.csv in GitHub
 )
 
 # ── Configuration (edit once, deploy everywhere) ─────────────────────────────
@@ -102,7 +102,12 @@ Write-Host "bat file written." -ForegroundColor Green
 Write-Step "Setting system environment variables..."
 [System.Environment]::SetEnvironmentVariable("SUPABASE_URL",  $SUPABASE_URL, "Machine")
 [System.Environment]::SetEnvironmentVariable("SUPABASE_KEY",  $SUPABASE_KEY, "Machine")
-[System.Environment]::SetEnvironmentVariable("PROJECT_NAME",  $ProjectName,  "Machine")
+if ($ProjectName) {
+    [System.Environment]::SetEnvironmentVariable("PROJECT_NAME", $ProjectName, "Machine")
+    Write-Host "PROJECT_NAME set to: $ProjectName" -ForegroundColor Green
+} else {
+    Write-Host "PROJECT_NAME not set — will be auto-discovered from machines.csv" -ForegroundColor Yellow
+}
 Write-Host "Env vars set in registry." -ForegroundColor Green
 
 # ── Step 6: Task Scheduler (1st and 15th of every month) ─────────────────────
@@ -132,7 +137,7 @@ foreach ($day in @(1, 15)) {
 Write-Host "`n===========================================" -ForegroundColor Green
 Write-Host " CaddyCheck reporter deployed successfully!" -ForegroundColor Green
 Write-Host "   PC:      $env:COMPUTERNAME"               -ForegroundColor Green
-Write-Host "   Project: $ProjectName"                    -ForegroundColor Green
+Write-Host "   Project: $(if ($ProjectName) { $ProjectName } else { '(from machines.csv)' })" -ForegroundColor Green
 Write-Host "   Runs:    1st and 15th of every month at $RUN_TIME" -ForegroundColor Green
 Write-Host "===========================================" -ForegroundColor Green
 Write-Host "`nRun now to test:"

@@ -14,14 +14,19 @@ e.g. every 30 minutes:
 
     py job_reporter.py
 
-Required environment variables (set once per PC, e.g. in a .bat wrapper):
+Required environment variables (set once per PC via setx or deploy_reporter.ps1):
     SUPABASE_URL                 https://<project>.supabase.co
-    SUPABASE_SERVICE_ROLE_KEY    <service role key>
+    SUPABASE_KEY                 Supabase anon key (read-only for other tables via RLS)
 Optional:
-    PROJECT_NAME                 CRM project name this PC belongs to (recommended)
+    PROJECT_NAME                 Override project name (auto-discovered from machines.csv if absent)
     SQL_CONNECTION_STRING        full ODBC connection string (overrides defaults)
     SQL_SERVER                   default: localhost\\SQLEXPRESS
     SQL_DATABASE                 default: VideoProfilerDatabase
+
+Project name auto-discovery:
+    The script fetches machines.csv from GitHub and maps this PC's hostname to a
+    CRM project name automatically, so the same script can be deployed to all PCs
+    without any per-PC configuration beyond the Supabase credentials.
 """
 from __future__ import annotations
 
@@ -37,6 +42,41 @@ logging.basicConfig(
 logger = logging.getLogger("job_reporter")
 
 AGENT_VERSION = "1.0.0"
+
+# machines.csv is fetched from GitHub so the same script runs on every PC.
+MACHINES_CSV_URL = (
+    "https://raw.githubusercontent.com/zvshtorch-rgb/caddycheck-crm/main/machines.csv"
+)
+
+
+def _lookup_project_name(machine_name: str) -> str | None:
+    """Return the CRM project name for this PC from the hosted machines.csv.
+
+    Falls back to the PROJECT_NAME env var, then returns None (CRM will show
+    the PC in the 'unmapped' expander until the CSV is updated).
+    """
+    # Env var always wins — useful for overrides / testing.
+    override = os.environ.get("PROJECT_NAME", "").strip()
+    if override:
+        return override
+
+    try:
+        import urllib.request
+
+        with urllib.request.urlopen(MACHINES_CSV_URL, timeout=10) as resp:
+            lines = resp.read().decode("utf-8").splitlines()
+    except Exception as exc:
+        logger.warning("Could not fetch machines.csv: %s — using PROJECT_NAME env var", exc)
+        return None
+
+    machine_lower = machine_name.lower()
+    for line in lines[1:]:  # skip header
+        parts = line.strip().split(",", 1)
+        if len(parts) == 2 and parts[0].strip().lower() == machine_lower:
+            return parts[1].strip()
+
+    logger.warning("Machine '%s' not found in machines.csv — add it to the repo.", machine_name)
+    return None
 
 
 def _sql_connection_string() -> str:
@@ -101,7 +141,7 @@ def _report(active_jobs: int, total_jobs: int, owner: str) -> None:
 
     url, key = _supabase_config()
     machine_name = socket.gethostname()
-    project_name = os.environ.get("PROJECT_NAME", "").strip() or None
+    project_name = _lookup_project_name(machine_name)
 
     payload = {
         "machine_name": machine_name,
