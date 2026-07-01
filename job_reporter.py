@@ -34,6 +34,7 @@ import logging
 import os
 import socket
 import sys
+import uuid
 
 logging.basicConfig(
     level=logging.INFO,
@@ -140,7 +141,7 @@ def _report(active_jobs: int, total_jobs: int, owner: str) -> None:
     import requests
 
     url, key = _supabase_config()
-    machine_name = socket.gethostname()
+    machine_name = "{}-{}".format(socket.gethostname(), format(uuid.getnode(), "012x"))
     project_name = _lookup_project_name(machine_name)
 
     payload = {
