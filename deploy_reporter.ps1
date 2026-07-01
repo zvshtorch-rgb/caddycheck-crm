@@ -27,7 +27,7 @@ param(
 
 # ── Configuration (edit once, deploy everywhere) ─────────────────────────────
 $SUPABASE_URL  = "https://rdoxihpmghrvroddnkdi.supabase.co"
-$SUPABASE_KEY  = "REPLACE_WITH_YOUR_ANON_KEY"   # anon key only – safe to embed
+$SUPABASE_KEY  = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJkb3hpaHBtZ2hydnJvZGRua2RpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM2NDUxMTcsImV4cCI6MjA4OTIyMTExN30.IFy2YajxTpvwTqFjmDkB6liGQzahCccUsY1Y28LHCvM"   # anon key only – safe to embed
 $INSTALL_DIR   = "C:\CaddyCheck"
 $GITHUB_RAW    = "https://raw.githubusercontent.com/zvshtorch-rgb/caddycheck-crm/main/job_reporter.py"
 $TASK_NAME_1   = "CaddyCheck Reporter (1st)"
