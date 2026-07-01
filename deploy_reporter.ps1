@@ -89,23 +89,41 @@ Write-Step "Downloading job_reporter.py from GitHub..."
 Invoke-WebRequest -Uri $GITHUB_RAW -OutFile "$INSTALL_DIR\job_reporter.py" -UseBasicParsing
 Write-Host "job_reporter.py downloaded." -ForegroundColor Green
 
-# -- Step 4: Minimal bat file (no credentials) --------------------------------
+# -- Step 4: bat file with embedded credentials (anon key is public) ----------
+# Embedding the config in the bat avoids all registry/session propagation
+# problems - both manual tests and the SYSTEM scheduled task read it reliably.
 Write-Step "Writing run_reporter.bat..."
-$batContent = "@echo off`r`n`"$pythonFullPath`" `"$INSTALL_DIR\job_reporter.py`"`r`n"
+# If -ProjectName wasn't passed, pick up a PROJECT_NAME that was set manually
+# in the machine registry before running this script.
+if (-not $ProjectName) {
+    $ProjectName = [System.Environment]::GetEnvironmentVariable("PROJECT_NAME", "Machine")
+}
+$projLine = if ($ProjectName) { "set `"PROJECT_NAME=$ProjectName`"`r`n" } else { "" }
+$batContent = "@echo off`r`n" +
+              "set `"SUPABASE_URL=$SUPABASE_URL`"`r`n" +
+              "set `"SUPABASE_KEY=$SUPABASE_KEY`"`r`n" +
+              $projLine +
+              "`"$pythonFullPath`" `"$INSTALL_DIR\job_reporter.py`"`r`n"
 [System.IO.File]::WriteAllText("$INSTALL_DIR\run_reporter.bat", $batContent, [System.Text.Encoding]::ASCII)
 Write-Host "bat file written." -ForegroundColor Green
 
-# -- Step 5: System environment variables (registry) -------------------------
+# -- Step 5: System environment variables (registry, best-effort backup) ------
+# Credentials are already embedded in the bat above; also mirror them to the
+# machine registry so future runs / other tools can read them too.
 Write-Step "Setting system environment variables..."
-[System.Environment]::SetEnvironmentVariable("SUPABASE_URL",  $SUPABASE_URL, "Machine")
-[System.Environment]::SetEnvironmentVariable("SUPABASE_KEY",  $SUPABASE_KEY, "Machine")
-if ($ProjectName) {
-    [System.Environment]::SetEnvironmentVariable("PROJECT_NAME", $ProjectName, "Machine")
-    Write-Host "PROJECT_NAME set to: $ProjectName" -ForegroundColor Green
-} else {
-    Write-Host "PROJECT_NAME not set - will be auto-discovered from machines.csv" -ForegroundColor Yellow
+try {
+    [System.Environment]::SetEnvironmentVariable("SUPABASE_URL",  $SUPABASE_URL, "Machine")
+    [System.Environment]::SetEnvironmentVariable("SUPABASE_KEY",  $SUPABASE_KEY, "Machine")
+    if ($ProjectName) {
+        [System.Environment]::SetEnvironmentVariable("PROJECT_NAME", $ProjectName, "Machine")
+        Write-Host "PROJECT_NAME set to: $ProjectName" -ForegroundColor Green
+    } else {
+        Write-Host "PROJECT_NAME not set - will be auto-discovered from machines.csv" -ForegroundColor Yellow
+    }
+    Write-Host "Env vars set in registry." -ForegroundColor Green
+} catch {
+    Write-Warning "Could not set machine env vars (bat file has them embedded anyway): $_"
 }
-Write-Host "Env vars set in registry." -ForegroundColor Green
 
 # -- Step 6: Task Scheduler (1st and 15th of every month) ---------------------
 Write-Step "Creating scheduled tasks..."
