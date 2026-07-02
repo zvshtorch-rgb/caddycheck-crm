@@ -5,7 +5,7 @@ Counts the jobs in the local SQL Server ``VideoProfilerDatabase.dbo.Jobs`` table
 and pushes the per-machine totals to the central CaddyCheck CRM (Supabase), where
 they are compared against the approved camera quantity for the project.
 
-License model: one license per PC, but each PC runs N jobs (≈ cameras). This agent
+License model: one license per PC, but each PC runs N jobs (~= cameras). This agent
 reports how many jobs are active so the CRM can flag projects that exceed the
 quantity approved in their purchase order.
 
@@ -56,7 +56,7 @@ def _lookup_project_name(machine_name: str) -> str | None:
     Falls back to the PROJECT_NAME env var, then returns None (CRM will show
     the PC in the 'unmapped' expander until the CSV is updated).
     """
-    # Env var always wins — useful for overrides / testing.
+    # Env var always wins -- useful for overrides / testing.
     override = os.environ.get("PROJECT_NAME", "").strip()
     if override:
         return override
@@ -67,7 +67,7 @@ def _lookup_project_name(machine_name: str) -> str | None:
         with urllib.request.urlopen(MACHINES_CSV_URL, timeout=10) as resp:
             lines = resp.read().decode("utf-8").splitlines()
     except Exception as exc:
-        logger.warning("Could not fetch machines.csv: %s — using PROJECT_NAME env var", exc)
+        logger.warning("Could not fetch machines.csv: %s -- using PROJECT_NAME env var", exc)
         return None
 
     machine_lower = machine_name.lower()
@@ -76,7 +76,7 @@ def _lookup_project_name(machine_name: str) -> str | None:
         if len(parts) == 2 and parts[0].strip().lower() == machine_lower:
             return parts[1].strip()
 
-    logger.warning("Machine '%s' not found in machines.csv — add it to the repo.", machine_name)
+    logger.warning("Machine '%s' not found in machines.csv -- add it to the repo.", machine_name)
     return None
 
 
@@ -86,7 +86,7 @@ def _sql_connection_string() -> str:
         return explicit
     server = os.environ.get("SQL_SERVER", r"localhost\SQLEXPRESS").strip()
     database = os.environ.get("SQL_DATABASE", "VideoProfilerDatabase").strip()
-    # Trusted (Windows) auth — the agent runs as a local user with DB access.
+    # Trusted (Windows) auth -- the agent runs as a local user with DB access.
     return (
         "DRIVER={ODBC Driver 17 for SQL Server};"
         f"SERVER={server};DATABASE={database};Trusted_Connection=yes;"
