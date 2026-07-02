@@ -2028,13 +2028,17 @@ def _build_job_capacity_pdf(
     cell_style = ParagraphStyle(
         "cell", parent=styles["Normal"], fontSize=7, leading=8,
     )
+    header_cell_style = ParagraphStyle(
+        "hcell", parent=styles["Normal"], fontSize=7, leading=8,
+        textColor=rl_colors.white, fontName="Helvetica-Bold",
+    )
 
     def _fmt(value):
         if value is None or (isinstance(value, float) and pd.isna(value)):
             return ""
         return str(value)
 
-    table_data = [columns]
+    table_data = [[Paragraph(col, header_cell_style) for col in columns]]
     over_row_indices = []
     for _idx, record in enumerate(job_capacity_df.to_dict("records"), start=1):
         table_data.append([Paragraph(_fmt(record.get(col)), cell_style) for col in source_columns])
@@ -2044,13 +2048,11 @@ def _build_job_capacity_pdf(
     table = Table(
         table_data,
         repeatRows=1,
-        colWidths=[6.2 * cm, 1.6 * cm, 2.2 * cm, 1.8 * cm, 1.7 * cm,
-                   2.0 * cm, 2.6 * cm, 2.8 * cm, 4.0 * cm],
+        colWidths=[5.6 * cm, 1.6 * cm, 2.4 * cm, 1.9 * cm, 1.7 * cm,
+                   2.0 * cm, 2.9 * cm, 2.6 * cm, 4.0 * cm],
     )
     style_cmds = [
         ("BACKGROUND", (0, 0), (-1, 0), header_color),
-        ("TEXTCOLOR", (0, 0), (-1, 0), rl_colors.white),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
         ("FONTSIZE", (0, 0), (-1, 0), 7),
         ("ROWBACKGROUNDS", (0, 1), (-1, -1),
          [rl_colors.white, rl_colors.HexColor("#EBF5FB")]),
