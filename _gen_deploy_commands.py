@@ -14,7 +14,11 @@ client = _get_client()
 rows = client.table("projects").select("project_name").order("project_name").execute().data
 names = sorted(set(r["project_name"].strip() for r in rows if r.get("project_name", "").strip()))
 
-url = "https://raw.githubusercontent.com/zvshtorch-rgb/caddycheck-crm/main/deploy_reporter.ps1"
+import subprocess
+
+# Use exact commit SHA so GitHub CDN never serves a cached/old version
+sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+url = f"https://raw.githubusercontent.com/zvshtorch-rgb/caddycheck-crm/{sha}/deploy_reporter.ps1"
 
 # Force TLS 1.2 so the download works on older Windows PCs (pre-2016)
 tls_fix = "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12"
@@ -23,9 +27,8 @@ lines = []
 for name in names:
     cmd = (
         tls_fix + "; "
-        + 'Invoke-WebRequest -Uri "' + url + '?nocache=$(Get-Random)"'
+        + 'Invoke-WebRequest -Uri "' + url + '"'
         + " -OutFile 'C:\\deploy.ps1' -UseBasicParsing;"
-        + " (Get-Content 'C:\\deploy.ps1') | Where-Object { $_ -notmatch '#Requires' } | Set-Content 'C:\\deploy.ps1';"
         + ' powershell -ExecutionPolicy Bypass -File \'C:\\deploy.ps1\' -ProjectName "' + name + '";'
         + " & 'C:\\CaddyCheck\\run_reporter.bat'"
     )
