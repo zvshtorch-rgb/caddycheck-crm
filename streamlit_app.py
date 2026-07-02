@@ -5172,30 +5172,63 @@ elif page == "📡 Job Capacity":
                 key="jobcap_chart_n",
             )
             plot_df = chart_df.head(top_n)
-            active_color = [
-                "#E74C3C" if status == "⚠️ Over capacity" else "#2ECC71"
-                for status in plot_df["Status"]
-            ]
+            projects = plot_df["Project"].tolist()
+            approved = plot_df["Approved cameras"].fillna(0).tolist()
+            active = plot_df["Active jobs"].fillna(0).tolist()
+            is_over = [s == "⚠️ Over capacity" for s in plot_df["Status"]]
+            # Split active jobs so OK vs over-capacity get distinct, labelled colors.
+            active_ok = [a if not o else None for a, o in zip(active, is_over)]
+            active_over = [a if o else None for a, o in zip(active, is_over)]
+
             fig_cap = go.Figure()
             fig_cap.add_bar(
                 name="Approved cameras",
-                x=plot_df["Project"],
-                y=plot_df["Approved cameras"].fillna(0),
+                x=projects,
+                y=approved,
                 marker_color="#3498DB",
+                offsetgroup="approved",
+                hovertemplate="%{x}<br>Approved cameras: %{y}<extra></extra>",
             )
             fig_cap.add_bar(
-                name="Active jobs",
-                x=plot_df["Project"],
-                y=plot_df["Active jobs"].fillna(0),
-                marker_color=active_color,
+                name="Active jobs (OK)",
+                x=projects,
+                y=active_ok,
+                marker_color="#2ECC71",
+                offsetgroup="active",
+                hovertemplate="%{x}<br>Active jobs: %{y}<extra></extra>",
+            )
+            fig_cap.add_bar(
+                name="Active jobs (over capacity)",
+                x=projects,
+                y=active_over,
+                marker_color="#E74C3C",
+                offsetgroup="active",
+                hovertemplate="%{x}<br>Active jobs: %{y}<extra></extra>",
             )
             fig_cap.update_layout(
+                template="plotly_white",
                 barmode="group",
-                height=max(420, top_n * 14),
-                xaxis_tickangle=-45,
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
-                margin=dict(t=40, b=120),
-                title="Approved cameras vs Active jobs (red = over capacity)",
+                bargap=0.25,
+                height=max(440, top_n * 16),
+                title=dict(
+                    text="Approved cameras vs Active jobs",
+                    x=0,
+                    xanchor="left",
+                    y=0.97,
+                    yanchor="top",
+                    font=dict(size=16),
+                ),
+                legend=dict(
+                    orientation="h",
+                    yanchor="bottom",
+                    y=1.0,
+                    xanchor="left",
+                    x=0,
+                ),
+                margin=dict(t=90, b=140, l=40, r=20),
+                xaxis=dict(tickangle=-45, title=None),
+                yaxis=dict(title="Cameras / jobs", gridcolor="#ECF0F1"),
+                hovermode="x unified",
             )
             st.plotly_chart(fig_cap, use_container_width=True)
 
