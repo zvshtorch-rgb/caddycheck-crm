@@ -87,6 +87,19 @@ def _sql_connection_string() -> str:
     server = os.environ.get("SQL_SERVER", r"localhost\SQLEXPRESS").strip()
     database = os.environ.get("SQL_DATABASE", "VideoProfilerDatabase").strip()
     # Trusted (Windows) auth -- the agent runs as a local user with DB access.
+    # Try ODBC Driver 17 first, fall back to 18 if not installed.
+    for driver in ("ODBC Driver 17 for SQL Server", "ODBC Driver 18 for SQL Server"):
+        try:
+            import pyodbc
+            conn_str = (
+                f"DRIVER={{{driver}}};"
+                f"SERVER={server};DATABASE={database};Trusted_Connection=yes;"
+            )
+            pyodbc.connect(conn_str, timeout=5).close()
+            return conn_str
+        except Exception:
+            continue
+    # Fall back to Driver 17 name (error will be descriptive)
     return (
         "DRIVER={ODBC Driver 17 for SQL Server};"
         f"SERVER={server};DATABASE={database};Trusted_Connection=yes;"

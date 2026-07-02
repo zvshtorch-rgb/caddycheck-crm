@@ -83,7 +83,29 @@ Write-Step "Installing pip packages..."
 & $pyExe -m pip install requests pyodbc --quiet --disable-pip-version-check
 Write-Host "packages OK" -ForegroundColor Green
 
-# -- Step 3: Install directory + job_reporter.py (embedded - no download needed) --
+# -- Step 2b: ODBC Driver for SQL Server (required by job_reporter.py) --------
+Write-Step "Checking ODBC Driver for SQL Server..."
+$odbcKey17 = "HKLM:\SOFTWARE\ODBC\ODBCINST.INI\ODBC Driver 17 for SQL Server"
+$odbcKey18 = "HKLM:\SOFTWARE\ODBC\ODBCINST.INI\ODBC Driver 18 for SQL Server"
+if ((Test-Path $odbcKey17) -or (Test-Path $odbcKey18)) {
+    Write-Host "ODBC driver already installed." -ForegroundColor Green
+} else {
+    Write-Host "Installing ODBC Driver 17 for SQL Server..." -ForegroundColor Yellow
+    $odbcMsi = "$env:TEMP\msodbcsql17.msi"
+    try {
+        Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/?linkid=2168524" `
+            -OutFile $odbcMsi -UseBasicParsing
+        $result = Start-Process msiexec.exe -Wait -PassThru `
+            -ArgumentList "/i `"$odbcMsi`" /quiet /norestart IACCEPTMSODBCSQLLICENSETERMS=YES"
+        if ($result.ExitCode -eq 0) {
+            Write-Host "ODBC Driver 17 installed." -ForegroundColor Green
+        } else {
+            Write-Warning "ODBC installer exited with code $($result.ExitCode) - may need manual install."
+        }
+    } catch {
+        Write-Warning "Could not auto-install ODBC driver: $_ - install manually if SQL errors occur."
+    }
+}
 Write-Step "Creating $INSTALL_DIR ..."
 New-Item -ItemType Directory -Force -Path $INSTALL_DIR | Out-Null
 
@@ -178,6 +200,19 @@ def _sql_connection_string() -> str:
     server = os.environ.get("SQL_SERVER", r"localhost\SQLEXPRESS").strip()
     database = os.environ.get("SQL_DATABASE", "VideoProfilerDatabase").strip()
     # Trusted (Windows) auth -- the agent runs as a local user with DB access.
+    # Try ODBC Driver 17 first, fall back to 18 if not installed.
+    for driver in ("ODBC Driver 17 for SQL Server", "ODBC Driver 18 for SQL Server"):
+        try:
+            import pyodbc
+            conn_str = (
+                f"DRIVER={{{driver}}};"
+                f"SERVER={server};DATABASE={database};Trusted_Connection=yes;"
+            )
+            pyodbc.connect(conn_str, timeout=5).close()
+            return conn_str
+        except Exception:
+            continue
+    # Fall back to Driver 17 name (error will be descriptive)
     return (
         "DRIVER={ODBC Driver 17 for SQL Server};"
         f"SERVER={server};DATABASE={database};Trusted_Connection=yes;"
