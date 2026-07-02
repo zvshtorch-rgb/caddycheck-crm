@@ -82,14 +82,36 @@ def _patch_dns_if_broken() -> None:
 
 
 def _apply_system_proxy():
-    """Apply WinHTTP proxy settings to env vars if none are set.
+    """Apply system proxy settings for Supabase HTTPS requests.
 
-    PowerShell Invoke-WebRequest uses the WinHTTP proxy natively.
-    Python requests only reads HTTP_PROXY / HTTPS_PROXY env vars.
-    PCs with no direct internet route need this to reach Supabase.
+    Uses .NET GetSystemWebProxy via PowerShell subprocess to resolve proxy
+    settings including PAC/WPAD scripts that Python cannot natively execute.
+    Falls back to WinHTTP netsh detection if PowerShell call fails.
     """
     if os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY"):
-        return  # already configured
+        return
+    # Primary: use .NET GetSystemWebProxy (handles PAC/WPAD, IE, WinHTTP)
+    try:
+        import subprocess
+        script = (
+            "$proxy=[System.Net.WebRequest]::GetSystemWebProxy();"
+            "$uri=[Uri]'https://rdoxihpmghrvroddnkdi.supabase.co';"
+            "$p=$proxy.GetProxy($uri);"
+            "if($p.Host -ne $uri.Host){$p.AbsoluteUri}else{''}"
+        )
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True, text=True, timeout=10,
+        )
+        proxy = result.stdout.strip()
+        if proxy and proxy.startswith("http"):
+            os.environ["HTTPS_PROXY"] = proxy
+            os.environ["HTTP_PROXY"] = proxy
+            logger.info("System proxy applied: %s", proxy)
+            return
+    except Exception as exc:
+        logger.debug("GetSystemWebProxy failed: %s", exc)
+    # Fallback: WinHTTP netsh
     try:
         import subprocess
         out = subprocess.run(
@@ -107,7 +129,7 @@ def _apply_system_proxy():
                     logger.info("WinHTTP proxy applied: %s", val)
                     return
     except Exception as exc:
-        logger.debug("Proxy detection error: %s", exc)
+        logger.debug("WinHTTP proxy detection failed: %s", exc)
 
 
 def _lookup_project_name(machine_name: str) -> str | None:
