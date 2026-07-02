@@ -90,10 +90,11 @@ Write-Host "packages OK" -ForegroundColor Green
 
 # -- Step 2b: ODBC Driver for SQL Server (required by job_reporter.py) --------
 Write-Step "Checking ODBC Driver for SQL Server..."
-$odbcKey17 = "HKLM:\SOFTWARE\ODBC\ODBCINST.INI\ODBC Driver 17 for SQL Server"
-$odbcKey18 = "HKLM:\SOFTWARE\ODBC\ODBCINST.INI\ODBC Driver 18 for SQL Server"
-if ((Test-Path $odbcKey17) -or (Test-Path $odbcKey18)) {
-    Write-Host "ODBC driver already installed." -ForegroundColor Green
+# Ask Python/pyodbc directly -- more reliable than registry check
+$odbcCheck = & $pyExe -c "import pyodbc; ok = any('SQL Server' in d for d in pyodbc.drivers()); exit(0 if ok else 1)" 2>$null
+$odbcOk = ($LASTEXITCODE -eq 0)
+if ($odbcOk) {
+    Write-Host "ODBC driver already installed and visible to Python." -ForegroundColor Green
 } else {
     Write-Host "Installing ODBC Driver 17 for SQL Server..." -ForegroundColor Yellow
     $odbcMsi = "$env:TEMP\msodbcsql17.msi"
