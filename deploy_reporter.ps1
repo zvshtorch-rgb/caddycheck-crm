@@ -35,6 +35,9 @@ $TASK_NAME_2   = "CaddyCheck Reporter (15th)"
 $RUN_TIME      = "08:00"
 # -----------------------------------------------------------------------------
 
+# Force TLS 1.2 - required for GitHub on older Windows (pre-2016) systems
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
 $ErrorActionPreference = "Stop"
 
 function Write-Step([string]$msg) {
