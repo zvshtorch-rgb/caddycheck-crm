@@ -49,6 +49,37 @@ MACHINES_CSV_URL = (
     "https://raw.githubusercontent.com/zvshtorch-rgb/caddycheck-crm/main/machines.csv"
 )
 
+# Cloudflare IPs for Supabase — used as DNS fallback on PCs with broken DNS.
+_SUPABASE_FALLBACK_IPS = {
+    "rdoxihpmghrvroddnkdi.supabase.co": "104.18.38.10",
+}
+
+
+def _patch_dns_if_broken() -> None:
+    """Monkey-patch socket.getaddrinfo for known hosts when OS DNS is broken.
+
+    Some project PCs have no working external DNS (broken Dnscache service,
+    missing gateway, Group Policy NRPT overrides). This patches Python's
+    resolver at the socket level so HTTPS still works regardless of OS state.
+    The TLS SNI/cert verification continues to use the correct hostname.
+    """
+    for host, ip in _SUPABASE_FALLBACK_IPS.items():
+        try:
+            socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
+            return  # DNS works — no patch needed
+        except socket.gaierror:
+            pass
+
+    _orig = socket.getaddrinfo
+
+    def _patched(host, port, *args, **kwargs):
+        if host in _SUPABASE_FALLBACK_IPS:
+            host = _SUPABASE_FALLBACK_IPS[host]
+        return _orig(host, port, *args, **kwargs)
+
+    socket.getaddrinfo = _patched
+    logger.info("DNS unavailable — using hardcoded IPs for Supabase endpoints.")
+
 
 def _lookup_project_name(machine_name: str) -> str | None:
     """Return the CRM project name for this PC from the hosted machines.csv.
@@ -218,6 +249,7 @@ def _report(active_jobs: int, total_jobs: int, owner: str) -> None:
 
 
 def main() -> int:
+    _patch_dns_if_broken()
     try:
         active_jobs, total_jobs, owner = _count_jobs()
     except Exception as exc:  # noqa: BLE001
