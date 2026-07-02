@@ -80,52 +80,77 @@ def _lookup_project_name(machine_name: str) -> str | None:
     return None
 
 
-def _sql_connection_string() -> str:
-    explicit = os.environ.get("SQL_CONNECTION_STRING", "").strip()
-    if explicit:
-        return explicit
-    server = os.environ.get("SQL_SERVER", r"localhost\SQLEXPRESS").strip()
-    database = os.environ.get("SQL_DATABASE", "VideoProfilerDatabase").strip()
-    # Trusted (Windows) auth -- the agent runs as a local user with DB access.
-    # Try ODBC Driver 17 first, fall back to 18 if not installed.
-    for driver in ("ODBC Driver 17 for SQL Server", "ODBC Driver 18 for SQL Server"):
-        try:
-            import pyodbc
-            conn_str = (
-                f"DRIVER={{{driver}}};"
-                f"SERVER={server};DATABASE={database};Trusted_Connection=yes;"
-            )
-            pyodbc.connect(conn_str, timeout=5).close()
-            return conn_str
-        except Exception:
-            continue
-    # Fall back to Driver 17 name (error will be descriptive)
-    return (
-        "DRIVER={ODBC Driver 17 for SQL Server};"
-        f"SERVER={server};DATABASE={database};Trusted_Connection=yes;"
-    )
-
-
 def _count_jobs() -> tuple[int, int, str]:
-    """Return (active_jobs, total_jobs, owner) from the local Jobs table.
+    """Return (active_jobs, total_jobs, owner) from the local Video Profiler DB.
 
-    Active = jobs that have not completed (CompletedTime IS NULL).
+    Auto-detects two known schemas:
+      VideoProfilerDatabase / dbo.Jobs      -> Status = 1 (integer)
+      VideoInformDB         / dbo.FileJobs  -> Status = 'Running' (text)
+
+    Env var overrides: SQL_CONNECTION_STRING, SQL_SERVER, SQL_DATABASE, SQL_TABLE.
     """
     import pyodbc
 
-    conn = pyodbc.connect(_sql_connection_string(), timeout=15)
+    explicit_conn = os.environ.get("SQL_CONNECTION_STRING", "").strip()
+    server = os.environ.get("SQL_SERVER", r"localhost\SQLEXPRESS").strip()
+    explicit_db = os.environ.get("SQL_DATABASE", "").strip()
+    explicit_table = os.environ.get("SQL_TABLE", "").strip()
+
+    DRIVERS = ("ODBC Driver 17 for SQL Server", "ODBC Driver 18 for SQL Server")
+
+    # (database, table, active_where, owner_col, id_col)
+    SCHEMAS = [
+        ("VideoProfilerDatabase", "dbo.Jobs",     "Status = 1",          "Owner", "Id"),
+        ("VideoInformDB",         "dbo.FileJobs",  "Status = 'Running'",  "Owner", "JobID"),
+    ]
+
+    if explicit_conn:
+        # User provided a full connection string -- use it with default schema
+        conn = pyodbc.connect(explicit_conn, timeout=15)
+        db, table, active_where, owner_col, id_col = SCHEMAS[0]
+        if explicit_table:
+            table = explicit_table
+        return _query_jobs(conn, table, active_where, owner_col, id_col)
+
+    last_err = None
+    for db, table, active_where, owner_col, id_col in SCHEMAS:
+        if explicit_db:
+            db = explicit_db
+        if explicit_table:
+            table = explicit_table
+
+        for driver in DRIVERS:
+            conn_str = (
+                f"DRIVER={{{driver}}};"
+                f"SERVER={server};DATABASE={db};Trusted_Connection=yes;"
+            )
+            try:
+                conn = pyodbc.connect(conn_str, timeout=5)
+                result = _query_jobs(conn, table, active_where, owner_col, id_col)
+                logger.info("Connected to %s / %s via %s", db, table, driver)
+                return result
+            except Exception as exc:
+                last_err = exc
+
+        if explicit_db:
+            break  # Don't iterate schemas when DB is forced
+
+    raise last_err or RuntimeError("Could not connect to any known Video Profiler database.")
+
+
+def _query_jobs(conn, table, active_where, owner_col, id_col) -> tuple[int, int, str]:
+    """Execute job count queries on an open connection and return results."""
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM dbo.Jobs")
+        cursor.execute(f"SELECT COUNT(*) FROM {table}")
         total_jobs = int(cursor.fetchone()[0] or 0)
 
-        # Status=1 means running; CompletedTime uses 9999-12-31 as "never completed"
-        # sentinel rather than NULL, so we rely on Status instead.
-        cursor.execute("SELECT COUNT(*) FROM dbo.Jobs WHERE Status = 1")
+        cursor.execute(f"SELECT COUNT(*) FROM {table} WHERE {active_where}")
         active_jobs = int(cursor.fetchone()[0] or 0)
 
         cursor.execute(
-            "SELECT TOP 1 Owner FROM dbo.Jobs WHERE Owner IS NOT NULL ORDER BY Id DESC"
+            f"SELECT TOP 1 {owner_col} FROM {table} "
+            f"WHERE {owner_col} IS NOT NULL ORDER BY {id_col} DESC"
         )
         row = cursor.fetchone()
         owner = str(row[0]).strip() if row and row[0] is not None else ""
