@@ -305,15 +305,20 @@ def _report(active_jobs: int, total_jobs: int, owner: str) -> None:
 
 
 def _report_via_powershell(payload: dict, url: str, key: str) -> None:
-    """POST to Supabase using PowerShell Invoke-WebRequest.
+    """POST to Supabase using a raw TLS socket in PowerShell.
 
-    Fallback for PCs where Python sockets cannot reach Cloudflare IPs but
-    PowerShell (WinINet stack) can. Credentials come from inherited env vars
-    so they never appear on the process command line.
+    Fallback for PCs where neither Python sockets nor WinINet (Invoke-WebRequest)
+    can resolve/route to Supabase, but the DnsClient cmdlet (Resolve-DnsName)
+    still works. Resolves the IP via Resolve-DnsName, then connects directly to
+    each IP over TcpClient + SslStream with correct SNI and TLS 1.2, sending a
+    raw HTTP/1.1 POST. Credentials come from inherited env vars.
     """
     import json
     import subprocess
     import tempfile
+
+    host = url.split("://", 1)[-1].split("/", 1)[0]
+    path = "/rest/v1/project_job_status?on_conflict=machine_name"
 
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".json", delete=False, encoding="utf-8"
@@ -323,32 +328,56 @@ def _report_via_powershell(payload: dict, url: str, key: str) -> None:
 
     try:
         safe_tmp = tmp.replace("'", "''")
-        endpoint = url + "/rest/v1/project_job_status?on_conflict=machine_name"
         ps = (
-            "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;"
-            "$h=@{"
-            "apikey=\"$env:SUPABASE_KEY\";"
-            "Authorization=\"Bearer $env:SUPABASE_KEY\";"
-            "'Content-Type'='application/json';"
-            "Prefer='resolution=merge-duplicates,return=representation'"
-            "};"
+            "$ErrorActionPreference='Stop';"
+            "$hn='" + host + "';"
+            "$path='" + path + "';"
             "$body=Get-Content '" + safe_tmp + "' -Raw;"
-            "try{"
-            "Invoke-WebRequest -Method POST -Uri '" + endpoint + "'"
-            " -Body $body -Headers $h -UseBasicParsing | Out-Null;"
-            "exit 0"
-            "}catch{Write-Error $_;exit 1}"
+            "$ips=@();"
+            "try{$ips=@((Resolve-DnsName -Name $hn -Type A -ErrorAction Stop"
+            " | Where-Object {$_.IPAddress}).IPAddress)}catch{};"
+            "if(-not $ips){$ips=@('104.18.38.10','172.64.149.246')};"
+            "$bytes=[Text.Encoding]::UTF8.GetBytes($body);"
+            "$ok=$false;"
+            "foreach($ip in $ips){try{"
+            "$c=New-Object Net.Sockets.TcpClient;"
+            "$iar=$c.BeginConnect($ip,443,$null,$null);"
+            "if(-not $iar.AsyncWaitHandle.WaitOne(8000)){$c.Close();continue};"
+            "$c.EndConnect($iar);"
+            "$ssl=New-Object Net.Security.SslStream($c.GetStream());"
+            "$ssl.AuthenticateAsClient($hn,$null,[Security.Authentication.SslProtocols]3072,$false);"
+            "$req=\"POST $path HTTP/1.1`r`n\";"
+            "$req+=\"Host: $hn`r`n\";"
+            "$req+=\"apikey: $env:SUPABASE_KEY`r`n\";"
+            "$req+=\"Authorization: Bearer $env:SUPABASE_KEY`r`n\";"
+            "$req+=\"Content-Type: application/json`r`n\";"
+            "$req+=\"Prefer: resolution=merge-duplicates`r`n\";"
+            "$req+=\"Content-Length: $($bytes.Length)`r`n\";"
+            "$req+=\"Connection: close`r`n`r`n\";"
+            "$rb=[Text.Encoding]::UTF8.GetBytes($req);"
+            "$ssl.Write($rb,0,$rb.Length);"
+            "$ssl.Write($bytes,0,$bytes.Length);"
+            "$ssl.Flush();"
+            "$sr=New-Object IO.StreamReader($ssl);"
+            "$resp=$sr.ReadToEnd();"
+            "$ssl.Close();$c.Close();"
+            "$status=($resp -split \"`r`n\")[0];"
+            "if($status -match ' (2\\d\\d) '){$ok=$true;break}"
+            "else{Write-Host $status}"
+            "}catch{Write-Host $_.Exception.Message}};"
+            "if($ok){exit 0}else{Write-Error 'All Supabase IPs failed';exit 1}"
         )
         result = subprocess.run(
             ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True, text=True, timeout=90,
+            env={**os.environ, "SUPABASE_KEY": key},
         )
         if result.returncode != 0:
             raise RuntimeError(
-                "PowerShell HTTP fallback failed: "
+                "PowerShell raw-socket fallback failed: "
                 + (result.stderr or result.stdout).strip()
             )
-        logger.info("Reported via PowerShell fallback (WinINet).")
+        logger.info("Reported via PowerShell raw-socket fallback.")
     finally:
         try:
             os.unlink(tmp)
