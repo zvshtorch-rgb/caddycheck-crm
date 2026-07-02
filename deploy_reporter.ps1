@@ -1,9 +1,3 @@
-# Check for admin rights (PS 3.0 compatible - avoids #Requires -RunAsAdministrator)
-$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]"Administrator")
-if (-not $isAdmin) {
-    Write-Error "This script must be run as Administrator. Right-click PowerShell and select 'Run as Administrator'."
-    exit 1
-}
 <#
 .SYNOPSIS
     One-shot deployer for the CaddyCheck job reporter agent.
@@ -29,6 +23,12 @@ param(
     [Parameter(Mandatory = $false)]
     [string]$ProjectName = ""   # Optional: auto-discovered from machines.csv in GitHub
 )
+
+# Check for admin rights (PS 3.0 compatible - must be AFTER param block)
+if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]"Administrator")) {
+    Write-Error "This script must be run as Administrator. Right-click PowerShell and select 'Run as Administrator'."
+    exit 1
+}
 
 # -- Configuration (edit once, deploy everywhere) -----------------------------
 $SUPABASE_URL  = "https://rdoxihpmghrvroddnkdi.supabase.co"
