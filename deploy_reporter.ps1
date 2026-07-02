@@ -200,6 +200,35 @@ def _patch_dns_if_broken() -> None:
     logger.info("DNS unavailable - using hardcoded IPs for Supabase endpoints.")
 
 
+def _apply_system_proxy():
+    """Apply WinHTTP proxy settings to env vars if none are set.
+
+    PowerShell Invoke-WebRequest uses the WinHTTP proxy natively.
+    Python requests only reads HTTP_PROXY / HTTPS_PROXY env vars.
+    PCs with no direct internet route need this to reach Supabase.
+    """
+    if os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY"):
+        return  # already configured
+    try:
+        import subprocess
+        out = subprocess.run(
+            ["netsh", "winhttp", "show", "proxy"],
+            capture_output=True, text=True, timeout=5,
+        ).stdout
+        for line in out.splitlines():
+            if "proxy server" in line.lower():
+                val = line.split(":", 1)[-1].strip()
+                if val and "direct" not in val.lower() and "none" not in val.lower():
+                    if not val.lower().startswith("http"):
+                        val = "http://" + val
+                    os.environ["HTTPS_PROXY"] = val
+                    os.environ["HTTP_PROXY"] = val
+                    logger.info("WinHTTP proxy applied: %s", val)
+                    return
+    except Exception as exc:
+        logger.debug("Proxy detection error: %s", exc)
+
+
 def _lookup_project_name(machine_name: str) -> str | None:
     """Return the CRM project name for this PC from the hosted machines.csv.
 
@@ -369,6 +398,7 @@ def _report(active_jobs: int, total_jobs: int, owner: str) -> None:
 
 def main() -> int:
     _patch_dns_if_broken()
+    _apply_system_proxy()
     try:
         active_jobs, total_jobs, owner = _count_jobs()
     except Exception as exc:  # noqa: BLE001
