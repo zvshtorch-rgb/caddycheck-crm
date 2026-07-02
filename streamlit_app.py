@@ -1908,6 +1908,166 @@ def _aggregate_ordered_cameras_by_project(
     return ordered_by_project, has_order_for_project
 
 
+def _build_job_capacity_pdf(
+    job_capacity_df: "pd.DataFrame",
+    *,
+    pcs_reporting: int,
+    projects_monitored: int,
+    total_active: int,
+    over_capacity: int,
+) -> bytes:
+    """Render the Job Capacity Monitor table into a styled PDF report.
+
+    Includes a summary header, a native bar chart of the top projects
+    (approved cameras vs active jobs), and a color-coded table where
+    over-capacity rows are highlighted in red.
+    """
+    from io import BytesIO
+
+    from reportlab.lib import colors as rl_colors
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import cm
+    from reportlab.graphics.shapes import Drawing
+    from reportlab.graphics.charts.barcharts import VerticalBarChart
+    from reportlab.graphics.charts.legends import Legend
+    from reportlab.platypus import (
+        SimpleDocTemplate,
+        Table,
+        TableStyle,
+        Paragraph,
+        Spacer,
+    )
+
+    header_color = rl_colors.HexColor("#1B3A6B")
+    over_color = rl_colors.HexColor("#F5B7B1")
+
+    def _num(value, default=0):
+        try:
+            if value is None or (isinstance(value, float) and pd.isna(value)):
+                return default
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=landscape(A4),
+        leftMargin=1.2 * cm,
+        rightMargin=1.2 * cm,
+        topMargin=1.2 * cm,
+        bottomMargin=1.2 * cm,
+    )
+    styles = getSampleStyleSheet()
+    elems = []
+
+    elems.append(Paragraph("<b>CaddyCheck CRM - Job Capacity Monitor</b>", styles["Title"]))
+    elems.append(Paragraph(
+        f"Generated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        f"  |  PCs reporting: {pcs_reporting}"
+        f"  |  Projects monitored: {projects_monitored}"
+        f"  |  Total active jobs: {total_active}"
+        f"  |  Over capacity: {over_capacity}",
+        styles["Normal"],
+    ))
+    elems.append(Spacer(1, 0.4 * cm))
+
+    # Native bar chart: top projects by active jobs
+    reported = job_capacity_df[job_capacity_df["Active jobs"].notna()].copy()
+    if not reported.empty:
+        reported = reported.sort_values("Active jobs", ascending=False).head(20)
+        approved_vals = [_num(v) for v in reported["Approved cameras"]]
+        active_vals = [_num(v) for v in reported["Active jobs"]]
+        labels = [str(p) for p in reported["Project"]]
+
+        drawing = Drawing(760, 230)
+        chart = VerticalBarChart()
+        chart.x = 30
+        chart.y = 60
+        chart.width = 700
+        chart.height = 150
+        chart.data = [approved_vals, active_vals]
+        chart.barSpacing = 1
+        chart.groupSpacing = 6
+        chart.valueAxis.valueMin = 0
+        chart.categoryAxis.categoryNames = labels
+        chart.categoryAxis.labels.boxAnchor = "ne"
+        chart.categoryAxis.labels.angle = 45
+        chart.categoryAxis.labels.dx = -4
+        chart.categoryAxis.labels.dy = -2
+        chart.categoryAxis.labels.fontSize = 6
+        chart.bars[0].fillColor = rl_colors.HexColor("#3498DB")
+        chart.bars[1].fillColor = rl_colors.HexColor("#2ECC71")
+        drawing.add(chart)
+
+        legend = Legend()
+        legend.x = 620
+        legend.y = 222
+        legend.fontSize = 7
+        legend.alignment = "right"
+        legend.colorNamePairs = [
+            (rl_colors.HexColor("#3498DB"), "Approved cameras"),
+            (rl_colors.HexColor("#2ECC71"), "Active jobs"),
+        ]
+        drawing.add(legend)
+        elems.append(drawing)
+        elems.append(Spacer(1, 0.3 * cm))
+
+    # Color-coded table
+    columns = [
+        "Project", "Network", "Approved cameras", "Active jobs",
+        "Total jobs", "PCs reporting", "Delta (active - approved)",
+        "Status", "Last reported",
+    ]
+    source_columns = [
+        "Project", "Network", "Approved cameras", "Active jobs",
+        "Total jobs", "PCs reporting", "Δ (active − approved)",
+        "Status", "Last reported",
+    ]
+    cell_style = ParagraphStyle(
+        "cell", parent=styles["Normal"], fontSize=7, leading=8,
+    )
+
+    def _fmt(value):
+        if value is None or (isinstance(value, float) and pd.isna(value)):
+            return ""
+        return str(value)
+
+    table_data = [columns]
+    over_row_indices = []
+    for _idx, record in enumerate(job_capacity_df.to_dict("records"), start=1):
+        table_data.append([Paragraph(_fmt(record.get(col)), cell_style) for col in source_columns])
+        if str(record.get("Status")) == "⚠️ Over capacity":
+            over_row_indices.append(_idx)
+
+    table = Table(
+        table_data,
+        repeatRows=1,
+        colWidths=[6.2 * cm, 1.6 * cm, 2.2 * cm, 1.8 * cm, 1.7 * cm,
+                   2.0 * cm, 2.6 * cm, 2.8 * cm, 4.0 * cm],
+    )
+    style_cmds = [
+        ("BACKGROUND", (0, 0), (-1, 0), header_color),
+        ("TEXTCOLOR", (0, 0), (-1, 0), rl_colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, 0), 7),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1),
+         [rl_colors.white, rl_colors.HexColor("#EBF5FB")]),
+        ("GRID", (0, 0), (-1, -1), 0.4, rl_colors.HexColor("#BDC3C7")),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+    ]
+    for row_idx in over_row_indices:
+        style_cmds.append(("BACKGROUND", (0, row_idx), (-1, row_idx), over_color))
+    table.setStyle(TableStyle(style_cmds))
+    elems.append(table)
+
+    doc.build(elems)
+    return buf.getvalue()
+
+
 def _is_local_orders_source(orders_source_name: str) -> bool:
     return not orders_source_name.startswith("Supabase")
 
@@ -4994,13 +5154,71 @@ elif page == "📡 Job Capacity":
 
         st.dataframe(job_capacity_df, use_container_width=True, hide_index=True)
 
-        st.download_button(
+        # ── Visual: Approved cameras vs Active jobs per project ──────────────
+        chart_df = job_capacity_df[job_capacity_df["Active jobs"].notna()].copy()
+        if not chart_df.empty:
+            chart_df = chart_df.sort_values("Active jobs", ascending=False)
+            top_n = st.slider(
+                "Projects to chart (by active jobs)",
+                min_value=5,
+                max_value=int(min(60, max(5, len(chart_df)))),
+                value=int(min(25, len(chart_df))),
+                key="jobcap_chart_n",
+            )
+            plot_df = chart_df.head(top_n)
+            active_color = [
+                "#E74C3C" if status == "⚠️ Over capacity" else "#2ECC71"
+                for status in plot_df["Status"]
+            ]
+            fig_cap = go.Figure()
+            fig_cap.add_bar(
+                name="Approved cameras",
+                x=plot_df["Project"],
+                y=plot_df["Approved cameras"].fillna(0),
+                marker_color="#3498DB",
+            )
+            fig_cap.add_bar(
+                name="Active jobs",
+                x=plot_df["Project"],
+                y=plot_df["Active jobs"].fillna(0),
+                marker_color=active_color,
+            )
+            fig_cap.update_layout(
+                barmode="group",
+                height=max(420, top_n * 14),
+                xaxis_tickangle=-45,
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+                margin=dict(t=40, b=120),
+                title="Approved cameras vs Active jobs (red = over capacity)",
+            )
+            st.plotly_chart(fig_cap, use_container_width=True)
+
+        dl_cols = st.columns(2)
+        dl_cols[0].download_button(
             "⬇️ Download job capacity (CSV)",
             data=job_capacity_df.to_csv(index=False).encode("utf-8"),
             file_name="job_capacity.csv",
             mime="text/csv",
             key="jobcap_download",
         )
+
+        try:
+            pdf_bytes = _build_job_capacity_pdf(
+                job_capacity_df,
+                pcs_reporting=len(seen_machines),
+                projects_monitored=len(usage_by_project),
+                total_active=sum(b["active"] for b in usage_by_project.values()),
+                over_capacity=over_capacity_count,
+            )
+            dl_cols[1].download_button(
+                "📄 Download job capacity (PDF)",
+                data=pdf_bytes,
+                file_name=f"job_capacity_{datetime.date.today().isoformat()}.pdf",
+                mime="application/pdf",
+                key="jobcap_download_pdf",
+            )
+        except Exception as exc:  # noqa: BLE001
+            dl_cols[1].warning(f"PDF export unavailable ({exc}).")
     else:
         st.info("No job usage to display yet.")
 
