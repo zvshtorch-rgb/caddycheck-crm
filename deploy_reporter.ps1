@@ -215,7 +215,11 @@ def _count_jobs() -> tuple[int, int, str]:
     explicit_db = os.environ.get("SQL_DATABASE", "").strip()
     explicit_table = os.environ.get("SQL_TABLE", "").strip()
 
-    DRIVERS = ("ODBC Driver 17 for SQL Server", "ODBC Driver 18 for SQL Server")
+    DRIVERS = (
+        "ODBC Driver 17 for SQL Server",
+        "ODBC Driver 18 for SQL Server",
+        "SQL Server",          # Built-in MDAC driver, always present on Windows
+    )
 
     # (database, table, active_where, owner_col, id_col)
     SCHEMAS = [
