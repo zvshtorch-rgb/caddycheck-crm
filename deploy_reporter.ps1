@@ -1,4 +1,9 @@
-#Requires -RunAsAdministrator
+# Check for admin rights (PS 3.0 compatible - avoids #Requires -RunAsAdministrator)
+$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]"Administrator")
+if (-not $isAdmin) {
+    Write-Error "This script must be run as Administrator. Right-click PowerShell and select 'Run as Administrator'."
+    exit 1
+}
 <#
 .SYNOPSIS
     One-shot deployer for the CaddyCheck job reporter agent.
