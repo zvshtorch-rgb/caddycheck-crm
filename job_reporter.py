@@ -78,7 +78,7 @@ def _patch_dns_if_broken() -> None:
         return _orig(host, port, *args, **kwargs)
 
     socket.getaddrinfo = _patched
-    logger.info("DNS unavailable — using hardcoded IPs for Supabase endpoints.")
+    logger.info("DNS unavailable - using hardcoded IPs for Supabase endpoints.")
 
 
 def _lookup_project_name(machine_name: str) -> str | None:
