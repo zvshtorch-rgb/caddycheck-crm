@@ -2036,6 +2036,10 @@ def _build_job_capacity_pdf(
     def _fmt(value):
         if value is None or (isinstance(value, float) and pd.isna(value)):
             return ""
+        # pandas promotes int columns to float when NaNs are present, so
+        # whole-number floats (10.0) should display as integers (10).
+        if isinstance(value, float) and value.is_integer():
+            return str(int(value))
         return str(value)
 
     table_data = [[Paragraph(col, header_cell_style) for col in columns]]
