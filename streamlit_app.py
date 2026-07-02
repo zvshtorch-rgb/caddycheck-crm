@@ -5158,7 +5158,32 @@ elif page == "📡 Job Capacity":
             ["_sort", "Project"]
         ).drop(columns=["_sort"]).reset_index(drop=True)
 
+        # ── Filter by status ────────────────────────────────────────────────
+        status_labels = {
+            "⚠️ Over capacity": "⚠️ Over capacity",
+            "✅ OK": "✅ OK",
+            "❔ No order": "❔ No order",
+            "—": "➖ Not reporting",
+        }
+        present_statuses = [
+            s for s in status_labels if (job_capacity_df["Status"] == s).any()
+        ]
+        filter_choice = st.radio(
+            "Filter by status",
+            options=["All"] + present_statuses,
+            format_func=lambda s: "All" if s == "All" else status_labels.get(s, s),
+            horizontal=True,
+            key="jobcap_status_filter",
+        )
+        if filter_choice != "All":
+            job_capacity_df = job_capacity_df[
+                job_capacity_df["Status"] == filter_choice
+            ].reset_index(drop=True)
+
         st.dataframe(job_capacity_df, use_container_width=True, hide_index=True)
+
+        if job_capacity_df.empty:
+            st.info("No projects match the selected status filter.")
 
         # ── Visual: Approved cameras vs Active jobs per project ──────────────
         chart_df = job_capacity_df[job_capacity_df["Active jobs"].notna()].copy()
