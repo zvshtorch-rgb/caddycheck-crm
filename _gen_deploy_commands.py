@@ -25,6 +25,7 @@ for name in names:
         tls_fix + "; "
         + 'Invoke-WebRequest -Uri "' + url + '?nocache=$(Get-Random)"'
         + " -OutFile 'C:\\deploy.ps1' -UseBasicParsing;"
+        + " (Get-Content 'C:\\deploy.ps1') | Where-Object { $_ -notmatch '#Requires' } | Set-Content 'C:\\deploy.ps1';"
         + ' powershell -ExecutionPolicy Bypass -File \'C:\\deploy.ps1\' -ProjectName "' + name + '";'
         + " & 'C:\\CaddyCheck\\run_reporter.bat'"
     )
