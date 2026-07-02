@@ -16,10 +16,14 @@ names = sorted(set(r["project_name"].strip() for r in rows if r.get("project_nam
 
 url = "https://raw.githubusercontent.com/zvshtorch-rgb/caddycheck-crm/main/deploy_reporter.ps1"
 
+# Force TLS 1.2 so the download works on older Windows PCs (pre-2016)
+tls_fix = "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12"
+
 lines = []
 for name in names:
     cmd = (
-        'Invoke-WebRequest -Uri "' + url + '?nocache=$(Get-Random)"'
+        tls_fix + "; "
+        + 'Invoke-WebRequest -Uri "' + url + '?nocache=$(Get-Random)"'
         + " -OutFile 'C:\\deploy.ps1' -UseBasicParsing;"
         + ' powershell -ExecutionPolicy Bypass -File \'C:\\deploy.ps1\' -ProjectName "' + name + '";'
         + " & 'C:\\CaddyCheck\\run_reporter.bat'"
