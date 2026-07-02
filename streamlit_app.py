@@ -2042,17 +2042,34 @@ def _build_job_capacity_pdf(
             return str(int(value))
         return str(value)
 
+    # The status values carry emoji that have no glyph in the PDF font and
+    # render as black boxes, so map them to plain ASCII text for the report.
+    status_text = {
+        "⚠️ Over capacity": "Over capacity",
+        "✅ OK": "OK",
+        "❔ No order": "No order",
+        "—": "-",
+    }
+
+    def _cell_text(col, value):
+        if col == "Status":
+            return status_text.get(str(value), _fmt(value))
+        return _fmt(value)
+
     table_data = [[Paragraph(col, header_cell_style) for col in columns]]
     over_row_indices = []
     for _idx, record in enumerate(job_capacity_df.to_dict("records"), start=1):
-        table_data.append([Paragraph(_fmt(record.get(col)), cell_style) for col in source_columns])
+        table_data.append([
+            Paragraph(_cell_text(col, record.get(col)), cell_style)
+            for col in source_columns
+        ])
         if str(record.get("Status")) == "⚠️ Over capacity":
             over_row_indices.append(_idx)
 
     table = Table(
         table_data,
         repeatRows=1,
-        colWidths=[5.6 * cm, 1.6 * cm, 2.4 * cm, 1.9 * cm, 1.7 * cm,
+        colWidths=[5.2 * cm, 2.3 * cm, 2.4 * cm, 1.9 * cm, 1.7 * cm,
                    2.0 * cm, 2.9 * cm, 2.6 * cm, 4.0 * cm],
     )
     style_cmds = [
