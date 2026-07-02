@@ -286,17 +286,74 @@ def _report(active_jobs: int, total_jobs: int, owner: str) -> None:
         "Prefer": "resolution=merge-duplicates,return=representation",
     }
 
-    resp = requests.post(
-        f"{url}/rest/v1/project_job_status?on_conflict=machine_name",
-        json=payload,
-        headers=headers,
-        timeout=30,
-    )
-    resp.raise_for_status()
+    try:
+        resp = requests.post(
+            f"{url}/rest/v1/project_job_status?on_conflict=machine_name",
+            json=payload,
+            headers=headers,
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except requests.exceptions.ConnectionError as exc:
+        logger.warning("Direct connection failed (%s) - trying PowerShell fallback.", exc)
+        _report_via_powershell(payload, url, key)
+        return
     logger.info(
         "Reported %s: active=%d total=%d owner=%s",
         machine_name, active_jobs, total_jobs, owner or "(none)",
     )
+
+
+def _report_via_powershell(payload: dict, url: str, key: str) -> None:
+    """POST to Supabase using PowerShell Invoke-WebRequest.
+
+    Fallback for PCs where Python sockets cannot reach Cloudflare IPs but
+    PowerShell (WinINet stack) can. Credentials come from inherited env vars
+    so they never appear on the process command line.
+    """
+    import json
+    import subprocess
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", delete=False, encoding="utf-8"
+    ) as f:
+        json.dump(payload, f)
+        tmp = f.name
+
+    try:
+        safe_tmp = tmp.replace("'", "''")
+        endpoint = url + "/rest/v1/project_job_status?on_conflict=machine_name"
+        ps = (
+            "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;"
+            "$h=@{"
+            "apikey=\"$env:SUPABASE_KEY\";"
+            "Authorization=\"Bearer $env:SUPABASE_KEY\";"
+            "'Content-Type'='application/json';"
+            "Prefer='resolution=merge-duplicates,return=representation'"
+            "};"
+            "$body=Get-Content '" + safe_tmp + "' -Raw;"
+            "try{"
+            "Invoke-WebRequest -Method POST -Uri '" + endpoint + "'"
+            " -Body $body -Headers $h -UseBasicParsing | Out-Null;"
+            "exit 0"
+            "}catch{Write-Error $_;exit 1}"
+        )
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+            capture_output=True, text=True, timeout=60,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                "PowerShell HTTP fallback failed: "
+                + (result.stderr or result.stdout).strip()
+            )
+        logger.info("Reported via PowerShell fallback (WinINet).")
+    finally:
+        try:
+            os.unlink(tmp)
+        except Exception:
+            pass
 
 
 def main() -> int:
