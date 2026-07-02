@@ -49,7 +49,7 @@ MACHINES_CSV_URL = (
     "https://raw.githubusercontent.com/zvshtorch-rgb/caddycheck-crm/main/machines.csv"
 )
 
-# Cloudflare IPs for Supabase — used as DNS fallback on PCs with broken DNS.
+# Cloudflare IPs for Supabase - used as DNS fallback on PCs with broken DNS.
 _SUPABASE_FALLBACK_IPS = {
     "rdoxihpmghrvroddnkdi.supabase.co": "104.18.38.10",
 }
@@ -66,7 +66,7 @@ def _patch_dns_if_broken() -> None:
     for host, ip in _SUPABASE_FALLBACK_IPS.items():
         try:
             socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
-            return  # DNS works — no patch needed
+            return  # DNS works - no patch needed
         except socket.gaierror:
             pass
 
