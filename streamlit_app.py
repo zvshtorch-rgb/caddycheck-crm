@@ -1928,9 +1928,6 @@ def _build_job_capacity_pdf(
     from reportlab.lib.pagesizes import A4, landscape
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.units import cm
-    from reportlab.graphics.shapes import Drawing
-    from reportlab.graphics.charts.barcharts import VerticalBarChart
-    from reportlab.graphics.charts.legends import Legend
     from reportlab.platypus import (
         SimpleDocTemplate,
         Table,
@@ -1972,47 +1969,6 @@ def _build_job_capacity_pdf(
         styles["Normal"],
     ))
     elems.append(Spacer(1, 0.4 * cm))
-
-    # Native bar chart: top projects by active jobs
-    reported = job_capacity_df[job_capacity_df["Active jobs"].notna()].copy()
-    if not reported.empty:
-        reported = reported.sort_values("Active jobs", ascending=False).head(20)
-        approved_vals = [_num(v) for v in reported["Approved cameras"]]
-        active_vals = [_num(v) for v in reported["Active jobs"]]
-        labels = [str(p) for p in reported["Project"]]
-
-        drawing = Drawing(760, 230)
-        chart = VerticalBarChart()
-        chart.x = 30
-        chart.y = 60
-        chart.width = 700
-        chart.height = 150
-        chart.data = [approved_vals, active_vals]
-        chart.barSpacing = 1
-        chart.groupSpacing = 6
-        chart.valueAxis.valueMin = 0
-        chart.categoryAxis.categoryNames = labels
-        chart.categoryAxis.labels.boxAnchor = "ne"
-        chart.categoryAxis.labels.angle = 45
-        chart.categoryAxis.labels.dx = -4
-        chart.categoryAxis.labels.dy = -2
-        chart.categoryAxis.labels.fontSize = 6
-        chart.bars[0].fillColor = rl_colors.HexColor("#3498DB")
-        chart.bars[1].fillColor = rl_colors.HexColor("#2ECC71")
-        drawing.add(chart)
-
-        legend = Legend()
-        legend.x = 620
-        legend.y = 222
-        legend.fontSize = 7
-        legend.alignment = "right"
-        legend.colorNamePairs = [
-            (rl_colors.HexColor("#3498DB"), "Approved cameras"),
-            (rl_colors.HexColor("#2ECC71"), "Active jobs"),
-        ]
-        drawing.add(legend)
-        elems.append(drawing)
-        elems.append(Spacer(1, 0.3 * cm))
 
     # Color-coded table
     columns = [
