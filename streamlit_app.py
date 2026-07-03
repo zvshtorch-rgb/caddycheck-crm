@@ -4643,6 +4643,8 @@ elif page == "📷 Camera Audit":
             [
                 "All",
                 "Δ Ordered != 0",
+                "Δ Ordered > 0 (under-ordered)",
+                "Δ Ordered < 0 (over-ordered)",
                 "Δ Invoiced != 0",
                 "Any delta != 0",
                 "Order ID Count > 1",
@@ -4685,6 +4687,10 @@ elif page == "📷 Camera Audit":
         filtered = filtered[filtered["Ordered"].isna()]
     elif audit_view == "Δ Ordered != 0":
         filtered = filtered[(filtered["Δ Ordered"].notna()) & (filtered["Δ Ordered"] != 0)]
+    elif audit_view == "Δ Ordered > 0 (under-ordered)":
+        filtered = filtered[(filtered["Δ Ordered"].notna()) & (filtered["Δ Ordered"] > 0)]
+    elif audit_view == "Δ Ordered < 0 (over-ordered)":
+        filtered = filtered[(filtered["Δ Ordered"].notna()) & (filtered["Δ Ordered"] < 0)]
     elif audit_view == "Δ Invoiced != 0":
         filtered = filtered[(filtered["Δ Invoiced"].notna()) & (filtered["Δ Invoiced"] != 0)]
     elif audit_view == "Any delta != 0":
