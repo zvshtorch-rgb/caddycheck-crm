@@ -4730,13 +4730,25 @@ elif page == "📷 Camera Audit":
             key=lambda value: (_safe_int(value, default=-1), value),
             reverse=True,
         )
+        # Build a map of invoice_ref -> maintenance_year label for this project
+        inv_year_by_ref: dict[str, str] = {}
+        for inv in invoices:
+            inv_key = _normalize_project_name_key(canonical_project_name(inv.project_name))
+            if inv_key != key:
+                continue
+            inv_ref = _safe_str(getattr(inv, "invoice_number", "")).strip()
+            if inv_ref.endswith(".0"):
+                inv_ref = inv_ref[:-2]
+            if inv_ref:
+                inv_year_by_ref[inv_ref] = _safe_str(getattr(inv, "maintenance_year", "")).strip()
+
         invoice_refs_with_cams = []
         for invoice_ref in unique_invoice_refs:
             ref_cams = invoice_cameras_by_project_ref.get((key, _safe_int(invoice_ref, default=0)))
-            if ref_cams:
-                invoice_refs_with_cams.append(f"{invoice_ref} ({ref_cams})")
-            else:
-                invoice_refs_with_cams.append(invoice_ref)
+            year_label = inv_year_by_ref.get(invoice_ref, "")
+            label_str = f"-{year_label}" if year_label else ""
+            cams_str = f" ({ref_cams})" if ref_cams else ""
+            invoice_refs_with_cams.append(f"{invoice_ref}{label_str}{cams_str}")
         rows.append({
             "Project": name,
             "Network": _project_network(name),
@@ -4805,12 +4817,6 @@ elif page == "📷 Camera Audit":
         )
     with fc6:
         order_search = st.text_input("Search project", key="camaudit_search").strip().lower()
-    hide_approved = st.checkbox(
-        "Hide approved discrepancies",
-        value=True,
-        key="camaudit_hide_approved",
-        help="Approved rows are accepted exceptions and are hidden from the mismatch list while this is checked.",
-    )
 
     filtered = audit_df.copy()
     if sel_net != "All":
@@ -4838,8 +4844,6 @@ elif page == "📷 Camera Audit":
         ]
     elif audit_view == "Order ID Count > 1":
         filtered = filtered[filtered["Order ID Count"] > 1]
-    if hide_approved and "Approved" in filtered.columns:
-        filtered = filtered[~filtered["Approved"].map(_safe_bool)]
 
     sort_helper_columns = [
         "_sort_delta_ordered",
@@ -4890,7 +4894,6 @@ elif page == "📷 Camera Audit":
     order_mismatches = int(((filtered["Δ Ordered"].notna()) & (filtered["Δ Ordered"] != 0)).sum())
     invoice_mismatches = int(((filtered["Δ Invoiced"].notna()) & (filtered["Δ Invoiced"] != 0)).sum())
     no_orders = int(filtered["Ordered"].isna().sum())
-    approved_hidden = int(audit_df["Approved"].map(_safe_bool).sum()) if hide_approved and "Approved" in audit_df.columns else 0
 
     m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("Working Cams", total_working)
@@ -4900,8 +4903,6 @@ elif page == "📷 Camera Audit":
     m5.metric("Invoice Mismatches", invoice_mismatches)
     if no_orders:
         st.caption(f"⚠️ {no_orders} project(s) have no order data yet (still being uploaded).")
-    if approved_hidden:
-        st.caption(f"{approved_hidden} approved discrepancy row(s) are hidden. Clear Hide approved discrepancies to review them.")
 
     # ── Highlighted table ─────────────────────────────────────────────────────
     camera_audit_display_df = filtered.drop(columns=["Order ID Count", "Invoice Ref Count"] + sort_helper_columns, errors="ignore").copy()
