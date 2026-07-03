@@ -4816,59 +4816,6 @@ elif page == "📷 Camera Audit":
         },
     )
 
-    if CAN_EDIT:
-        st.caption("Approve accepted discrepancies or edit remarks below, then click Save Audit Settings. Approved rows can be hidden from the mismatch list.")
-        remarks_editor_df = camera_audit_display_df[
-            camera_audit_display_df["Project"] != "TOTAL / SUMMARY"
-        ][["Project", "Approved", "Remarks"]].reset_index(drop=True)
-        editable_audit_df = st.data_editor(
-            remarks_editor_df,
-            use_container_width=True,
-            hide_index=True,
-            disabled=["Project"],
-            column_config={
-                "Project": st.column_config.TextColumn("Project", width="medium"),
-                "Approved": st.column_config.CheckboxColumn("Approved"),
-                "Remarks": st.column_config.TextColumn("Remarks", width="large"),
-            },
-            key="camera_audit_remarks_editor",
-        )
-        if st.button("💾 Save Audit Settings", key="save_camera_audit_remarks"):
-            original_settings = {
-                _safe_str(row.get("Project", "")).strip(): {
-                    "remarks": _safe_str(row.get("Remarks", "")).strip(),
-                    "approved": _safe_bool(row.get("Approved", False)),
-                }
-                for _, row in remarks_editor_df.iterrows()
-                if _safe_str(row.get("Project", "")).strip()
-            }
-            changed_settings = {}
-            for _, row in editable_audit_df.iterrows():
-                project_name = _safe_str(row.get("Project", "")).strip()
-                if not project_name:
-                    continue
-                new_remarks = _safe_str(row.get("Remarks", "")).strip()
-                new_approved = _safe_bool(row.get("Approved", False))
-                original = original_settings.get(project_name, {"remarks": "", "approved": False})
-                if new_remarks != original["remarks"] or new_approved != original["approved"]:
-                    changed_settings[project_name] = {
-                        "remarks": new_remarks,
-                        "approved": new_approved,
-                    }
-
-            if not changed_settings:
-                st.info("No audit setting changes to save.")
-            else:
-                try:
-                    _save_camera_audit_settings(changed_settings, _data_path)
-                    load_data.clear()
-                    st.session_state.pop("camera_audit_remarks_editor", None)
-                    st.session_state["_flash_success"] = f"Saved audit settings for {len(changed_settings)} project(s)."
-                    st.session_state["_flash_success_page"] = "📷 Camera Audit"
-                    st.rerun()
-                except Exception as exc:
-                    st.error(f"Failed to save audit settings: {exc}")
-
     st.download_button(
         "⬇️ Download comparison (CSV)",
         data=camera_audit_display_df.to_csv(index=False).encode("utf-8"),
