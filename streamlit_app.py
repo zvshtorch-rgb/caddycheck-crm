@@ -1908,6 +1908,144 @@ def _aggregate_ordered_cameras_by_project(
     return ordered_by_project, has_order_for_project
 
 
+def _build_camera_audit_pdf(
+    audit_df: "pd.DataFrame",
+    *,
+    working: int,
+    ordered: int,
+    invoiced: int,
+    order_mismatches: int,
+    invoice_mismatches: int,
+) -> bytes:
+    """Render the Camera Audit comparison table as a landscape PDF."""
+    from io import BytesIO
+    from reportlab.lib import colors as rl_colors
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import cm
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+
+    header_color = rl_colors.HexColor("#1B3A6B")
+    mismatch_color = rl_colors.HexColor("#FDECEA")
+    summary_color = rl_colors.HexColor("#F6F8FA")
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=landscape(A4),
+        leftMargin=1.0 * cm, rightMargin=1.0 * cm,
+        topMargin=1.2 * cm, bottomMargin=1.2 * cm,
+    )
+    styles = getSampleStyleSheet()
+    elems = []
+
+    elems.append(Paragraph("<b>CaddyCheck CRM - Camera Audit Comparison</b>", styles["Title"]))
+    elems.append(Paragraph(
+        f"Generated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        f"  |  Working: {working}"
+        f"  |  Ordered: {ordered}"
+        f"  |  Invoiced: {invoiced}"
+        f"  |  Order mismatches: {order_mismatches}"
+        f"  |  Invoice mismatches: {invoice_mismatches}",
+        styles["Normal"],
+    ))
+    elems.append(Spacer(1, 0.4 * cm))
+
+    cell_style = ParagraphStyle("cell", parent=styles["Normal"], fontSize=6.5, leading=8)
+    hdr_style = ParagraphStyle(
+        "hcell", parent=styles["Normal"], fontSize=6.5, leading=8,
+        textColor=rl_colors.white, fontName="Helvetica-Bold",
+    )
+
+    columns = ["Project", "Network", "Country", "Status",
+               "Working", "Ordered", "Invoiced", "D Ordered", "D Invoiced",
+               "Order Refs", "Invoice Refs"]
+    source_cols = ["Project", "Network", "Country", "Status",
+                   "# Cams (working)", "Ordered", "Invoiced (max)",
+                   "Delta Ordered", "Delta Invoiced",
+                   "Order Refs", "Invoice Refs"]
+
+    def _fmt(val):
+        if val is None or (isinstance(val, float) and pd.isna(val)):
+            return ""
+        if isinstance(val, float) and val.is_integer():
+            return str(int(val))
+        return str(val)
+
+    def _fmt_delta(val):
+        if val is None or (isinstance(val, float) and pd.isna(val)):
+            return ""
+        try:
+            n = int(val)
+            return f"+{n}" if n > 0 else str(n)
+        except (TypeError, ValueError):
+            return str(val)
+
+    # Build a working copy with plain delta columns
+    df = audit_df.copy()
+    df["Delta Ordered"] = df["Delta Ordered"] if "Delta Ordered" in df.columns else df.get("\u0394 Ordered")
+    df["Delta Invoiced"] = df["Delta Invoiced"] if "Delta Invoiced" in df.columns else df.get("\u0394 Invoiced")
+    # Rename Unicode columns to plain keys
+    if "\u0394 Ordered" in df.columns:
+        df["Delta Ordered"] = df["\u0394 Ordered"]
+    if "\u0394 Invoiced" in df.columns:
+        df["Delta Invoiced"] = df["\u0394 Invoiced"]
+
+    table_data = [[Paragraph(col, hdr_style) for col in columns]]
+    mismatch_rows = []
+    summary_rows = []
+
+    for idx, record in enumerate(df.to_dict("records"), start=1):
+        project = str(record.get("Project", ""))
+        is_summary = project == "TOTAL / SUMMARY"
+        style = hdr_style if is_summary else cell_style
+
+        d_ordered = record.get("Delta Ordered", record.get("\u0394 Ordered"))
+        d_invoiced = record.get("Delta Invoiced", record.get("\u0394 Invoiced"))
+        row = [
+            Paragraph(_fmt(record.get("Project")), style),
+            Paragraph(_fmt(record.get("Network")), style),
+            Paragraph(_fmt(record.get("Country")), style),
+            Paragraph(_fmt(record.get("Status")), style),
+            Paragraph(_fmt(record.get("# Cams (working)")), style),
+            Paragraph(_fmt(record.get("Ordered")), style),
+            Paragraph(_fmt(record.get("Invoiced (max)")), style),
+            Paragraph(_fmt_delta(d_ordered), style),
+            Paragraph(_fmt_delta(d_invoiced), style),
+            Paragraph(_fmt(record.get("Order Refs")), style),
+            Paragraph(_fmt(record.get("Invoice Refs")), style),
+        ]
+        table_data.append(row)
+        if is_summary:
+            summary_rows.append(idx)
+        elif (d_ordered is not None and not (isinstance(d_ordered, float) and pd.isna(d_ordered)) and int(d_ordered or 0) != 0) or \
+             (d_invoiced is not None and not (isinstance(d_invoiced, float) and pd.isna(d_invoiced)) and int(d_invoiced or 0) != 0):
+            mismatch_rows.append(idx)
+
+    col_widths = [4.8*cm, 1.8*cm, 1.5*cm, 1.6*cm,
+                  1.5*cm, 1.5*cm, 1.6*cm, 1.8*cm, 1.8*cm,
+                  5.5*cm, 5.5*cm]
+    table = Table(table_data, repeatRows=1, colWidths=col_widths)
+    cmds = [
+        ("BACKGROUND", (0, 0), (-1, 0), header_color),
+        ("FONTSIZE", (0, 0), (-1, -1), 6.5),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [rl_colors.white, rl_colors.HexColor("#EBF5FB")]),
+        ("GRID", (0, 0), (-1, -1), 0.3, rl_colors.HexColor("#BDC3C7")),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+    ]
+    for r in mismatch_rows:
+        cmds.append(("BACKGROUND", (0, r), (-1, r), mismatch_color))
+    for r in summary_rows:
+        cmds.append(("BACKGROUND", (0, r), (-1, r), summary_color))
+        cmds.append(("FONTNAME", (0, r), (-1, r), "Helvetica-Bold"))
+    table.setStyle(TableStyle(cmds))
+    elems.append(table)
+    doc.build(elems)
+    return buf.getvalue()
+
+
 def _build_job_capacity_pdf(
     job_capacity_df: "pd.DataFrame",
     *,
@@ -4816,13 +4954,32 @@ elif page == "📷 Camera Audit":
         },
     )
 
-    st.download_button(
+    dl_cols = st.columns(2)
+    dl_cols[0].download_button(
         "⬇️ Download comparison (CSV)",
         data=camera_audit_display_df.to_csv(index=False).encode("utf-8"),
         file_name="camera_audit.csv",
         mime="text/csv",
         key="camaudit_download",
     )
+    try:
+        audit_pdf_bytes = _build_camera_audit_pdf(
+            camera_audit_display_df,
+            working=total_working,
+            ordered=total_ordered,
+            invoiced=total_invoiced,
+            order_mismatches=order_mismatches,
+            invoice_mismatches=invoice_mismatches,
+        )
+        dl_cols[1].download_button(
+            "📄 Download comparison (PDF)",
+            data=audit_pdf_bytes,
+            file_name=f"camera_audit_{datetime.date.today().isoformat()}.pdf",
+            mime="application/pdf",
+            key="camaudit_download_pdf",
+        )
+    except Exception as _exc:
+        dl_cols[1].warning(f"PDF export unavailable ({_exc}).")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
