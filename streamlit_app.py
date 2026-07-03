@@ -4764,8 +4764,6 @@ elif page == "📷 Camera Audit":
             "Order IDs": ", ".join(unique_order_ids),
             "Order Refs": ", ".join(unique_order_numbers),
             "Invoice Refs": ", ".join(invoice_refs_with_cams),
-            "Approved": _safe_bool(getattr(project, "camera_audit_approved", False)),
-            "Remarks": _safe_str(getattr(project, "camera_audit_remarks", "")).strip(),
         })
 
     if not rows:
@@ -4905,7 +4903,7 @@ elif page == "📷 Camera Audit":
         st.caption(f"⚠️ {no_orders} project(s) have no order data yet (still being uploaded).")
 
     # ── Highlighted table ─────────────────────────────────────────────────────
-    camera_audit_display_df = filtered.drop(columns=["Order ID Count", "Invoice Ref Count"] + sort_helper_columns, errors="ignore").copy()
+    camera_audit_display_df = filtered.drop(columns=["Order ID Count", "Invoice Ref Count", "Approved", "Remarks"] + sort_helper_columns, errors="ignore").copy()
     summary_row = {column_name: "" for column_name in camera_audit_display_df.columns}
     summary_row.update({
         "Project": "TOTAL / SUMMARY",
@@ -4950,8 +4948,6 @@ elif page == "📷 Camera Audit":
         column_config={
             "Order Refs": st.column_config.TextColumn("Order Refs", width="large"),
             "Invoice Refs": st.column_config.TextColumn("Invoice Refs", width="large"),
-            "Approved": st.column_config.CheckboxColumn("Approved"),
-            "Remarks": st.column_config.TextColumn("Remarks", width="large"),
         },
     )
 
