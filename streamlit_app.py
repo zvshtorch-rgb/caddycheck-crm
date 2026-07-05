@@ -474,10 +474,10 @@ def _get_users() -> dict:
 
 
 def _verify_totp(totp_secret: str, code: str) -> bool:
-    """Verify a 6-digit TOTP code; allows ±1 time-step window."""
+    """Verify a 6-digit TOTP code; allows ±2 time-step window (~60 s)."""
     import pyotp
     totp = pyotp.TOTP(totp_secret)
-    return totp.verify(str(code).strip(), valid_window=1)
+    return totp.verify(str(code).strip(), valid_window=2)
 
 
 def _login_form() -> None:
@@ -508,19 +508,22 @@ def _login_form() -> None:
                 "**Setup mode is active.** After every user has scanned their QR code, "
                 "set `totp_setup.enabled = false` in Streamlit secrets to hide this section."
             )
+            st.info(
+                "**Correct order:** (1) Generate a secret with "
+                "`py -c \"import pyotp; print(pyotp.random_base32())\"`  "
+                "(2) Add it to `[users.username]` in Streamlit secrets as `totp_secret = \"...\"` "
+                "(3) Reload this page and scan the QR below. "
+                "Do **not** scan until the secret is saved in secrets."
+            )
             for uname, udata in users.items():
                 secret = udata.get("totp_secret", "")
-                gen_key = f"_totp_gen_{uname}"
 
                 if not secret:
-                    if gen_key not in st.session_state:
-                        st.session_state[gen_key] = pyotp.random_base32()
-                    secret = st.session_state[gen_key]
                     st.error(
-                        f"**{udata['display']}** has no `totp_secret` in secrets. "
-                        f"Add this line under `[users.{uname}]`:  \n"
-                        f"`totp_secret = \"{secret}\"`"
+                        f"**{udata['display']}** — no `totp_secret` in secrets yet. "
+                        f"Generate one and add `totp_secret = \"...\"` under `[users.{uname}]`, then reload."
                     )
+                    continue
 
                 uri = pyotp.TOTP(secret).provisioning_uri(
                     name=udata["display"], issuer_name="CaddyCheck CRM"
