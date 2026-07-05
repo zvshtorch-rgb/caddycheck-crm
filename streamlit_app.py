@@ -4101,6 +4101,21 @@ elif page == "📦 Orders":
     ]
     install_year_options = [""] + [str(year) for year in range(2030, 2013, -1)]
 
+    # Pre-compute fuzzy-match suggestions for every unique order project name
+    # upfront, so building the table and computing metrics doesn't run
+    # O(orders × projects) SequenceMatcher calls on every render.
+    _unique_order_project_names = {
+        _safe_str(o.get("project_name")).strip() for o in orders
+    }
+    _order_match_cache: dict[str, tuple[str, float]] = {
+        _pname: _suggest_best_order_project_match(_pname, project_name_choices)
+        for _pname in _unique_order_project_names
+    }
+
+    def _cached_match(order_project_name) -> tuple[str, float]:
+        key = _safe_str(order_project_name).strip()
+        return _order_match_cache.get(key, ("", 0.0))
+
     order_ref_keys = {
         _safe_str(order.get("order_number")).strip() or f"row:{_safe_int(order.get('id'), default=0)}"
         for order in orders
@@ -4112,7 +4127,7 @@ elif page == "📦 Orders":
     }
     missing_project_orders = [
         order for order in orders
-        if not _order_project_matches(order.get("project_name"), project_name_choices)
+        if _cached_match(order.get("project_name"))[1] < 0.55
     ]
     total_ordered_cameras = sum(_safe_int(order.get("ordered_cameras"), default=0) for order in orders)
 
@@ -4590,7 +4605,7 @@ elif page == "📦 Orders":
                 "Order ID": _safe_int(order.get("id"), default=0) or "",
                 "Order": _safe_str(order.get("order_number")),
                 "Project": _safe_str(order.get("project_name")),
-                "Suggested Match": _suggest_best_order_project_match(order.get("project_name"), project_name_choices)[0],
+                "Suggested Match": _cached_match(order.get("project_name"))[0],
                 "Country": _order_country_label(order.get("country")),
                 "Ordered Cams": _safe_int(order.get("ordered_cameras"), default=0),
                 "Payment Amount": _safe_float(order.get("payment_amount"), default=0.0),
@@ -4598,7 +4613,7 @@ elif page == "📦 Orders":
                 "Order Date": (_parse_order_date(order.get("order_date")) or ""),
                 "Requested Activation": (_parse_order_date(order.get("requested_activation_date")) or ""),
                 "Status": _normalize_order_status(order.get("status", "")),
-                "Project Exists": "Yes" if _order_project_matches(order.get("project_name"), project_name_choices) else "No",
+                "Project Exists": "Yes" if _cached_match(order.get("project_name"))[1] >= 0.55 else "No",
                 "Source PDF": _get_order_pdf_link(order),
             }
             for order in filtered_orders
