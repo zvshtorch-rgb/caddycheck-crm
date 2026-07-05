@@ -3702,10 +3702,11 @@ elif page == "🏗️ Projects":
         else:
             df_edit = df.reset_index(drop=True)
 
+        _proj_edit_rows = max(len(df_edit), 1)
         edited_df = st.data_editor(
             df_edit,
             use_container_width=True,
-            height=600,
+            height=min(600, 58 + 35 * _proj_edit_rows),
             num_rows="dynamic",
             column_config={
                 "_original_project_name": None,
@@ -4053,10 +4054,11 @@ elif page == "🏗️ Projects":
         else:
             st.info("No project changes are logged yet.")
     else:
+        _proj_view_rows = max(len(df), 1)
         st.dataframe(
             df.style.map(color_status, subset=["Status"]) if "Status" in df.columns and len(df) > 0 else df,
             use_container_width=True,
-            height=600,
+            height=min(600, 58 + 35 * _proj_view_rows),
         )
         _render_projects_bottom_summary(df)
 
