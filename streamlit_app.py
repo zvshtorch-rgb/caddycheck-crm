@@ -5163,7 +5163,7 @@ elif page == "📡 Job Capacity":
                 key="jobcap_chart_n",
             )
             plot_df = chart_df.head(top_n)
-            projects = plot_df["Project"].tolist()
+            chart_projects = plot_df["Project"].tolist()
             approved = plot_df["Approved cameras"].fillna(0).tolist()
             active = plot_df["Active jobs"].fillna(0).tolist()
             is_over = [s == "⚠️ Over capacity" for s in plot_df["Status"]]
@@ -5174,7 +5174,7 @@ elif page == "📡 Job Capacity":
             fig_cap = go.Figure()
             fig_cap.add_bar(
                 name="Approved cameras",
-                x=projects,
+                x=chart_projects,
                 y=approved,
                 marker_color="#3498DB",
                 offsetgroup="approved",
@@ -5182,7 +5182,7 @@ elif page == "📡 Job Capacity":
             )
             fig_cap.add_bar(
                 name="Active jobs (OK)",
-                x=projects,
+                x=chart_projects,
                 y=active_ok,
                 marker_color="#2ECC71",
                 offsetgroup="active",
@@ -5190,7 +5190,7 @@ elif page == "📡 Job Capacity":
             )
             fig_cap.add_bar(
                 name="Active jobs (over capacity)",
-                x=projects,
+                x=chart_projects,
                 y=active_over,
                 marker_color="#E74C3C",
                 offsetgroup="active",
