@@ -2159,6 +2159,174 @@ def _build_camera_audit_pdf(
     return buf.getvalue()
 
 
+def _build_trends_pdf(
+    *,
+    title: str,
+    x_label: str,
+    y_label: str,
+    rows: "list[tuple[str, float]]",
+    moving_avg: "list[float] | None" = None,
+    is_currency: bool = False,
+    currency_symbol: str = "",
+) -> bytes:
+    """Render a Trends chart + data table into a styled PDF report.
+
+    ``rows`` is a list of ``(period_label, value)`` pairs. When ``moving_avg``
+    is provided (same length as ``rows``) an extra column is added and a line
+    is overlaid on the native bar chart.
+    """
+    from io import BytesIO
+
+    from reportlab.lib import colors as rl_colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import cm
+    from reportlab.graphics.shapes import Drawing, String
+    from reportlab.graphics.charts.barcharts import VerticalBarChart
+    from reportlab.graphics.charts.lineplots import LinePlot
+    from reportlab.platypus import (
+        SimpleDocTemplate,
+        Table,
+        TableStyle,
+        Paragraph,
+        Spacer,
+    )
+
+    header_color = rl_colors.HexColor("#1B3A6B")
+    bar_color = rl_colors.HexColor("#2980B9")
+    avg_color = rl_colors.HexColor("#E67E22")
+
+    def _fmt_value(value):
+        try:
+            num = float(value)
+        except (TypeError, ValueError):
+            return str(value)
+        if is_currency:
+            return f"{currency_symbol}{num:,.0f}"
+        if num.is_integer():
+            return f"{int(num):,}"
+        return f"{num:,.2f}"
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=A4,
+        leftMargin=1.5 * cm,
+        rightMargin=1.5 * cm,
+        topMargin=1.5 * cm,
+        bottomMargin=1.5 * cm,
+    )
+    styles = getSampleStyleSheet()
+    elems = []
+
+    elems.append(Paragraph("<b>CaddyCheck CRM - Trends</b>", styles["Title"]))
+    elems.append(Paragraph(title, styles["Heading2"]))
+    elems.append(Paragraph(
+        f"Generated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}",
+        styles["Normal"],
+    ))
+    elems.append(Spacer(1, 0.4 * cm))
+
+    labels = [str(r[0]) for r in rows]
+    values = [float(r[1]) if r[1] is not None else 0.0 for r in rows]
+
+    # Native bar chart (with optional moving-average line overlay).
+    if values:
+        chart_w = 17.5 * cm
+        chart_h = 8.5 * cm
+        drawing = Drawing(chart_w, chart_h)
+
+        bc = VerticalBarChart()
+        bc.x = 1.4 * cm
+        bc.y = 1.6 * cm
+        bc.width = chart_w - 2.2 * cm
+        bc.height = chart_h - 2.6 * cm
+        bc.data = [values]
+        bc.bars[0].fillColor = bar_color
+        bc.barWidth = 6
+        bc.groupSpacing = 4
+        bc.valueAxis.valueMin = min(0, min(values))
+        bc.valueAxis.valueMax = max(values) * 1.1 if max(values) > 0 else 1
+        bc.categoryAxis.categoryNames = labels
+        bc.categoryAxis.labels.boxAnchor = "ne"
+        bc.categoryAxis.labels.angle = 45 if len(labels) > 8 else 0
+        bc.categoryAxis.labels.dx = -3
+        bc.categoryAxis.labels.dy = -2
+        bc.categoryAxis.labels.fontSize = 6
+        bc.valueAxis.labels.fontSize = 6
+        drawing.add(bc)
+
+        if moving_avg and len(moving_avg) == len(values):
+            # Overlay the moving average as a line aligned to the bar centers.
+            n = len(values)
+            step = bc.width / n
+            pts = [
+                (bc.x + step * (i + 0.5), bc.y)
+                for i in range(n)
+            ]
+            vmin = bc.valueAxis.valueMin
+            vmax = bc.valueAxis.valueMax
+            span = (vmax - vmin) or 1
+            line_pts = [
+                (bc.x + step * (i + 0.5),
+                 bc.y + (float(moving_avg[i]) - vmin) / span * bc.height)
+                for i in range(n)
+            ]
+            lp = LinePlot()
+            lp.x = 0
+            lp.y = 0
+            lp.width = chart_w
+            lp.height = chart_h
+            lp.data = [line_pts]
+            lp.lines[0].strokeColor = avg_color
+            lp.lines[0].strokeWidth = 2
+            lp.xValueAxis.visible = False
+            lp.yValueAxis.visible = False
+            lp.xValueAxis.valueMin = 0
+            lp.xValueAxis.valueMax = chart_w
+            lp.yValueAxis.valueMin = 0
+            lp.yValueAxis.valueMax = chart_h
+            drawing.add(lp)
+
+        elems.append(drawing)
+        elems.append(Spacer(1, 0.4 * cm))
+
+    # Data table
+    cell_style = ParagraphStyle("cell", parent=styles["Normal"], fontSize=8, leading=10)
+    header_cell_style = ParagraphStyle(
+        "hcell", parent=styles["Normal"], fontSize=8, leading=10,
+        textColor=rl_colors.white, fontName="Helvetica-Bold",
+    )
+
+    has_avg = bool(moving_avg and len(moving_avg) == len(values))
+    header = [x_label, y_label]
+    if has_avg:
+        header.append("3M Moving Avg")
+    table_data = [[Paragraph(h, header_cell_style) for h in header]]
+    for i, (lbl, val) in enumerate(zip(labels, values)):
+        row_cells = [Paragraph(lbl, cell_style), Paragraph(_fmt_value(val), cell_style)]
+        if has_avg:
+            row_cells.append(Paragraph(_fmt_value(moving_avg[i]), cell_style))
+        table_data.append(row_cells)
+
+    col_widths = [6 * cm, 5 * cm] + ([5 * cm] if has_avg else [])
+    table = Table(table_data, repeatRows=1, colWidths=col_widths)
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), header_color),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1),
+         [rl_colors.white, rl_colors.HexColor("#EBF5FB")]),
+        ("GRID", (0, 0), (-1, -1), 0.4, rl_colors.HexColor("#BDC3C7")),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+    ]))
+    elems.append(table)
+
+    doc.build(elems)
+    return buf.getvalue()
+
+
 def _build_job_capacity_pdf(
     job_capacity_df: "pd.DataFrame",
     *,
@@ -2889,6 +3057,46 @@ if page == "📊 Dashboard":
     )
     if metric in ("Income (Paid)", "Income (All)"):
         st.caption("Blue bars show real payments. Orange line shows the 3M moving average.")
+
+    # ── Export Trends as PDF ──
+    if resolution == "Yearly":
+        _trend_rows = list(zip(labels, values))
+        _trend_avg = None
+        _trend_period_label = "Year"
+        _trend_title = f"{metric} — Yearly ({from_yr}–{to_yr})"
+    elif metric in ("Income (Paid)", "Income (All)"):
+        _trend_rows = list(zip(df_line["month_label"].tolist(), df_line["value"].tolist()))
+        _trend_avg = df_line["moving_average"].tolist()
+        _trend_period_label = "Month"
+        _trend_title = f"{metric} — Monthly ({monthly_year})"
+    else:
+        _trend_rows = [
+            (d.strftime("%b %Y"), v)
+            for d, v in zip(df_line["date"].tolist(), df_line["value"].tolist())
+        ]
+        _trend_avg = None
+        _trend_period_label = "Month"
+        _trend_title = f"{metric} — Monthly ({monthly_year})"
+
+    try:
+        _trend_pdf = _build_trends_pdf(
+            title=_trend_title,
+            x_label=_trend_period_label,
+            y_label=y_label,
+            rows=_trend_rows,
+            moving_avg=_trend_avg,
+            is_currency=is_income,
+            currency_symbol=(money_symbol if dashboard_currency == "EUR" else "ILS "),
+        )
+        st.download_button(
+            "⬇️ Download Trends PDF",
+            data=_trend_pdf,
+            file_name=f"caddycheck_trends_{metric.lower().replace(' ', '_').replace('(', '').replace(')', '')}.pdf",
+            mime="application/pdf",
+            key="trends_download_pdf",
+        )
+    except Exception as _trend_pdf_err:  # pragma: no cover - defensive
+        st.caption(f"Trends PDF export unavailable: {_trend_pdf_err}")
 
     # ── Project configuration breakdown (Detection types & VIM versions) ──
     st.markdown("---")
