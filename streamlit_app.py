@@ -5249,6 +5249,152 @@ elif page == "📡 Job Capacity":
             )
         except Exception as exc:  # noqa: BLE001
             dl_cols[1].warning(f"PDF export unavailable ({exc}).")
+
+        # ── Generate one invoice PDF per over-capacity project ───────────────
+        if CAN_EDIT and over_capacity_count:
+            from dataclasses import replace as _dc_replace
+
+            st.markdown("---")
+            st.subheader("🧾 Invoice Over-Capacity Projects")
+            st.caption(
+                "For each project running more active jobs than approved/ordered cameras, "
+                "generate one PDF invoice billing the extra cameras "
+                "(Δ = active jobs − approved). The unit price follows the project's current "
+                "maintenance year: €778 in Year 1, €228 in Year 2+."
+            )
+
+            project_by_name = {
+                _safe_str(p.project_name).strip(): p for p in projects
+            }
+            over_rows = [
+                r for r in rows if r.get("Status") == "⚠️ Over capacity"
+            ]
+
+            oc1, oc2, oc3 = st.columns([2, 1, 1])
+            oc_month = oc1.selectbox(
+                "Invoice Month",
+                MONTH_ORDER,
+                index=datetime.date.today().month - 1,
+                key="overcap_month",
+            )
+            oc_year = oc2.number_input(
+                "Invoice Year",
+                min_value=2015,
+                max_value=2035,
+                value=datetime.date.today().year,
+                step=1,
+                key="overcap_year",
+            )
+            try:
+                _default_inv_no = _get_next_invoice_number(invoices, _data_path)
+            except Exception:
+                _default_inv_no = 1
+            oc_start_no = oc3.number_input(
+                "First Invoice Number",
+                min_value=1,
+                value=int(_default_inv_no),
+                step=1,
+                key="overcap_start_no",
+                help="Invoices are numbered sequentially from this value, one per project.",
+            )
+
+            preview_rows = []
+            billable = []  # (billed_project, invoice_number, summary_dict)
+            next_no = int(oc_start_no)
+            for r in sorted(over_rows, key=lambda x: _safe_str(x.get("Project"))):
+                name = _safe_str(r.get("Project")).strip()
+                base_project = project_by_name.get(name)
+                if base_project is None:
+                    continue
+                approved = _safe_int(r.get("Approved cameras"), default=0)
+                active = _safe_int(r.get("Active jobs"), default=0)
+                delta = active - approved
+                if delta <= 0:
+                    continue
+                rate = base_project.get_rate(int(oc_year))
+                label = base_project.get_maintenance_year_label(int(oc_year))
+                total = delta * rate
+                filename = f"CC_M-inv_{next_no}_{oc_month[:3]}_{int(oc_year)}.pdf"
+                billed_project = _dc_replace(base_project, num_cams=delta)
+                summary = {
+                    "Project": name,
+                    "Approved cameras": approved,
+                    "Active jobs": active,
+                    "Delta ordered": delta,
+                    "Year category": label,
+                    "Unit price (€)": rate,
+                    "Total invoice amount (€)": total,
+                    "Invoice number": next_no,
+                    "Generated PDF filename": filename,
+                }
+                preview_rows.append(summary)
+                billable.append((billed_project, next_no, summary))
+                next_no += 1
+
+            if not billable:
+                st.info("No billable over-capacity deltas found.")
+            else:
+                preview_df = pd.DataFrame(preview_rows)
+                st.dataframe(
+                    preview_df,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Unit price (€)": st.column_config.NumberColumn(format="%.0f"),
+                        "Total invoice amount (€)": st.column_config.NumberColumn(format="%.0f"),
+                    },
+                )
+                grand_total = float(preview_df["Total invoice amount (€)"].sum())
+                st.metric(
+                    f"Total to invoice ({len(billable)} project(s))",
+                    f"€{grand_total:,.0f}",
+                )
+
+                if st.button(
+                    "📄 Generate Over-Capacity Invoices (ZIP)",
+                    key="gen_overcap_invoices",
+                ):
+                    try:
+                        out_dir = Path("generated_invoices") / "over_capacity"
+                        out_dir.mkdir(parents=True, exist_ok=True)
+                        zip_buf = io.BytesIO()
+                        with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                            for billed_project, inv_no, _summary in billable:
+                                pdf_path = generate_monthly_invoice_pdf(
+                                    [billed_project],
+                                    oc_month,
+                                    int(oc_year),
+                                    invoice_number=int(inv_no),
+                                    output_dir=out_dir,
+                                )
+                                with open(pdf_path, "rb") as fh:
+                                    zf.writestr(pdf_path.name, fh.read())
+                            # Summary CSV inside the ZIP
+                            zf.writestr(
+                                "over_capacity_summary.csv",
+                                preview_df.to_csv(index=False),
+                            )
+                        st.session_state["overcap_zip_bytes"] = zip_buf.getvalue()
+                        st.session_state["overcap_zip_name"] = (
+                            f"over_capacity_invoices_{datetime.date.today().isoformat()}.zip"
+                        )
+                        st.success(
+                            f"Generated {len(billable)} invoice PDF(s) in {out_dir} "
+                            "and bundled them with the summary CSV."
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        st.error(f"Failed to generate over-capacity invoices: {exc}")
+
+                if st.session_state.get("overcap_zip_bytes"):
+                    st.download_button(
+                        "⬇️ Download Over-Capacity Invoices (ZIP)",
+                        data=st.session_state["overcap_zip_bytes"],
+                        file_name=st.session_state.get(
+                            "overcap_zip_name", "over_capacity_invoices.zip"
+                        ),
+                        mime="application/zip",
+                        key="download_overcap_zip",
+                    )
     else:
         st.info("No job usage to display yet.")
 
