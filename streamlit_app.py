@@ -403,14 +403,25 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ── Role-based login ──────────────────────────────────────────────────────────
-# Passwords are stored in Streamlit secrets (secrets.toml or Streamlit Cloud secrets).
-# Format in .streamlit/secrets.toml:
-#   [passwords]
-#   admin  = "your_admin_password"
-#   viewer = "your_viewer_password"
+# ── Role-based login with per-user TOTP 2FA ───────────────────────────────────
 #
-# Roles: "admin" → can edit data   |   "viewer" → read-only
+# Secrets format (Streamlit Cloud → App secrets):
+#
+#   [users.zvika]
+#   password    = "your_password"
+#   role        = "admin"           # must be a key in ROLES
+#   totp_secret = "BASE32SECRET"    # generate with: python -c "import pyotp; print(pyotp.random_base32())"
+#
+#   [users.alice]
+#   password    = "alice_password"
+#   role        = "viewer"
+#   totp_secret = "ANOTHERSECRET"
+#
+#   [totp_setup]
+#   enabled = true   # show QR codes on login page; set false after all users have scanned
+#
+# Backward compat: if no [users] section, the old [passwords] format still works
+# (admin/viewer roles, no 2FA).
 
 ROLES = {
     "admin":  {"label": "Admin",  "can_edit": True},
@@ -424,43 +435,150 @@ def _reset_orders_upload_widget() -> None:
     st.session_state["_orders_upload_key_suffix"] = st.session_state.get("_orders_upload_key_suffix", 0) + 1
 
 
-def _check_login(username: str, password: str):
-    """Return role string if credentials match, else None."""
-    normalized_username = str(username or "").strip().lower()
-    normalized_password = str(password or "").strip()
+def _get_users() -> dict:
+    """Return {username: {password, role, totp_secret}} from secrets.
 
+    Tries [users.*] first; falls back to old [passwords] structure (no 2FA).
+    """
+    try:
+        users_config = dict(st.secrets.get("users", {}))
+    except Exception:
+        users_config = {}
+
+    if users_config:
+        result = {}
+        for uname, udata in users_config.items():
+            result[str(uname).strip().lower()] = {
+                "display": str(uname).strip(),
+                "password": str(udata.get("password", "")).strip(),
+                "role": str(udata.get("role", "viewer")).strip(),
+                "totp_secret": str(udata.get("totp_secret", "")).strip(),
+            }
+        return result
+
+    # Legacy fallback: [passwords] — no 2FA
     try:
         passwords = st.secrets.get("passwords", {})
     except Exception:
         passwords = {}
-
-    accepted_passwords = {
-        role: str(secret).strip()
-        for role, secret in passwords.items()
-        if str(secret).strip()
+    return {
+        role: {
+            "display": role.capitalize(),
+            "password": str(pw).strip(),
+            "role": role,
+            "totp_secret": "",
+        }
+        for role, pw in passwords.items()
+        if str(pw).strip()
     }
-    if normalized_username in accepted_passwords and normalized_password == accepted_passwords[normalized_username]:
-        return normalized_username  # role == username key
-    return None
 
-def _login_form():
-    st.markdown("## 🔐 CaddyCheck CRM Login")
+
+def _verify_totp(totp_secret: str, code: str) -> bool:
+    """Verify a 6-digit TOTP code; allows ±1 time-step window."""
+    import pyotp
+    totp = pyotp.TOTP(totp_secret)
+    return totp.verify(str(code).strip(), valid_window=1)
+
+
+def _login_form() -> None:
+    st.markdown("## 🔐 CaddyCheck CRM")
     st.caption(f"Build: {APP_BUILD}")
+
+    users = _get_users()
+    if not users:
+        st.warning(
+            "Login is not configured. Add `[users.*]` (or legacy `[passwords]`) "
+            "sections to Streamlit secrets."
+        )
+        return
+
+    # ── 2FA Setup mode: show QR codes ────────────────────────────────────────
     try:
-        password_roles = [role for role, value in st.secrets.get("passwords", {}).items() if str(value).strip()]
+        setup_enabled = bool(st.secrets.get("totp_setup", {}).get("enabled", False))
     except Exception:
-        password_roles = []
-    if not password_roles:
-        st.warning("Login is not configured. Add [passwords] secrets for admin and viewer in Streamlit Cloud.")
+        setup_enabled = False
+
+    if setup_enabled:
+        import pyotp
+        import qrcode as _qrcode
+        from io import BytesIO as _BytesIO
+
+        with st.expander("🔑 2FA Setup — scan QR codes into your authenticator app", expanded=True):
+            st.warning(
+                "**Setup mode is active.** After every user has scanned their QR code, "
+                "set `totp_setup.enabled = false` in Streamlit secrets to hide this section."
+            )
+            for uname, udata in users.items():
+                secret = udata.get("totp_secret", "")
+                gen_key = f"_totp_gen_{uname}"
+
+                if not secret:
+                    if gen_key not in st.session_state:
+                        st.session_state[gen_key] = pyotp.random_base32()
+                    secret = st.session_state[gen_key]
+                    st.error(
+                        f"**{udata['display']}** has no `totp_secret` in secrets. "
+                        f"Add this line under `[users.{uname}]`:  \n"
+                        f"`totp_secret = \"{secret}\"`"
+                    )
+
+                uri = pyotp.TOTP(secret).provisioning_uri(
+                    name=udata["display"], issuer_name="CaddyCheck CRM"
+                )
+                img = _qrcode.make(uri)
+                buf = _BytesIO()
+                img.save(buf, format="PNG")
+                buf.seek(0)
+                st.markdown(f"**{udata['display']}** — role: `{udata['role']}`")
+                st.image(buf.read(), width=200)
+                st.caption(f"Secret (backup): `{secret}`")
+                st.divider()
+
+    # ── Step 2: TOTP code ─────────────────────────────────────────────────────
+    if "pending_2fa_user" in st.session_state:
+        pending = st.session_state["pending_2fa_user"]
+        user = users.get(pending)
+        st.info(f"Password accepted. Enter the 6-digit code from your authenticator app.")
+        with st.form("totp_form"):
+            code = st.text_input("Authenticator code", max_chars=6, placeholder="123456")
+            col_verify, col_back = st.columns([1, 3])
+            verified = col_verify.form_submit_button("Verify")
+            go_back = col_back.form_submit_button("← Back")
+        if go_back:
+            del st.session_state["pending_2fa_user"]
+            st.rerun()
+        if verified:
+            if user and user.get("totp_secret") and _verify_totp(user["totp_secret"], code):
+                st.session_state["role"] = user["role"]
+                st.session_state["current_user"] = user["display"]
+                del st.session_state["pending_2fa_user"]
+                st.rerun()
+            else:
+                st.error("Invalid or expired code. Try again.")
+        return
+
+    # ── Step 1: Username + Password ───────────────────────────────────────────
+    display_names = {uname: udata["display"] for uname, udata in users.items()}
     with st.form("login_form"):
-        username = st.selectbox("Role", list(ROLES.keys()), format_func=lambda k: ROLES[k]["label"])
+        username_key = st.selectbox(
+            "User",
+            list(display_names.keys()),
+            format_func=lambda k: display_names[k],
+        )
         password = st.text_input("Password", type="password")
         submitted = st.form_submit_button("Login")
     if submitted:
-        role = _check_login(username, password)
-        if role:
-            st.session_state["role"] = role
-            st.rerun()
+        user = users.get(username_key)
+        if user and password.strip() == user["password"]:
+            if user.get("totp_secret"):
+                # Correct password → proceed to TOTP step
+                st.session_state["pending_2fa_user"] = username_key
+                st.rerun()
+            else:
+                # No TOTP secret configured → grant access directly
+                st.session_state["role"] = user["role"]
+                st.session_state["current_user"] = user["display"]
+                st.rerun()
         else:
             st.error("Incorrect password. Try again.")
 
@@ -2331,13 +2449,15 @@ page = st.sidebar.radio(
 )
 st.sidebar.markdown("---")
 role_icon = "✏️" if CAN_EDIT else "👁️"
-st.sidebar.caption(f"{role_icon} Logged in as **{ROLES[ROLE]['label']}**")
+_current_user = st.session_state.get("current_user", ROLES[ROLE]["label"])
+st.sidebar.caption(f"{role_icon} Logged in as **{_current_user}**")
 if st.sidebar.button("Refresh Data"):
     load_data.clear()
     st.cache_data.clear()
     st.rerun()
 if st.sidebar.button("Logout"):
-    del st.session_state["role"]
+    for _k in ("role", "current_user", "pending_2fa_user"):
+        st.session_state.pop(_k, None)
     st.rerun()
 
 # Load data
