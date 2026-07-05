@@ -515,16 +515,21 @@ def _login_form() -> None:
                 "(3) Reload this page and scan the QR below. "
                 "Do **not** scan until the secret is saved in secrets."
             )
-            for uname, udata in users.items():
-                secret = udata.get("totp_secret", "")
-
-                if not secret:
-                    st.error(
-                        f"**{udata['display']}** — no `totp_secret` in secrets yet. "
-                        f"Generate one and add `totp_secret = \"...\"` under `[users.{uname}]`, then reload."
-                    )
-                    continue
-
+            # Only show the selected user's QR — no need to expose all users
+            setup_user_key = st.selectbox(
+                "Show QR for",
+                list(users.keys()),
+                format_func=lambda k: users[k]["display"],
+                key="setup_user_select",
+            )
+            udata = users[setup_user_key]
+            secret = udata.get("totp_secret", "")
+            if not secret:
+                st.error(
+                    f"**{udata['display']}** — no `totp_secret` in secrets yet. "
+                    f"Generate one and add `totp_secret = \"...\"` under `[users.{setup_user_key}]`, then reload."
+                )
+            else:
                 uri = pyotp.TOTP(secret).provisioning_uri(
                     name=udata["display"], issuer_name="CaddyCheck CRM"
                 )
@@ -532,10 +537,8 @@ def _login_form() -> None:
                 buf = _BytesIO()
                 img.save(buf, format="PNG")
                 buf.seek(0)
-                st.markdown(f"**{udata['display']}** — role: `{udata['role']}`")
-                st.image(buf.read(), width=200)
-                st.caption(f"Secret (backup): `{secret}`")
-                st.divider()
+                st.image(buf.read(), width=220)
+                st.caption(f"Secret (backup manual entry): `{secret}`")
 
     # ── Step 2: TOTP code ─────────────────────────────────────────────────────
     if "pending_2fa_user" in st.session_state:
