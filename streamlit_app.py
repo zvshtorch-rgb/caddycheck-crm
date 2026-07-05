@@ -504,17 +504,6 @@ def _login_form() -> None:
         from io import BytesIO as _BytesIO
 
         with st.expander("🔑 2FA Setup — scan QR codes into your authenticator app", expanded=True):
-            st.warning(
-                "**Setup mode is active.** After every user has scanned their QR code, "
-                "set `totp_setup.enabled = false` in Streamlit secrets to hide this section."
-            )
-            st.info(
-                "**Correct order:** (1) Generate a secret with "
-                "`py -c \"import pyotp; print(pyotp.random_base32())\"`  "
-                "(2) Add it to `[users.username]` in Streamlit secrets as `totp_secret = \"...\"` "
-                "(3) Reload this page and scan the QR below. "
-                "Do **not** scan until the secret is saved in secrets."
-            )
             # Only show the selected user's QR — no need to expose all users
             setup_user_key = st.selectbox(
                 "Show QR for",
