@@ -534,19 +534,13 @@ def _login_form() -> None:
     st.caption(f"Build: {APP_BUILD}")
 
     users = _get_users()
-    if not users:
-        st.warning(
-            "Login is not configured. Add `[users.*]` sections to Streamlit secrets."
-        )
-        return
 
-    # email → username lookup (only users who have email configured)
+    # email → username lookup (users who have email configured in secrets)
     email_to_uname: dict[str, str] = {
         udata["email"]: uname
         for uname, udata in users.items()
         if udata.get("email")
     }
-    use_email_otp = bool(email_to_uname)
 
     # ── Email OTP: Step 2 — verify code ──────────────────────────────────────
     if "pending_otp" in st.session_state:
@@ -600,15 +594,24 @@ def _login_form() -> None:
                 st.error(f"Incorrect code. {max(0, 5 - otp['attempts'])} attempt(s) left.")
         return
 
-    # ── Email OTP: Step 1 — enter email address ───────────────────────────────
-    if use_email_otp:
-        with st.form("email_otp_form"):
-            email_input = st.text_input("Email address", placeholder="your@email.com")
-            send_btn = st.form_submit_button("Send verification code", type="primary")
+    # ── Email OTP: Step 1 — always shown as primary login ────────────────────
+    with st.form("email_otp_form"):
+        email_input = st.text_input("Email address", placeholder="your@email.com")
+        send_btn = st.form_submit_button("Send verification code", type="primary")
 
-        if send_btn:
-            import secrets as _sec
-            _email = email_input.strip().lower()
+    if send_btn:
+        import secrets as _sec
+        _email = email_input.strip().lower()
+        if not _email:
+            st.error("Enter your email address.")
+        elif not email_to_uname:
+            # Secrets not yet configured — tell admin what to add
+            st.error(
+                "Email login is not configured yet. "
+                "Add `email = \"your@email.com\"` under each `[users.*]` entry in Streamlit secrets, "
+                "and make sure `[email]` SMTP settings are set."
+            )
+        else:
             _uname = email_to_uname.get(_email)
             if _uname:
                 _user = users[_uname]
@@ -628,52 +631,53 @@ def _login_form() -> None:
             else:
                 # Don't reveal whether the address is registered
                 st.info("If that email address is registered, a verification code has been sent.")
-        return
 
-    # ── Fallback: password + optional TOTP (no email addresses configured) ────
-    if "pending_2fa_user" in st.session_state:
-        pending = st.session_state["pending_2fa_user"]
-        user = users.get(pending)
-        st.info("Password accepted. Enter the 6-digit code from your authenticator app.")
-        with st.form("totp_form"):
-            code = st.text_input("Authenticator code", max_chars=6, placeholder="123456")
-            col_verify, col_back = st.columns([1, 3])
-            verified = col_verify.form_submit_button("Verify")
-            go_back  = col_back.form_submit_button("← Back")
-        if go_back:
-            del st.session_state["pending_2fa_user"]
-            st.rerun()
-        if verified:
-            if user and user.get("totp_secret") and _verify_totp(user["totp_secret"], code):
-                st.session_state["role"] = user["role"]
-                st.session_state["current_user"] = user["display"]
+    # ── Fallback: password + optional TOTP (hidden in expander for admins) ────
+    with st.expander("Use password instead"):
+        if not users:
+            st.warning("Login is not configured. Add `[users.*]` sections to Streamlit secrets.")
+        elif "pending_2fa_user" in st.session_state:
+            pending = st.session_state["pending_2fa_user"]
+            user = users.get(pending)
+            st.info("Password accepted. Enter the 6-digit code from your authenticator app.")
+            with st.form("totp_form"):
+                code = st.text_input("Authenticator code", max_chars=6, placeholder="123456")
+                col_verify, col_back = st.columns([1, 3])
+                verified = col_verify.form_submit_button("Verify")
+                go_back  = col_back.form_submit_button("← Back")
+            if go_back:
                 del st.session_state["pending_2fa_user"]
                 st.rerun()
-            else:
-                st.error("Invalid or expired code. Try again.")
-        return
-
-    display_names = {uname: udata["display"] for uname, udata in users.items()}
-    with st.form("login_form"):
-        username_key = st.selectbox(
-            "User",
-            list(display_names.keys()),
-            format_func=lambda k: display_names[k],
-        )
-        password = st.text_input("Password", type="password")
-        submitted = st.form_submit_button("Login")
-    if submitted:
-        user = users.get(username_key)
-        if user and password.strip() == user["password"]:
-            if user.get("totp_secret"):
-                st.session_state["pending_2fa_user"] = username_key
-                st.rerun()
-            else:
-                st.session_state["role"] = user["role"]
-                st.session_state["current_user"] = user["display"]
-                st.rerun()
+            if verified:
+                if user and user.get("totp_secret") and _verify_totp(user["totp_secret"], code):
+                    st.session_state["role"] = user["role"]
+                    st.session_state["current_user"] = user["display"]
+                    del st.session_state["pending_2fa_user"]
+                    st.rerun()
+                else:
+                    st.error("Invalid or expired code. Try again.")
         else:
-            st.error("Incorrect password. Try again.")
+            display_names = {uname: udata["display"] for uname, udata in users.items()}
+            with st.form("login_form"):
+                username_key = st.selectbox(
+                    "User",
+                    list(display_names.keys()),
+                    format_func=lambda k: display_names[k],
+                )
+                password = st.text_input("Password", type="password")
+                submitted = st.form_submit_button("Login")
+            if submitted:
+                user = users.get(username_key)
+                if user and password.strip() == user["password"]:
+                    if user.get("totp_secret"):
+                        st.session_state["pending_2fa_user"] = username_key
+                        st.rerun()
+                    else:
+                        st.session_state["role"] = user["role"]
+                        st.session_state["current_user"] = user["display"]
+                        st.rerun()
+                else:
+                    st.error("Incorrect password. Try again.")
 
 
 def _consume_flash_success(current_page: str) -> str:
