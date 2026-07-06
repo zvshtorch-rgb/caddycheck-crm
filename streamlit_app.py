@@ -403,25 +403,28 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ── Role-based login with per-user TOTP 2FA ───────────────────────────────────
+# ── Login — email OTP (primary) with password+TOTP fallback ──────────────────
 #
-# Secrets format (Streamlit Cloud → App secrets):
+# Secrets format:
 #
 #   [users.zvika]
-#   password    = "your_password"
-#   role        = "admin"           # must be a key in ROLES
-#   totp_secret = "BASE32SECRET"    # generate with: python -c "import pyotp; print(pyotp.random_base32())"
+#   display     = "Zvika"
+#   email       = "zvika@example.com"   ← enables email-OTP login
+#   role        = "admin"
 #
-#   [users.alice]
-#   password    = "alice_password"
+#   [users.yoram]
+#   display     = "Yoram"
+#   email       = "yoram@example.com"
 #   role        = "viewer"
-#   totp_secret = "ANOTHERSECRET"
 #
-#   [totp_setup]
-#   enabled = true   # show QR codes on login page; set false after all users have scanned
+# Legacy password+TOTP format still works when no user has an email field:
 #
-# Backward compat: if no [users] section, the old [passwords] format still works
-# (admin/viewer roles, no 2FA).
+#   [users.zvika]
+#   password    = "secret"
+#   totp_secret = "BASE32SECRET"
+#   role        = "admin"
+#
+# SMTP must be configured in [email] secrets for email OTP to work.
 
 ROLES = {
     "admin":  {"label": "Admin",  "can_edit": True},
@@ -436,10 +439,7 @@ def _reset_orders_upload_widget() -> None:
 
 
 def _get_users() -> dict:
-    """Return {username: {password, role, totp_secret}} from secrets.
-
-    Tries [users.*] first; falls back to old [passwords] structure (no 2FA).
-    """
+    """Return {username: {display, email, role, password, totp_secret}} from secrets."""
     try:
         users_config = dict(st.secrets.get("users", {}))
     except Exception:
@@ -449,14 +449,15 @@ def _get_users() -> dict:
         result = {}
         for uname, udata in users_config.items():
             result[str(uname).strip().lower()] = {
-                "display": str(uname).strip(),
+                "display": str(udata.get("display", uname)).strip(),
+                "email": str(udata.get("email", "")).strip().lower(),
                 "password": str(udata.get("password", "")).strip(),
                 "role": str(udata.get("role", "viewer")).strip(),
                 "totp_secret": str(udata.get("totp_secret", "")).strip(),
             }
         return result
 
-    # Legacy fallback: [passwords] — no 2FA
+    # Legacy fallback: [passwords] — no email, no 2FA
     try:
         passwords = st.secrets.get("passwords", {})
     except Exception:
@@ -464,6 +465,7 @@ def _get_users() -> dict:
     return {
         role: {
             "display": role.capitalize(),
+            "email": "",
             "password": str(pw).strip(),
             "role": role,
             "totp_secret": "",
@@ -474,10 +476,57 @@ def _get_users() -> dict:
 
 
 def _verify_totp(totp_secret: str, code: str) -> bool:
-    """Verify a 6-digit TOTP code; allows ±2 time-step window (~60 s)."""
+    """Verify a 6-digit TOTP code; used only when falling back to password+TOTP."""
     import pyotp
-    totp = pyotp.TOTP(totp_secret)
-    return totp.verify(str(code).strip(), valid_window=2)
+    return pyotp.TOTP(totp_secret).verify(str(code).strip(), valid_window=2)
+
+
+def _send_login_otp(recipient_email: str, display_name: str, code: str) -> None:
+    """Send a one-time login code via the configured SMTP server."""
+    import smtplib
+    import ssl
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    from config.settings import get_email_config
+
+    cfg = get_email_config()
+    smtp_host = cfg.get("smtp_host", "").strip()
+    smtp_port = int(cfg.get("smtp_port", 587))
+    use_tls = bool(cfg.get("smtp_use_tls", True))
+    username = cfg.get("smtp_username", "").strip()
+    password = cfg.get("smtp_password", "").strip()
+    sender_name = cfg.get("sender_name", "CaddyCheck CRM")
+    sender_email = (cfg.get("sender_email", "") or username).strip()
+
+    if not smtp_host:
+        raise ValueError(
+            "SMTP is not configured. Add smtp_host (and credentials) under [email] "
+            "in Streamlit secrets to enable email login."
+        )
+
+    msg = MIMEMultipart()
+    msg["From"] = f"{sender_name} <{sender_email}>"
+    msg["To"] = recipient_email
+    msg["Subject"] = "CaddyCheck CRM — Your login code"
+    msg.attach(MIMEText(
+        f"Hi {display_name},\n\n"
+        f"Your CaddyCheck CRM login code is:\n\n"
+        f"    {code}\n\n"
+        f"This code is valid for 10 minutes.\n\n"
+        f"If you did not request this, ignore this message.\n\n"
+        f"— CaddyCheck CRM",
+        "plain", "utf-8",
+    ))
+
+    ctx = ssl.create_default_context()
+    with smtplib.SMTP(smtp_host, smtp_port) as server:
+        server.ehlo()
+        if use_tls:
+            server.starttls(context=ctx)
+            server.ehlo()
+        if username and password:
+            server.login(username, password)
+        server.sendmail(sender_email, [recipient_email], msg.as_string())
 
 
 def _login_form() -> None:
@@ -487,58 +536,110 @@ def _login_form() -> None:
     users = _get_users()
     if not users:
         st.warning(
-            "Login is not configured. Add `[users.*]` (or legacy `[passwords]`) "
-            "sections to Streamlit secrets."
+            "Login is not configured. Add `[users.*]` sections to Streamlit secrets."
         )
         return
 
-    # ── 2FA Setup mode: show QR codes ────────────────────────────────────────
-    try:
-        setup_enabled = bool(st.secrets.get("totp_setup", {}).get("enabled", False))
-    except Exception:
-        setup_enabled = False
+    # email → username lookup (only users who have email configured)
+    email_to_uname: dict[str, str] = {
+        udata["email"]: uname
+        for uname, udata in users.items()
+        if udata.get("email")
+    }
+    use_email_otp = bool(email_to_uname)
 
-    if setup_enabled:
-        import pyotp
-        import qrcode as _qrcode
-        from io import BytesIO as _BytesIO
+    # ── Email OTP: Step 2 — verify code ──────────────────────────────────────
+    if "pending_otp" in st.session_state:
+        otp = dict(st.session_state["pending_otp"])
+        _at = otp["email"].find("@")
+        _masked = (otp["email"][:1] + "***" + otp["email"][_at:]) if _at > 1 else otp["email"]
+        st.info(f"A 6-digit code was sent to **{_masked}**. Check your inbox.")
 
-        with st.expander("🔑 2FA Setup — scan QR codes into your authenticator app", expanded=True):
-            # Only show the selected user's QR — no need to expose all users
-            setup_user_key = st.selectbox(
-                "Show QR for",
-                list(users.keys()),
-                format_func=lambda k: users[k]["display"],
-                key="setup_user_select",
-            )
-            udata = users[setup_user_key]
-            secret = udata.get("totp_secret", "")
-            if not secret:
-                st.error(
-                    f"**{udata['display']}** — no `totp_secret` in secrets yet. "
-                    f"Generate one and add `totp_secret = \"...\"` under `[users.{setup_user_key}]`, then reload."
-                )
+        with st.form("otp_verify_form"):
+            code_input = st.text_input("Verification code", max_chars=6, placeholder="123456")
+            cv1, cv2, cv3 = st.columns([1, 1, 1])
+            do_verify = cv1.form_submit_button("✅ Verify", type="primary")
+            do_resend = cv2.form_submit_button("📧 Resend")
+            do_back   = cv3.form_submit_button("← Back")
+
+        if do_back:
+            del st.session_state["pending_otp"]
+            st.rerun()
+
+        if do_resend:
+            try:
+                _send_login_otp(otp["email"], otp["display"], otp["code"])
+                st.success("Code resent — check your inbox.")
+            except Exception as _err:
+                st.error(f"Could not resend: {_err}")
+
+        if do_verify:
+            _expired = datetime.datetime.utcnow() > otp["expires"]
+            _locked  = otp.get("attempts", 0) >= 5
+            if _expired:
+                st.error("Code has expired. Go back and request a new one.")
+                del st.session_state["pending_otp"]
+                st.rerun()
+            elif _locked:
+                st.error("Too many incorrect attempts. Request a new code.")
+                del st.session_state["pending_otp"]
+                st.rerun()
+            elif code_input.strip() == otp["code"]:
+                _uname = email_to_uname.get(otp["email"])
+                _user  = users.get(_uname) if _uname else None
+                if _user:
+                    st.session_state["role"] = _user["role"]
+                    st.session_state["current_user"] = _user["display"]
+                    del st.session_state["pending_otp"]
+                    st.rerun()
+                else:
+                    st.error("Account not found — contact an administrator.")
             else:
-                uri = pyotp.TOTP(secret).provisioning_uri(
-                    name=udata["display"], issuer_name="CaddyCheck CRM"
-                )
-                img = _qrcode.make(uri)
-                buf = _BytesIO()
-                img.save(buf, format="PNG")
-                buf.seek(0)
-                st.image(buf.read(), width=220)
-                st.caption(f"Secret (backup manual entry): `{secret}`")
+                otp["attempts"] = otp.get("attempts", 0) + 1
+                st.session_state["pending_otp"] = otp
+                st.error(f"Incorrect code. {max(0, 5 - otp['attempts'])} attempt(s) left.")
+        return
 
-    # ── Step 2: TOTP code ─────────────────────────────────────────────────────
+    # ── Email OTP: Step 1 — enter email address ───────────────────────────────
+    if use_email_otp:
+        with st.form("email_otp_form"):
+            email_input = st.text_input("Email address", placeholder="your@email.com")
+            send_btn = st.form_submit_button("Send verification code", type="primary")
+
+        if send_btn:
+            import secrets as _sec
+            _email = email_input.strip().lower()
+            _uname = email_to_uname.get(_email)
+            if _uname:
+                _user = users[_uname]
+                _code = f"{_sec.randbelow(1_000_000):06d}"
+                try:
+                    _send_login_otp(_email, _user["display"], _code)
+                    st.session_state["pending_otp"] = {
+                        "email": _email,
+                        "display": _user["display"],
+                        "code": _code,
+                        "expires": datetime.datetime.utcnow() + datetime.timedelta(minutes=10),
+                        "attempts": 0,
+                    }
+                    st.rerun()
+                except Exception as _err:
+                    st.error(f"Could not send verification email: {_err}")
+            else:
+                # Don't reveal whether the address is registered
+                st.info("If that email address is registered, a verification code has been sent.")
+        return
+
+    # ── Fallback: password + optional TOTP (no email addresses configured) ────
     if "pending_2fa_user" in st.session_state:
         pending = st.session_state["pending_2fa_user"]
         user = users.get(pending)
-        st.info(f"Password accepted. Enter the 6-digit code from your authenticator app.")
+        st.info("Password accepted. Enter the 6-digit code from your authenticator app.")
         with st.form("totp_form"):
             code = st.text_input("Authenticator code", max_chars=6, placeholder="123456")
             col_verify, col_back = st.columns([1, 3])
             verified = col_verify.form_submit_button("Verify")
-            go_back = col_back.form_submit_button("← Back")
+            go_back  = col_back.form_submit_button("← Back")
         if go_back:
             del st.session_state["pending_2fa_user"]
             st.rerun()
@@ -552,7 +653,6 @@ def _login_form() -> None:
                 st.error("Invalid or expired code. Try again.")
         return
 
-    # ── Step 1: Username + Password ───────────────────────────────────────────
     display_names = {uname: udata["display"] for uname, udata in users.items()}
     with st.form("login_form"):
         username_key = st.selectbox(
@@ -566,11 +666,9 @@ def _login_form() -> None:
         user = users.get(username_key)
         if user and password.strip() == user["password"]:
             if user.get("totp_secret"):
-                # Correct password → proceed to TOTP step
                 st.session_state["pending_2fa_user"] = username_key
                 st.rerun()
             else:
-                # No TOTP secret configured → grant access directly
                 st.session_state["role"] = user["role"]
                 st.session_state["current_user"] = user["display"]
                 st.rerun()
@@ -2631,7 +2729,7 @@ if st.sidebar.button("Refresh Data"):
     st.cache_data.clear()
     st.rerun()
 if st.sidebar.button("Logout"):
-    for _k in ("role", "current_user", "pending_2fa_user"):
+    for _k in ("role", "current_user", "pending_otp", "pending_2fa_user"):
         st.session_state.pop(_k, None)
     st.rerun()
 
