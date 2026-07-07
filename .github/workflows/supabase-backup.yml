@@ -1,0 +1,42 @@
+name: Supabase Backup → OneDrive
+
+on:
+  schedule:
+    - cron: "0 2 * * *"   # daily at 02:00 UTC (04:00 Israel time)
+  workflow_dispatch:        # allow manual trigger from GitHub Actions UI
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: pip install requests
+
+      - name: Run backup and upload to OneDrive
+        env:
+          SUPABASE_DB_PASSWORD:  ${{ secrets.SUPABASE_DB_PASSWORD }}
+          GRAPH_TENANT_ID:       ${{ secrets.GRAPH_TENANT_ID }}
+          GRAPH_CLIENT_ID:       ${{ secrets.GRAPH_CLIENT_ID }}
+          GRAPH_CLIENT_SECRET:   ${{ secrets.GRAPH_CLIENT_SECRET }}
+          ONEDRIVE_USER_EMAIL:   ${{ secrets.ONEDRIVE_USER_EMAIL }}
+          # Optional overrides (defaults match your current Supabase project):
+          # SUPABASE_HOST: aws-1-ap-southeast-1.pooler.supabase.com
+          # SUPABASE_USER: postgres.rdoxihpmghrvroddnkdi
+          # ONEDRIVE_FOLDER: Backups/Supabase
+          # BACKUP_KEEP_COUNT: "30"
+        run: python backup_to_onedrive.py
