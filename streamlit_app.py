@@ -482,7 +482,36 @@ def _verify_totp(totp_secret: str, code: str) -> bool:
 
 
 def _send_login_otp(recipient_email: str, display_name: str, code: str) -> None:
-    """Send a one-time login code via the configured SMTP server."""
+    """Send a one-time login code.
+
+    Prefers Microsoft Graph (app-only, no SMTP Basic Auth) when the
+    [order_intake] Graph credentials are configured, mirroring how invoices
+    are sent. Falls back to SMTP only when Graph is unavailable.
+    """
+    subject = "CaddyCheck CRM — Your login code"
+    body = (
+        f"Hi {display_name},\n\n"
+        f"Your CaddyCheck CRM login code is:\n\n"
+        f"    {code}\n\n"
+        f"This code is valid for 10 minutes.\n\n"
+        f"If you did not request this, ignore this message.\n\n"
+        f"— CaddyCheck CRM"
+    )
+
+    # 1. Preferred path: Microsoft Graph API (no SMTP Basic Auth needed).
+    from services.email_service import graph_email_available, send_graph_email, _get_graph_setting
+
+    if graph_email_available():
+        sender = _get_graph_setting("INVOICE_SENDER_MAILBOX") or None
+        send_graph_email(
+            subject=subject,
+            body=body,
+            recipients=[recipient_email],
+            sender_mailbox=sender,
+        )
+        return
+
+    # 2. Fallback: SMTP.
     import smtplib
     import ssl
     from email.mime.multipart import MIMEMultipart
@@ -500,7 +529,8 @@ def _send_login_otp(recipient_email: str, display_name: str, code: str) -> None:
 
     if not smtp_host or not username:
         raise ValueError(
-            "SMTP is not configured. Add the following section to Streamlit secrets:\n"
+            "Email is not configured. Either configure Microsoft Graph under "
+            "[order_intake] (recommended) or add SMTP settings to Streamlit secrets:\n"
             "  [email]\n"
             "  smtp_host     = \"mail.your-domain.com\"\n"
             "  smtp_port     = 587\n"
@@ -513,16 +543,8 @@ def _send_login_otp(recipient_email: str, display_name: str, code: str) -> None:
     msg = MIMEMultipart()
     msg["From"] = f"{sender_name} <{sender_email}>"
     msg["To"] = recipient_email
-    msg["Subject"] = "CaddyCheck CRM — Your login code"
-    msg.attach(MIMEText(
-        f"Hi {display_name},\n\n"
-        f"Your CaddyCheck CRM login code is:\n\n"
-        f"    {code}\n\n"
-        f"This code is valid for 10 minutes.\n\n"
-        f"If you did not request this, ignore this message.\n\n"
-        f"— CaddyCheck CRM",
-        "plain", "utf-8",
-    ))
+    msg["Subject"] = subject
+    msg.attach(MIMEText(body, "plain", "utf-8"))
 
     ctx = ssl.create_default_context()
     with smtplib.SMTP(smtp_host, smtp_port) as server:
