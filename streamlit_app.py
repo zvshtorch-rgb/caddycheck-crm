@@ -498,10 +498,16 @@ def _send_login_otp(recipient_email: str, display_name: str, code: str) -> None:
     sender_name = cfg.get("sender_name", "CaddyCheck CRM")
     sender_email = (cfg.get("sender_email", "") or username).strip()
 
-    if not smtp_host:
+    if not smtp_host or not username:
         raise ValueError(
-            "SMTP is not configured. Add smtp_host (and credentials) under [email] "
-            "in Streamlit secrets to enable email login."
+            "SMTP is not configured. Add the following section to Streamlit secrets:\n"
+            "  [email]\n"
+            "  smtp_host     = \"mail.your-domain.com\"\n"
+            "  smtp_port     = 587\n"
+            "  smtp_username = \"your@your-domain.com\"\n"
+            "  smtp_password = \"your-password\"\n"
+            "  sender_name   = \"CaddyCheck CRM\"\n"
+            "  sender_email  = \"your@your-domain.com\""
         )
 
     msg = MIMEMultipart()

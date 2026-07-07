@@ -176,7 +176,7 @@ def save_data_paths(paths: dict) -> None:
 def get_email_config() -> dict:
     """Load email configuration from st.secrets (cloud) or local file, with defaults."""
     defaults = {
-        "smtp_host": "smtp.gmail.com",
+        "smtp_host": "",
         "smtp_port": 587,
         "smtp_use_tls": True,
         "smtp_username": "",
