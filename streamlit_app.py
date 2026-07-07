@@ -638,8 +638,10 @@ def _login_form() -> None:
                 # Don't reveal whether the address is registered
                 st.info("If that email address is registered, a verification code has been sent.")
 
-    # ── Fallback: password + optional TOTP (hidden in expander for admins) ────
-    with st.expander("Use password instead"):
+    # ── Fallback: password + optional TOTP (only when a password is configured) ──
+    _password_login_enabled = any(u.get("password") for u in users.values())
+    if _password_login_enabled:
+      with st.expander("Use password instead"):
         if not users:
             st.warning("Login is not configured. Add `[users.*]` sections to Streamlit secrets.")
         elif "pending_2fa_user" in st.session_state:
