@@ -547,14 +547,19 @@ def _send_login_otp(recipient_email: str, display_name: str, code: str) -> None:
     msg.attach(MIMEText(body, "plain", "utf-8"))
 
     ctx = ssl.create_default_context()
-    with smtplib.SMTP(smtp_host, smtp_port) as server:
-        server.ehlo()
-        if use_tls:
+    if use_tls:
+        with smtplib.SMTP(smtp_host, smtp_port, timeout=30) as server:
+            server.ehlo()
             server.starttls(context=ctx)
             server.ehlo()
-        if username and password:
-            server.login(username, password)
-        server.sendmail(sender_email, [recipient_email], msg.as_string())
+            if username and password:
+                server.login(username, password)
+            server.sendmail(sender_email, [recipient_email], msg.as_string())
+    else:
+        with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=30) as server:
+            if username and password:
+                server.login(username, password)
+            server.sendmail(sender_email, [recipient_email], msg.as_string())
 
 
 def _login_form() -> None:
