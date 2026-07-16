@@ -7525,10 +7525,13 @@ elif page == "💸 Debt Report":
         detail_df = pd.DataFrame(grouped_unpaid_rows)
         st.dataframe(detail_df, use_container_width=True, hide_index=True, height=350)
 
-        # Download detail as CSV
+        # Download buttons row – PDF is generated further below and stored here
         csv_detail = detail_df.to_csv(index=False).encode("utf-8")
-        st.download_button("⬇️ Download Detail CSV", csv_detail,
-                           file_name="debt_detail.csv", mime="text/csv")
+        _dl_col_csv, _dl_col_pdf = st.columns(2)
+        _dl_col_csv.download_button("⬇️ Download Detail CSV", csv_detail,
+                                    file_name="debt_detail.csv", mime="text/csv")
+        # PDF placeholder – filled once reportlab generates the bytes below
+        _debt_pdf_slot = _dl_col_pdf.empty()
 
         if unmapped_project_names:
             with st.expander("Country Mapping Warnings", expanded=False):
@@ -7668,8 +7671,12 @@ elif page == "💸 Debt Report":
 
             doc.build(elems)
             debt_pdf_bytes = pdf_buf.getvalue()
-            st.download_button("⬇️ Download Debt PDF", debt_pdf_bytes,
-                               file_name="debt_report.pdf", mime="application/pdf")
+            if grouped_unpaid_rows:
+                _debt_pdf_slot.download_button(
+                    "⬇️ Download Debt PDF", debt_pdf_bytes,
+                    file_name="debt_report.pdf", mime="application/pdf",
+                    key="dr_pdf_download",
+                )
 
             st.markdown("### Email Debt Report")
             email_cfg = get_email_config()
