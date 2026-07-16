@@ -7108,16 +7108,10 @@ elif page == "💸 Debt Report":
     if widget_debt_type not in debt_type_options:
         widget_debt_type = active_debt_type
         st.session_state["dr_debt_type_widget"] = widget_debt_type
-    y1_cutoff_invoice = 8673
-    y1_split_options = ["All", "Before 8673", "8673 and after"]
-    widget_y1_split = st.session_state.get("dr_y1_split_widget", "All")
-    if widget_y1_split not in y1_split_options:
-        widget_y1_split = "All"
-        st.session_state["dr_y1_split_widget"] = widget_y1_split
 
     # ── Filters ───────────────────────────────────────────────────────────────
     with st.expander("🔍 Filters", expanded=False):
-        fc1, fc2, fc3, fc4, fc5 = st.columns(5)
+        fc1, fc2, fc3, fc4 = st.columns(4)
         debt_years    = sorted({inv.year for inv in invoices if inv.year}, reverse=True)
         dsel_year     = fc1.selectbox("Year", ["All"] + [str(y) for y in debt_years], key="dr_year")
         debt_countries = sorted({
@@ -7134,13 +7128,6 @@ elif page == "💸 Debt Report":
             key="dr_debt_type_widget",
         )
         st.session_state["dr_debt_type"] = dsel_debt_type
-        dsel_y1_split = fc5.selectbox(
-            "Y1 split",
-            y1_split_options,
-            index=y1_split_options.index(widget_y1_split),
-            key="dr_y1_split_widget",
-        )
-        st.session_state["dr_y1_split"] = dsel_y1_split
 
     # Only unpaid invoices
     debt_inv = [i for i in invoices if i.is_unpaid()]
@@ -7293,11 +7280,6 @@ elif page == "💸 Debt Report":
         debt_inv = [i for i in debt_inv if _is_paid_trial_category(i)]
     elif dsel_debt_type == "Maintenance (Y2+)":
         debt_inv = [i for i in debt_inv if _is_maintenance_category(i)]
-    if dsel_debt_type == "New Installation (Y1)" and dsel_y1_split != "All":
-        if dsel_y1_split == "Before 8673":
-            debt_inv = [i for i in debt_inv if _safe_int(i.invoice_number, default=0) > 0 and _safe_int(i.invoice_number, default=0) < 8673]
-        elif dsel_y1_split == "8673 and after":
-            debt_inv = [i for i in debt_inv if _safe_int(i.invoice_number, default=0) >= 8673]
     debt_inv = _dedupe_invoice_project_rows(debt_inv)
 
     # Build invoice-level country hints from known rows.
@@ -7530,39 +7512,13 @@ elif page == "💸 Debt Report":
 
     if dsel_debt_type == "New Installation (Y1)":
         st.caption("Showing only first-year debt (Y1).")
-        if dsel_y1_split != "All":
-            st.caption(f"Y1 rows are split by invoice number: {dsel_y1_split} (cutoff {y1_cutoff_invoice}).")
     elif dsel_debt_type == "Paid Trials":
         st.caption("Showing only paid-trial debt.")
     elif dsel_debt_type == "Maintenance (Y2+)":
         st.caption("Showing only maintenance debt (Y2+).")
 
     y1_all_inv = [i for i in all_unpaid if _is_new_installation_category(i)]
-    # Always differentiate Y1 debt by the cutoff invoice, independent of the
-    # detail-table dropdown, so the report/email always show both groups.
-    y1_before_inv = [
-        i for i in y1_all_inv
-        if _invoice_category_label(i) == "credit"
-        or (0 < _safe_int(i.invoice_number, default=0) < y1_cutoff_invoice)
-    ]
-    y1_after_inv = [
-        i for i in y1_all_inv
-        if _invoice_category_label(i) != "credit"
-        and _safe_int(i.invoice_number, default=0) >= y1_cutoff_invoice
-    ]
-    if dsel_debt_type == "New Installation (Y1)" and dsel_y1_split != "All":
-        if dsel_y1_split == "Before 8673":
-            debt_inv = [
-                i for i in debt_inv
-                if _invoice_category_label(i) == "credit"
-                or (0 < _safe_int(i.invoice_number, default=0) < y1_cutoff_invoice)
-            ]
-        elif dsel_y1_split == "8673 and after":
-            debt_inv = [
-                i for i in debt_inv
-                if _invoice_category_label(i) != "credit"
-                and _safe_int(i.invoice_number, default=0) >= y1_cutoff_invoice
-            ]
+
     # ── Detailed table: one row per unpaid invoice ────────────────────────────
     st.subheader("Unpaid Invoices Detail")
     if grouped_unpaid_rows:
@@ -7606,7 +7562,9 @@ elif page == "💸 Debt Report":
             y2_inv  = [i for i in all_unpaid if _is_maintenance_category(i)]
 
             def _proj_debt_rows(inv_list):
-                pd_: dict = defaultdict(lambda: {"inv_nos": set(), "total": 0.0, "country": ""})
+                pd_: dict = defaultdict(lambda: {
+                    "inv_nos": set(), "total": 0.0, "country": "", "ref_dates": [],
+                })
                 for i in inv_list:
                     if i.invoice_number:
                         pd_[i.project_name]["inv_nos"].add(str(int(i.invoice_number)))
@@ -7620,19 +7578,29 @@ elif page == "💸 Debt Report":
                         resolved_country = _infer_country_from_project_name(i.project_name)
                     if resolved_country and not _safe_str(pd_[i.project_name]["country"]).strip():
                         pd_[i.project_name]["country"] = resolved_country
+                    ref_date = _invoice_reference_date(
+                        getattr(i, "for_month", ""), getattr(i, "sent_at", ""), i.year
+                    )
+                    if ref_date:
+                        pd_[i.project_name]["ref_dates"].append(ref_date)
+                for d in pd_.values():
+                    d["for_month"] = ", ".join(sorted({rd.strftime("%B %Y") for rd in d["ref_dates"]}))
+                    d["age"] = _fmt_invoice_age(min(d["ref_dates"])) if d["ref_dates"] else ""
                 return sorted(pd_.items(), key=lambda x: -x[1]["total"])
 
             def _make_section_table(rows, rl_colors):
                 hdr_color = rl_colors.HexColor("#1B3A6B")
-                tbl_data = [["Project Name", "Country", "Invoice #s", "Debt (€)"]]
+                tbl_data = [["Project Name", "Country", "Invoice #s", "For Month", "Invoice Age", "Debt (€)"]]
                 for name, d in rows:
                     tbl_data.append([
                         name, d["country"],
                         ", ".join(sorted(d["inv_nos"])),
+                        d.get("for_month", ""),
+                        d.get("age", ""),
                         f"€{d['total']:,.0f}",
                     ])
                 t = Table(tbl_data, repeatRows=1,
-                          colWidths=[7.5*cm, 2*cm, 5*cm, 3*cm])
+                          colWidths=[5.5*cm, 1.8*cm, 3*cm, 3*cm, 2*cm, 2.5*cm])
                 t.setStyle(TableStyle([
                     ("BACKGROUND",     (0, 0), (-1, 0), hdr_color),
                     ("TEXTCOLOR",      (0, 0), (-1, 0), rl_colors.white),
@@ -7643,7 +7611,7 @@ elif page == "💸 Debt Report":
                     ("GRID",           (0, 0), (-1, -1), 0.4, rl_colors.HexColor("#BDC3C7")),
                     ("BOTTOMPADDING",  (0, 0), (-1, -1), 4),
                     ("TOPPADDING",     (0, 0), (-1, -1), 4),
-                    ("ALIGN",          (3, 0), (3, -1), "RIGHT"),
+                    ("ALIGN",          (4, 0), (5, -1), "RIGHT"),
                 ]))
                 return t
 
@@ -7662,34 +7630,22 @@ elif page == "💸 Debt Report":
                 styles["Normal"]))
             elems.append(Spacer(1, 0.4*cm))
 
-            # Section A/B: Y1 always split by cutoff invoice
-            y1_before_total = sum(i.payment_amount for i in y1_before_inv)
-            y1_after_total = sum(i.payment_amount for i in y1_after_inv)
-
+            # Section A: New Installation Debt (Y1)
+            y1_total_pdf = sum(i.payment_amount for i in y1_inv)
             elems.append(Paragraph(
-                f"A. New Installation Debt (Y1) - Before {y1_cutoff_invoice}  —  €{y1_before_total:,.0f}", sec_style))
+                f"A. New Installation Debt (Y1)  —  €{y1_total_pdf:,.0f}", sec_style))
             elems.append(Spacer(1, 0.2*cm))
-            y1_before_rows = _proj_debt_rows(y1_before_inv)
-            if y1_before_rows:
-                elems.append(_make_section_table(y1_before_rows, rl_colors))
+            y1_rows = _proj_debt_rows(y1_inv)
+            if y1_rows:
+                elems.append(_make_section_table(y1_rows, rl_colors))
             else:
-                elems.append(Paragraph(f"No Y1 unpaid invoices before {y1_cutoff_invoice}.", styles["Normal"]))
-            elems.append(Spacer(1, 0.45*cm))
-
-            elems.append(Paragraph(
-                f"B. New Installation Debt (Y1) - {y1_cutoff_invoice} and after  —  €{y1_after_total:,.0f}", sec_style))
-            elems.append(Spacer(1, 0.2*cm))
-            y1_after_rows = _proj_debt_rows(y1_after_inv)
-            if y1_after_rows:
-                elems.append(_make_section_table(y1_after_rows, rl_colors))
-            else:
-                elems.append(Paragraph(f"No Y1 unpaid invoices from {y1_cutoff_invoice} onward.", styles["Normal"]))
+                elems.append(Paragraph("No Y1 unpaid invoices.", styles["Normal"]))
             elems.append(Spacer(1, 0.6*cm))
 
-            # Section C: Paid Trials
+            # Section B: Paid Trials
             trial_total = sum(i.payment_amount for i in trial_inv)
             elems.append(Paragraph(
-                f"C. Paid Trials  —  €{trial_total:,.0f}", sec_style))
+                f"B. Paid Trials  —  €{trial_total:,.0f}", sec_style))
             elems.append(Spacer(1, 0.2*cm))
             trial_rows = _proj_debt_rows(trial_inv)
             if trial_rows:
@@ -7698,10 +7654,10 @@ elif page == "💸 Debt Report":
                 elems.append(Paragraph("No unpaid paid-trial invoices.", styles["Normal"]))
             elems.append(Spacer(1, 0.6*cm))
 
-            # Section D: Y2+
+            # Section C: Y2+
             y2_total = sum(i.payment_amount for i in y2_inv)
             elems.append(Paragraph(
-                f"D. Maintenance Debt (Y2+)  —  €{y2_total:,.0f}", sec_style))
+                f"C. Maintenance Debt (Y2+)  —  €{y2_total:,.0f}", sec_style))
             elems.append(Spacer(1, 0.2*cm))
             y2_rows = _proj_debt_rows(y2_inv)
             if y2_rows:
@@ -7723,8 +7679,6 @@ elif page == "💸 Debt Report":
                 f"Please find attached the current debt report.\n\n"
                 f"Total debt: €{total_debt_amt:,.0f}\n"
                 f"Y1 debt: €{y1_total_amt:,.0f}\n"
-                f"  • Y1 before {y1_cutoff_invoice}: €{y1_before_total:,.0f}\n"
-                f"  • Y1 from {y1_cutoff_invoice} onward: €{y1_after_total:,.0f}\n"
                 f"Y2+ debt: €{y2_total:,.0f}\n"
                 f"Paid Trials debt: €{trial_total:,.0f}\n"
                 f"Projects with debt: {proj_with_debt}\n\n"
@@ -7735,8 +7689,6 @@ elif page == "💸 Debt Report":
             debt_body_signature = (
                 total_debt_amt,
                 y1_total_amt,
-                y1_before_total,
-                y1_after_total,
                 y2_total,
                 trial_total,
                 proj_with_debt,
