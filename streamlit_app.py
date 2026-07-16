@@ -7354,6 +7354,51 @@ elif page == "💸 Debt Report":
 
     from collections import defaultdict
 
+    def _parse_invoice_period(text) -> Optional[datetime.date]:
+        """Parse an invoice period like 'June 2025' into the first of that month."""
+        text = _safe_str(text).strip()
+        if not text:
+            return None
+        for fmt in ("%B %Y", "%b %Y"):
+            try:
+                return datetime.datetime.strptime(text, fmt).date().replace(day=1)
+            except ValueError:
+                continue
+        return None
+
+    def _invoice_reference_date(for_month, sent_at, year) -> Optional[datetime.date]:
+        """Best-available date to age an invoice from: period → sent_at → year."""
+        period = _parse_invoice_period(for_month)
+        if period:
+            return period
+        sent = _safe_str(sent_at).strip()
+        if sent:
+            try:
+                return datetime.date.fromisoformat(sent[:10])
+            except ValueError:
+                pass
+        if year:
+            try:
+                return datetime.date(int(year), 1, 1)
+            except (ValueError, TypeError):
+                pass
+        return None
+
+    def _fmt_invoice_age(ref_date: Optional[datetime.date]) -> str:
+        """Human-readable age (e.g. '1y 3m') between ref_date and today."""
+        if not ref_date:
+            return ""
+        today = datetime.date.today()
+        months = (today.year - ref_date.year) * 12 + (today.month - ref_date.month)
+        if months < 0:
+            months = 0
+        years, rem = divmod(months, 12)
+        if years and rem:
+            return f"{years}y {rem}m"
+        if years:
+            return f"{years}y"
+        return f"{rem}m"
+
     grouped_unpaid: dict[tuple, list] = defaultdict(list)
     for row_index, invoice_row in enumerate(debt_inv):
         raw_invoice_number = _safe_str(invoice_row.invoice_number).strip()
@@ -7445,6 +7490,9 @@ elif page == "💸 Debt Report":
             "Maint. Year": ", ".join(unique_maint_years),
             "Amount (€)": total_amount,
             "Year": str(max(years)) if years else "",
+            "Invoice Age": _fmt_invoice_age(
+                _invoice_reference_date(row_for_month, row_sent_at, max(years) if years else None)
+            ),
             **invoice_meta,
             "Description": row_description,
         })
@@ -7537,79 +7585,6 @@ elif page == "💸 Debt Report":
                 )
     else:
         st.success("No unpaid invoices match the current filters.")
-
-    # ── Order-Site Discrepancies (ordered > working cameras) ──────────────────
-    discrepancy_year = int(dsel_year) if dsel_year != "All" else datetime.date.today().year
-    order_site_rows = []
-    order_site_total = 0.0
-    try:
-        dr_orders, _dr_orders_source = load_orders_data(_data_path)
-    except Exception:
-        dr_orders = []
-    if dr_orders:
-        dr_project_names = [
-            _safe_str(project.project_name).strip()
-            for project in projects
-            if _safe_str(project.project_name).strip()
-        ]
-        dr_ordered_by_project, dr_has_order = _aggregate_ordered_cameras_by_project(
-            dr_orders, dr_project_names
-        )
-        for project in projects:
-            name = _safe_str(project.project_name).strip()
-            if not name or name not in dr_has_order:
-                continue
-            working = _safe_int(project.num_cams, default=0)
-            ordered = dr_ordered_by_project.get(name, 0)
-            delta_ordered = working - ordered
-            if delta_ordered >= 0:
-                continue
-            units = abs(delta_ordered)
-            rate = project.get_rate(discrepancy_year)
-            amount = units * rate
-            order_site_total += amount
-            order_site_rows.append({
-                "Project": name,
-                "Country": _normalize_country(_safe_str(_get_country(name)).strip()),
-                "Working": working,
-                "Ordered": ordered,
-                "Δ Ordered": delta_ordered,
-                "Units": units,
-                "Rate (€)": rate,
-                "Amount (€)": amount,
-            })
-
-    order_site_rows.sort(key=lambda r: r["Amount (€)"], reverse=True)
-
-    st.subheader("📦 Order-Site Discrepancies")
-    st.caption(
-        "Projects where more cameras were ordered than are currently working "
-        "(Δ Ordered < 0). Billable difference = |Δ Ordered| × rate."
-    )
-    if order_site_rows:
-        order_site_df = pd.DataFrame(order_site_rows)
-        st.dataframe(
-            order_site_df,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Rate (€)": st.column_config.NumberColumn(format="%.0f"),
-                "Amount (€)": st.column_config.NumberColumn(format="%.0f"),
-            },
-        )
-        st.metric(
-            f"Order-Site Discrepancy Total ({len(order_site_rows)} project(s))",
-            f"€{order_site_total:,.0f}",
-        )
-        st.download_button(
-            "⬇️ Download Order-Site Discrepancies CSV",
-            data=order_site_df.to_csv(index=False).encode("utf-8"),
-            file_name="order_site_discrepancies.csv",
-            mime="text/csv",
-            key="dr_order_site_csv",
-        )
-    else:
-        st.success("No order-site discrepancies (no project has Δ Ordered < 0).")
 
     st.markdown("---")
 
@@ -7735,39 +7710,6 @@ elif page == "💸 Debt Report":
                 elems.append(Paragraph("No Y2+ unpaid invoices.", styles["Normal"]))
             elems.append(Spacer(1, 0.6*cm))
 
-            # Section E: Order-Site Discrepancies (ordered > working cameras)
-            elems.append(Paragraph(
-                f"E. Order-Site Discrepancies  —  €{order_site_total:,.0f}", sec_style))
-            elems.append(Spacer(1, 0.2*cm))
-            if order_site_rows:
-                os_hdr_color = rl_colors.HexColor("#1B3A6B")
-                os_tbl_data = [["Project Name", "Country", "Δ Ordered", "Units", "Amount (€)"]]
-                for r in order_site_rows:
-                    os_tbl_data.append([
-                        r["Project"],
-                        r["Country"],
-                        f"{int(r['Δ Ordered']):+d}",
-                        str(int(r["Units"])),
-                        f"€{r['Amount (€)']:,.0f}",
-                    ])
-                os_table = Table(os_tbl_data, repeatRows=1,
-                                 colWidths=[7*cm, 2.5*cm, 2.5*cm, 2*cm, 3.5*cm])
-                os_table.setStyle(TableStyle([
-                    ("BACKGROUND",     (0, 0), (-1, 0), os_hdr_color),
-                    ("TEXTCOLOR",      (0, 0), (-1, 0), rl_colors.white),
-                    ("FONTNAME",       (0, 0), (-1, 0), "Helvetica-Bold"),
-                    ("FONTSIZE",       (0, 0), (-1, -1), 8),
-                    ("ROWBACKGROUNDS", (0, 1), (-1, -1),
-                     [rl_colors.white, rl_colors.HexColor("#EBF5FB")]),
-                    ("GRID",           (0, 0), (-1, -1), 0.4, rl_colors.HexColor("#BDC3C7")),
-                    ("BOTTOMPADDING",  (0, 0), (-1, -1), 4),
-                    ("TOPPADDING",     (0, 0), (-1, -1), 4),
-                    ("ALIGN",          (2, 0), (-1, -1), "RIGHT"),
-                ]))
-                elems.append(os_table)
-            else:
-                elems.append(Paragraph("No order-site discrepancies (Δ Ordered < 0).", styles["Normal"]))
-
             doc.build(elems)
             debt_pdf_bytes = pdf_buf.getvalue()
             st.download_button("⬇️ Download Debt PDF", debt_pdf_bytes,
@@ -7785,7 +7727,6 @@ elif page == "💸 Debt Report":
                 f"  • Y1 from {y1_cutoff_invoice} onward: €{y1_after_total:,.0f}\n"
                 f"Y2+ debt: €{y2_total:,.0f}\n"
                 f"Paid Trials debt: €{trial_total:,.0f}\n"
-                f"Order-site discrepancies: €{order_site_total:,.0f}\n"
                 f"Projects with debt: {proj_with_debt}\n\n"
                 "Best regards,\n"
                 "CaddyCheck CRM"
@@ -7798,7 +7739,6 @@ elif page == "💸 Debt Report":
                 y1_after_total,
                 y2_total,
                 trial_total,
-                order_site_total,
                 proj_with_debt,
             )
             if st.session_state.get("debt_report_email_body_signature") != debt_body_signature:
@@ -7890,11 +7830,15 @@ elif page == "📅 Monthly Invoice":
     })
     default_excluded_networks = [network for network in ["Edeka"] if network in monthly_network_options]
     exclude_col1, exclude_col2 = st.columns([1, 2])
+    # Scope widget keys per month/year so a selection made for one billing
+    # period (e.g. re-including Edeka on purpose) can't silently leak into
+    # every other period viewed later in the same session.
+    period_key_suffix = f"{sel_month}_{int(sel_year)}"
     excluded_monthly_networks = exclude_col1.multiselect(
         "Exclude networks",
         monthly_network_options,
         default=default_excluded_networks,
-        key="monthly_exclude_networks",
+        key=f"monthly_exclude_networks_{period_key_suffix}",
         help="Projects from these networks are removed from this monthly invoice preview and generated invoice.",
     )
     network_filtered_month_projects = [
@@ -7909,7 +7853,7 @@ elif page == "📅 Monthly Invoice":
     excluded_monthly_projects = exclude_col2.multiselect(
         "Exclude individual projects",
         excluded_project_options,
-        key="monthly_exclude_projects",
+        key=f"monthly_exclude_projects_{period_key_suffix}",
         help="Remove selected projects from only this monthly invoice batch.",
     )
     month_projects = [
