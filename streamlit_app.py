@@ -6318,6 +6318,7 @@ elif page == "🔐 Licenses":
             changed_at = _parse_optional_datetime(row.get("changed_at"))
             history_rows.append({
                 "Changed At": changed_at.strftime("%Y-%m-%d %H:%M") if changed_at else _safe_str(row.get("changed_at")),
+                "Changed At Date": changed_at.date() if changed_at else None,
                 "Month": changed_at.strftime("%B %Y") if changed_at else "",
                 "Project": _safe_str(row.get("project_name")),
                 "Country": _safe_str(row.get("country")),
@@ -6333,6 +6334,10 @@ elif page == "🔐 Licenses":
         preset_options = ["All", "Previous month only"]
         selected_preset = st.selectbox("History preset", preset_options, key="license_history_preset")
 
+        history_dates = [row["Changed At Date"] for row in history_rows if row["Changed At Date"]]
+        min_history_date = min(history_dates) if history_dates else today
+        max_history_date = max(history_dates) if history_dates else today
+
         hf1, hf2, hf3 = st.columns(3)
         history_project_search = hf1.text_input("Search project", key="license_history_project_search")
         history_old_eop_search = hf2.text_input(
@@ -6342,6 +6347,18 @@ elif page == "🔐 Licenses":
         history_new_eop_search = hf3.text_input(
             "New License EOP contains", key="license_history_new_eop_search",
             help="E.g. 2026-09 to match any date in September 2026.",
+        )
+
+        hf4, hf5 = st.columns(2)
+        history_from_date = hf4.date_input(
+            "Changed from date", value=min_history_date,
+            min_value=min_history_date, max_value=max_history_date,
+            key="license_history_from_date",
+        )
+        history_to_date = hf5.date_input(
+            "Changed to date", value=max_history_date,
+            min_value=min_history_date, max_value=max_history_date,
+            key="license_history_to_date",
         )
 
         if selected_preset == "Previous month only":
@@ -6361,6 +6378,14 @@ elif page == "🔐 Licenses":
         if history_new_eop_search.strip():
             history_df = history_df[
                 history_df["New License EOP"].str.contains(history_new_eop_search.strip(), case=False, na=False)
+            ]
+        if history_from_date > history_to_date:
+            st.error("'Changed from date' must be on or before 'Changed to date'.")
+        else:
+            history_df = history_df[
+                history_df["Changed At Date"].apply(
+                    lambda d: d is not None and history_from_date <= d <= history_to_date
+                )
             ]
 
         visible_history_df = history_df[["Changed At", "Project", "Country", "Old License EOP", "New License EOP", "Action", "Source"]]
