@@ -6021,6 +6021,8 @@ elif page == "🔐 Licenses":
                 "Cameras": _safe_int(project.num_cams),
                 "Status": _safe_str(project.status),
                 "License EOP": license_date.strftime("%Y-%m-%d") if license_date else "",
+                "License EOP Month": license_date.month if license_date else None,
+                "License EOP Year": license_date.year if license_date else None,
                 "License Status": _license_status(project, today),
                 "Licensed Through Next Month": (
                     license_date is not None
@@ -6039,6 +6041,8 @@ elif page == "🔐 Licenses":
                 or (license_status == "Licensed Through Next Month" and row.get("Licensed Through Next Month"))
                 or row["License Status"] == license_status
             )
+            and (license_eop_month == "All" or row["License EOP Month"] == license_eop_month)
+            and (license_eop_year == "All" or row["License EOP Year"] == license_eop_year)
             and (not license_search.strip() or license_search.lower() in row["Project"].lower())
         ]
 
@@ -6074,6 +6078,19 @@ elif page == "🔐 Licenses":
             key="license_status",
         )
         license_search = lf3.text_input("Search project", key="license_search")
+
+        lf4, lf5 = st.columns(2)
+        license_eop_month = lf4.selectbox(
+            "License EOP Month",
+            ["All"] + list(range(1, 13)),
+            format_func=lambda m: m if m == "All" else calendar.month_name[m],
+            key="license_eop_month",
+        )
+        license_eop_year = lf5.selectbox(
+            "License EOP Year",
+            ["All"] + sorted({row["License EOP Year"] for row in license_rows if row["License EOP Year"]}),
+            key="license_eop_year",
+        )
 
     filtered_license_rows = _filter_license_rows(license_rows)
     if license_status == "Licensed Through Next Month":
