@@ -6137,7 +6137,14 @@ elif page == "🔐 Licenses":
             current_license_date = _project_license_date(selected_project) if selected_project else None
             extend_action = lu2.selectbox(
                 "Action",
-                ["Set exact date", "Extend by 1 month", "Extend by 12 months"],
+                [
+                    "Set exact date",
+                    "Extend by 15 days",
+                    "Extend by 1 month",
+                    "Extend by 12 months",
+                    "Extend to 1st of next month",
+                    "Extend to 1st day of next year",
+                ],
                 key="license_action",
             )
             base_license_date = current_license_date or today
@@ -6164,12 +6171,19 @@ elif page == "🔐 Licenses":
 
         if submit_license and selected_project is not None:
             previous_license_date = current_license_date
+            reference_license_date = max(base_license_date, today)
             if extend_action == "Set exact date":
                 target_license_date = new_license_date
+            elif extend_action == "Extend by 15 days":
+                target_license_date = reference_license_date + datetime.timedelta(days=15)
             elif extend_action == "Extend by 1 month":
-                target_license_date = _add_months(max(base_license_date, today), 1)
-            else:
-                target_license_date = _add_months(max(base_license_date, today), 12)
+                target_license_date = _add_months(reference_license_date, 1)
+            elif extend_action == "Extend by 12 months":
+                target_license_date = _add_months(reference_license_date, 12)
+            elif extend_action == "Extend to 1st of next month":
+                target_license_date = _add_months(reference_license_date.replace(day=1), 1)
+            else:  # "Extend to 1st day of next year"
+                target_license_date = datetime.date(reference_license_date.year + 1, 1, 1)
 
             target_license_datetime = datetime.datetime.combine(target_license_date, datetime.time.min)
             selected_project.license_eop = target_license_datetime
