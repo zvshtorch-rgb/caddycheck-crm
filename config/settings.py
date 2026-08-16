@@ -192,6 +192,8 @@ def get_email_config() -> dict:
             "Best regards,\n"
             "Video Inform Ltd"
         ),
+        "license_alert_days_before": [1, 3],
+        "license_alert_recipients": [],
     }
     # 1. Load from local file (local dev / Settings page saves here)
     if EMAIL_CONFIG_FILE.exists():
@@ -209,8 +211,10 @@ def get_email_config() -> dict:
         if email_secrets:
             for k, v in email_secrets.items():
                 # Convert comma-separated strings to lists for recipient fields
-                if k in ("default_recipients", "default_cc") and isinstance(v, str):
+                if k in ("default_recipients", "default_cc", "license_alert_recipients") and isinstance(v, str):
                     v = [x.strip() for x in v.split(",") if x.strip()]
+                if k == "license_alert_days_before" and isinstance(v, str):
+                    v = [int(x.strip()) for x in v.split(",") if x.strip().isdigit()]
                 defaults[k] = v
         session_password = st.session_state.get("_smtp_password_override", "")
         if session_password:
@@ -247,6 +251,14 @@ def get_email_config() -> dict:
     _env_cc = os.environ.get("EMAIL_DEFAULT_CC", "").strip()
     if _env_cc:
         defaults["default_cc"] = [x.strip() for x in _env_cc.split(",") if x.strip()]
+    _env_alert_recipients = os.environ.get("LICENSE_ALERT_RECIPIENTS", "").strip()
+    if _env_alert_recipients:
+        defaults["license_alert_recipients"] = [x.strip() for x in _env_alert_recipients.split(",") if x.strip()]
+    _env_alert_days = os.environ.get("LICENSE_ALERT_DAYS_BEFORE", "").strip()
+    if _env_alert_days:
+        defaults["license_alert_days_before"] = [
+            int(x.strip()) for x in _env_alert_days.split(",") if x.strip().isdigit()
+        ]
     return defaults
 
 

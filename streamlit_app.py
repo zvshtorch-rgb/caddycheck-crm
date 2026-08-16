@@ -6244,6 +6244,71 @@ elif page == "🔐 Licenses":
         height=480,
     )
 
+    def _build_license_pdf_bytes(df: pd.DataFrame) -> bytes:
+        from reportlab.lib.pagesizes import A4, landscape
+        from reportlab.lib.units import cm
+        from reportlab.lib.styles import getSampleStyleSheet
+        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+        from reportlab.lib import colors as rl_colors
+        from io import BytesIO
+
+        pdf_buf = BytesIO()
+        doc = SimpleDocTemplate(
+            pdf_buf, pagesize=landscape(A4),
+            leftMargin=1.2 * cm, rightMargin=1.2 * cm,
+            topMargin=1.2 * cm, bottomMargin=1.2 * cm,
+        )
+        styles = getSampleStyleSheet()
+        elems = [
+            Paragraph("<b>CaddyCheck CRM — Licenses Report</b>", styles["Title"]),
+            Paragraph(
+                f"Generated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}  |  "
+                f"Projects: {len(df)}",
+                styles["Normal"],
+            ),
+            Spacer(1, 0.4 * cm),
+        ]
+        hdr_color = rl_colors.HexColor("#1B3A6B")
+        tbl_data = [list(df.columns)] + df.astype(str).values.tolist()
+        col_count = len(df.columns)
+        col_width = (landscape(A4)[0] - 2.4 * cm) / max(col_count, 1)
+        t = Table(tbl_data, repeatRows=1, colWidths=[col_width] * col_count)
+        t.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), hdr_color),
+            ("TEXTCOLOR", (0, 0), (-1, 0), rl_colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 8),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [rl_colors.white, rl_colors.HexColor("#EBF5FB")]),
+            ("GRID", (0, 0), (-1, -1), 0.4, rl_colors.HexColor("#BDC3C7")),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ]))
+        elems.append(t)
+        doc.build(elems)
+        return pdf_buf.getvalue()
+
+    dl_csv_col, dl_pdf_col = st.columns(2)
+    dl_csv_col.download_button(
+        "⬇️ Download CSV",
+        data=license_table_df.to_csv(index=False).encode("utf-8"),
+        file_name=f"licenses_{datetime.date.today().isoformat()}.csv",
+        mime="text/csv",
+        key="download_licenses_csv",
+    )
+    if dl_pdf_col.button("📄 Prepare PDF", key="prepare_licenses_pdf"):
+        try:
+            st.session_state["licenses_pdf_bytes"] = _build_license_pdf_bytes(license_table_df)
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Failed to generate PDF: {exc}")
+    if st.session_state.get("licenses_pdf_bytes"):
+        dl_pdf_col.download_button(
+            "⬇️ Download PDF",
+            data=st.session_state["licenses_pdf_bytes"],
+            file_name=f"licenses_{datetime.date.today().isoformat()}.pdf",
+            mime="application/pdf",
+            key="download_licenses_pdf",
+        )
+
     st.markdown("---")
     st.subheader("License Change Log")
     license_change_rows = load_license_change_log()
@@ -8520,10 +8585,50 @@ elif page == "⚙️ Settings":
                 "default_cc": [c.strip() for c in cc.split(",") if c.strip()],
                 "default_subject_template": subject_tpl.strip(),
                 "default_body_template": body_tpl,
+                "license_alert_days_before": email_cfg.get("license_alert_days_before", [1, 3]),
+                "license_alert_recipients": email_cfg.get("license_alert_recipients", []),
             }
             try:
                 save_email_config(new_cfg)
                 st.success("Settings saved.")
+            except Exception as e:
+                st.error(f"Save failed: {e}")
+
+        st.markdown("---")
+        st.subheader("License Expiry Alerts")
+        st.caption(
+            "Configures the standalone `license_expiry_alert.py` scheduled job, which emails "
+            "the recipients below when a project's License EOP falls on the configured day(s) "
+            "before expiry. Schedule the script to run once daily (e.g. Windows Task Scheduler) "
+            "so every configured threshold is checked."
+        )
+        with st.form("license_alert_form"):
+            alert_days_text = st.text_input(
+                "Alert days before expiry (comma-separated)",
+                ", ".join(str(d) for d in email_cfg.get("license_alert_days_before", [1, 3])),
+                help="Example: 1, 3 sends an alert both 1 day and 3 days before License EOP.",
+            )
+            alert_recipients_text = st.text_input(
+                "Alert recipients (comma-separated, blank = use Default Recipients above)",
+                ", ".join(email_cfg.get("license_alert_recipients", [])),
+            )
+            save_alert_btn = st.form_submit_button("Save Alert Settings", type="primary")
+
+        if save_alert_btn:
+            parsed_days = sorted({
+                int(d.strip()) for d in alert_days_text.split(",")
+                if d.strip().lstrip("-").isdigit() and int(d.strip()) >= 0
+            })
+            new_alert_cfg = dict(email_cfg)
+            new_alert_cfg.pop("smtp_password", None)
+            new_alert_cfg["license_alert_days_before"] = parsed_days or [1, 3]
+            new_alert_cfg["license_alert_recipients"] = [
+                r.strip() for r in alert_recipients_text.split(",") if r.strip()
+            ]
+            try:
+                save_email_config(new_alert_cfg)
+                st.success("License expiry alert settings saved.")
+                st.rerun()
             except Exception as e:
                 st.error(f"Save failed: {e}")
 

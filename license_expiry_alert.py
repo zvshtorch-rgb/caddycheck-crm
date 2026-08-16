@@ -36,8 +36,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--days-before",
         type=int,
-        default=3,
-        help="Alert when License EOP is this many days away. Default: 3.",
+        default=None,
+        help=(
+            "Alert when License EOP is this many days away. If omitted, uses the "
+            "configured 'license_alert_days_before' list from Settings (default: 1,3), "
+            "so a single daily run checks every configured threshold."
+        ),
     )
     parser.add_argument(
         "--source",
@@ -173,38 +177,29 @@ def _log_sent_alerts(projects: list, days_before: int, recipients: list[str], cc
             logger.warning("Could not write license alert log for %s: %s", getattr(project, "project_name", ""), exc)
 
 
-def main() -> int:
-    args = _parse_args()
-    if args.days_before < 0:
-        logger.error("--days-before must be zero or greater.")
-        return 1
-
+def _run_for_days_before(
+    days_before: int,
+    args: argparse.Namespace,
+    email_cfg: dict,
+    recipients: list[str],
+    cc_list: list[str],
+) -> bool:
+    """Process a single days-before threshold. Returns True if an email was sent."""
     today = dt.date.today()
-    target_date = today + dt.timedelta(days=args.days_before)
-    email_cfg = get_email_config()
-    recipients = _split_csv(args.to) or list(email_cfg.get("default_recipients", []))
-    cc_list = _split_csv(args.cc) or list(email_cfg.get("default_cc", []))
-
-    if not recipients:
-        logger.error("No recipients configured. Set default recipients, EMAIL_DEFAULT_RECIPIENTS, or pass --to.")
-        return 1
-
-    if not args.dry_run and not email_cfg.get("smtp_username"):
-        logger.error("SMTP is not configured. Set SMTP_* env vars or app email settings.")
-        return 1
+    target_date = today + dt.timedelta(days=days_before)
 
     projects, source_name = _load_projects(args.source)
     candidates = _candidate_projects(projects, target_date)
     if not candidates:
-        logger.info("No licenses expire on %s (%d day(s) from today) using %s.", target_date, args.days_before, source_name)
-        return 0
+        logger.info("No licenses expire on %s (%d day(s) from today) using %s.", target_date, days_before, source_name)
+        return False
 
-    projects_to_alert = _filter_already_sent(candidates, args.days_before, args.force, source_name)
+    projects_to_alert = _filter_already_sent(candidates, days_before, args.force, source_name)
     if not projects_to_alert:
-        logger.info("All matching license-expiry alerts were already sent.")
-        return 0
+        logger.info("All matching license-expiry alerts for %d day(s) before were already sent.", days_before)
+        return False
 
-    subject, body, html = _build_email(projects_to_alert, target_date, args.days_before)
+    subject, body, html = _build_email(projects_to_alert, target_date, days_before)
     if args.subject:
         subject = args.subject
 
@@ -217,11 +212,50 @@ def main() -> int:
     )
     if args.dry_run:
         logger.info("Dry run only. No email sent and no alert log written.\n%s", body)
-        return 0
+        return False
 
     send_simple_email(subject, body, recipients, cc=cc_list, html_body=html, config=email_cfg)
-    _log_sent_alerts(projects_to_alert, args.days_before, recipients, cc_list, source_name)
-    logger.info("License expiry alert sent successfully.")
+    _log_sent_alerts(projects_to_alert, days_before, recipients, cc_list, source_name)
+    logger.info("License expiry alert (%d day(s) before) sent successfully.", days_before)
+    return True
+
+
+def main() -> int:
+    args = _parse_args()
+
+    email_cfg = get_email_config()
+    if args.days_before is not None:
+        if args.days_before < 0:
+            logger.error("--days-before must be zero or greater.")
+            return 1
+        days_before_list = [args.days_before]
+    else:
+        days_before_list = [int(d) for d in email_cfg.get("license_alert_days_before", [1, 3]) if int(d) >= 0]
+        if not days_before_list:
+            days_before_list = [1, 3]
+
+    recipients = (
+        _split_csv(args.to)
+        or list(email_cfg.get("license_alert_recipients", []))
+        or list(email_cfg.get("default_recipients", []))
+    )
+    cc_list = _split_csv(args.cc) or list(email_cfg.get("default_cc", []))
+
+    if not recipients:
+        logger.error("No recipients configured. Set default recipients, EMAIL_DEFAULT_RECIPIENTS, or pass --to.")
+        return 1
+
+    if not args.dry_run and not email_cfg.get("smtp_username"):
+        logger.error("SMTP is not configured. Set SMTP_* env vars or app email settings.")
+        return 1
+
+    any_sent = False
+    for days_before in days_before_list:
+        if _run_for_days_before(days_before, args, email_cfg, recipients, cc_list):
+            any_sent = True
+
+    if not any_sent:
+        logger.info("No license expiry alerts were sent for threshold(s): %s", days_before_list)
     return 0
 
 
