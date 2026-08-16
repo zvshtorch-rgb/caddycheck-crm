@@ -6020,6 +6020,7 @@ elif page == "🔐 Licenses":
                 "Country": _safe_str(project.country),
                 "Cameras": _safe_int(project.num_cams),
                 "Status": _safe_str(project.status),
+                "Project Status": _normalize_project_status(project.status),
                 "License EOP": license_date.strftime("%Y-%m-%d") if license_date else "",
                 "License EOP Month": license_date.month if license_date else None,
                 "License EOP Year": license_date.year if license_date else None,
@@ -6043,6 +6044,7 @@ elif page == "🔐 Licenses":
             )
             and (license_eop_month == "All" or row["License EOP Month"] == license_eop_month)
             and (license_eop_year == "All" or row["License EOP Year"] == license_eop_year)
+            and (project_status_filter == "All" or row["Project Status"] == project_status_filter)
             and (not license_search.strip() or license_search.lower() in row["Project"].lower())
         ]
 
@@ -6077,7 +6079,7 @@ elif page == "🔐 Licenses":
         )
         license_search = lf3.text_input("Search project", key="license_search")
 
-        lf4, lf5 = st.columns(2)
+        lf4, lf5, lf6 = st.columns(3)
         license_eop_month = lf4.selectbox(
             "License EOP Month",
             ["All"] + list(range(1, 13)),
@@ -6088,6 +6090,11 @@ elif page == "🔐 Licenses":
             "License EOP Year",
             ["All"] + sorted({row["License EOP Year"] for row in license_rows if row["License EOP Year"]}),
             key="license_eop_year",
+        )
+        project_status_filter = lf6.selectbox(
+            "Project Status",
+            ["All"] + sorted({row["Project Status"] for row in license_rows if row["Project Status"]}),
+            key="license_project_status",
         )
 
     filtered_license_rows = _filter_license_rows(license_rows)
