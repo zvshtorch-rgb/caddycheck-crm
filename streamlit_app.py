@@ -6333,12 +6333,35 @@ elif page == "🔐 Licenses":
         preset_options = ["All", "Previous month only"]
         selected_preset = st.selectbox("History preset", preset_options, key="license_history_preset")
 
+        hf1, hf2, hf3 = st.columns(3)
+        history_project_search = hf1.text_input("Search project", key="license_history_project_search")
+        history_old_eop_search = hf2.text_input(
+            "Old License EOP contains", key="license_history_old_eop_search",
+            help="E.g. 2026-09 to match any date in September 2026.",
+        )
+        history_new_eop_search = hf3.text_input(
+            "New License EOP contains", key="license_history_new_eop_search",
+            help="E.g. 2026-09 to match any date in September 2026.",
+        )
+
         if selected_preset == "Previous month only":
             previous_month_date = today.replace(day=1) - datetime.timedelta(days=1)
             previous_month_label = previous_month_date.strftime("%B %Y")
             history_df = history_df[history_df["Month"] == previous_month_label]
         if selected_month != "All":
             history_df = history_df[history_df["Month"] == selected_month]
+        if history_project_search.strip():
+            history_df = history_df[
+                history_df["Project"].str.contains(history_project_search.strip(), case=False, na=False)
+            ]
+        if history_old_eop_search.strip():
+            history_df = history_df[
+                history_df["Old License EOP"].str.contains(history_old_eop_search.strip(), case=False, na=False)
+            ]
+        if history_new_eop_search.strip():
+            history_df = history_df[
+                history_df["New License EOP"].str.contains(history_new_eop_search.strip(), case=False, na=False)
+            ]
 
         visible_history_df = history_df[["Changed At", "Project", "Country", "Old License EOP", "New License EOP", "Action", "Source"]]
         st.download_button(
