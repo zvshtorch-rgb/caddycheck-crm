@@ -6118,7 +6118,18 @@ elif page == "🔐 Licenses":
     if CAN_EDIT and license_rows:
         st.markdown("---")
         st.subheader("Add or Extend License EOP")
-        project_names = sorted(row["Project"] for row in license_rows)
+        project_names = sorted(row["Project"] for row in filtered_license_rows) or sorted(row["Project"] for row in license_rows)
+        if license_search.strip() and filtered_license_rows:
+            st.caption(f"Project list narrowed by your search filter ('{license_search.strip()}').")
+        elif license_search.strip() and not filtered_license_rows:
+            st.warning("No projects match your current filters; showing all projects below.")
+
+        # Keep the Project dropdown in sync with the active filters: if the
+        # previously selected project fell out of the filtered list, default
+        # to the first (or only) match instead.
+        if st.session_state.get("license_project") not in project_names:
+            st.session_state["license_project"] = project_names[0]
+
         with st.form("license_update_form"):
             lu1, lu2 = st.columns(2)
             selected_project_name = lu1.selectbox("Project", project_names, key="license_project")
