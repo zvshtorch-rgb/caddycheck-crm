@@ -30,9 +30,9 @@ jobs:
       - name: Run backup and upload to OneDrive
         env:
           SUPABASE_DB_PASSWORD:  ${{ secrets.SUPABASE_DB_PASSWORD }}
-          GRAPH_TENANT_ID:       ${{ secrets.GRAPH_TENANT_ID }}
-          GRAPH_CLIENT_ID:       ${{ secrets.GRAPH_CLIENT_ID }}
-          GRAPH_CLIENT_SECRET:   ${{ secrets.GRAPH_CLIENT_SECRET }}
+          GRAPH_TENANT_ID:       ${{ secrets.GRAPH_TENANT_ID || secrets.ORDER_INTAKE_GRAPH_TENANT_ID }}
+          GRAPH_CLIENT_ID:       ${{ secrets.GRAPH_CLIENT_ID || secrets.ORDER_INTAKE_GRAPH_CLIENT_ID }}
+          GRAPH_CLIENT_SECRET:   ${{ secrets.GRAPH_CLIENT_SECRET || secrets.ORDER_INTAKE_GRAPH_CLIENT_SECRET }}
           ONEDRIVE_USER_EMAIL:   ${{ secrets.ONEDRIVE_USER_EMAIL }}
           # Optional overrides (defaults match your current Supabase project):
           # SUPABASE_HOST: aws-1-ap-southeast-1.pooler.supabase.com
