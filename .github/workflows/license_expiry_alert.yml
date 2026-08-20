@@ -7,7 +7,26 @@ on:
   schedule:
     # Daily at 06:00 UTC. Adjust if you prefer a different local time.
     - cron: "0 6 * * *"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      days_before:
+        description: "Days before expiry to check (blank = use Settings-configured default, e.g. 1,3)"
+        required: false
+        default: ""
+      dry_run:
+        description: "Dry run - preview only, do not send email or log it as sent"
+        required: false
+        default: "true"
+        type: boolean
+      force:
+        description: "Force send even if this alert was already logged as sent"
+        required: false
+        default: "false"
+        type: boolean
+      to_override:
+        description: "Override recipient email(s), comma-separated (optional, for testing)"
+        required: false
+        default: ""
 
 concurrency:
   group: license-expiry-alert
@@ -45,4 +64,19 @@ jobs:
           SMTP_SENDER_NAME: ${{ secrets.SMTP_SENDER_NAME }}
           EMAIL_DEFAULT_RECIPIENTS: ${{ secrets.EMAIL_DEFAULT_RECIPIENTS }}
           EMAIL_DEFAULT_CC: ${{ secrets.EMAIL_DEFAULT_CC }}
-        run: python license_expiry_alert.py --days-before 3 --source supabase
+        run: |
+          ARGS="--source supabase"
+          if [ -n "${{ github.event.inputs.days_before }}" ]; then
+            ARGS="$ARGS --days-before ${{ github.event.inputs.days_before }}"
+          fi
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+          if [ "${{ github.event.inputs.force }}" = "true" ]; then
+            ARGS="$ARGS --force"
+          fi
+          if [ -n "${{ github.event.inputs.to_override }}" ]; then
+            ARGS="$ARGS --to ${{ github.event.inputs.to_override }}"
+          fi
+          echo "Running: python license_expiry_alert.py $ARGS"
+          python license_expiry_alert.py $ARGS
