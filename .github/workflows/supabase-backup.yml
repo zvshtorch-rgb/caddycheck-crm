@@ -39,6 +39,8 @@ jobs:
       - name: Run backup and upload to OneDrive
         env:
           SUPABASE_DB_PASSWORD:  ${{ secrets.SUPABASE_DB_PASSWORD }}
+          SUPABASE_URL:               ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY:  ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           GRAPH_TENANT_ID:       ${{ secrets.GRAPH_TENANT_ID || secrets.ORDER_INTAKE_GRAPH_TENANT_ID }}
           GRAPH_CLIENT_ID:       ${{ secrets.GRAPH_CLIENT_ID || secrets.ORDER_INTAKE_GRAPH_CLIENT_ID }}
           GRAPH_CLIENT_SECRET:   ${{ secrets.GRAPH_CLIENT_SECRET || secrets.ORDER_INTAKE_GRAPH_CLIENT_SECRET }}
