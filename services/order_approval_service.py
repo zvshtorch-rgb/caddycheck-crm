@@ -287,6 +287,28 @@ def list_purchase_orders(limit: int = 200) -> List[dict]:
     return resp.data or []
 
 
+def delete_purchase_order(order_id: str) -> None:
+    """Delete a purchase order (and its PDF). Related approvals/notifications cascade."""
+    client = _get_client()
+    order = get_purchase_order(order_id)
+    if order and order.get("pdf_storage_bucket") and order.get("pdf_storage_path"):
+        try:
+            client.storage.from_(order["pdf_storage_bucket"]).remove([order["pdf_storage_path"]])
+        except Exception:
+            pass
+    client.table("purchase_orders").delete().eq("id", order_id).execute()
+
+
+def delete_purchase_orders_by_status(status: str) -> int:
+    """Delete all purchase orders with the given status. Returns count deleted."""
+    client = _get_client()
+    resp = client.table("purchase_orders").select("id").eq("status", status).execute()
+    order_ids = [row["id"] for row in (resp.data or [])]
+    for order_id in order_ids:
+        delete_purchase_order(order_id)
+    return len(order_ids)
+
+
 # ── Approval tokens ───────────────────────────────────────────────────────────
 def create_approval(purchase_order_id: str, expires_days: int = TOKEN_EXPIRY_DAYS) -> str:
     """

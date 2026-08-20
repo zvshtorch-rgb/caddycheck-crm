@@ -2116,7 +2116,7 @@ def _aggregate_ordered_cameras_by_project(
     """Map each project to its total ordered cameras using smart name matching.
 
     Returns (ordered_by_project, has_order_for_project) keyed by project name.
-    Mirrors the matching logic used by the Camera Audit page.
+    Mirrors the matching logic used for camera comparisons.
     """
     project_name_by_key: dict[str, str] = {}
     for project_name in project_names:
@@ -2151,144 +2151,6 @@ def _aggregate_ordered_cameras_by_project(
             + _safe_int(order.get("ordered_cameras"), default=0)
         )
     return ordered_by_project, has_order_for_project
-
-
-def _build_camera_audit_pdf(
-    audit_df: "pd.DataFrame",
-    *,
-    working: int,
-    ordered: int,
-    invoiced: int,
-    order_mismatches: int,
-    invoice_mismatches: int,
-) -> bytes:
-    """Render the Camera Audit comparison table as a landscape PDF."""
-    from io import BytesIO
-    from reportlab.lib import colors as rl_colors
-    from reportlab.lib.pagesizes import A4, landscape
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.lib.units import cm
-    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-
-    header_color = rl_colors.HexColor("#1B3A6B")
-    mismatch_color = rl_colors.HexColor("#FDECEA")
-    summary_color = rl_colors.HexColor("#F6F8FA")
-
-    buf = BytesIO()
-    doc = SimpleDocTemplate(
-        buf,
-        pagesize=landscape(A4),
-        leftMargin=1.0 * cm, rightMargin=1.0 * cm,
-        topMargin=1.2 * cm, bottomMargin=1.2 * cm,
-    )
-    styles = getSampleStyleSheet()
-    elems = []
-
-    elems.append(Paragraph("<b>CaddyCheck CRM - Camera Audit Comparison</b>", styles["Title"]))
-    elems.append(Paragraph(
-        f"Generated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}"
-        f"  |  Working: {working}"
-        f"  |  Ordered: {ordered}"
-        f"  |  Invoiced: {invoiced}"
-        f"  |  Order mismatches: {order_mismatches}"
-        f"  |  Invoice mismatches: {invoice_mismatches}",
-        styles["Normal"],
-    ))
-    elems.append(Spacer(1, 0.4 * cm))
-
-    cell_style = ParagraphStyle("cell", parent=styles["Normal"], fontSize=6.5, leading=8)
-    hdr_style = ParagraphStyle(
-        "hcell", parent=styles["Normal"], fontSize=6.5, leading=8,
-        textColor=rl_colors.white, fontName="Helvetica-Bold",
-    )
-
-    columns = ["Project", "Network", "Country", "Status",
-               "Working", "Ordered", "Invoiced", "D Ordered", "D Invoiced",
-               "Order Refs", "Invoice Refs"]
-    source_cols = ["Project", "Network", "Country", "Status",
-                   "# Cams (working)", "Ordered", "Invoiced (max)",
-                   "Delta Ordered", "Delta Invoiced",
-                   "Order Refs", "Invoice Refs"]
-
-    def _fmt(val):
-        if val is None or (isinstance(val, float) and pd.isna(val)):
-            return ""
-        if isinstance(val, float) and val.is_integer():
-            return str(int(val))
-        return str(val)
-
-    def _fmt_delta(val):
-        if val is None or (isinstance(val, float) and pd.isna(val)):
-            return ""
-        try:
-            n = int(val)
-            return f"+{n}" if n > 0 else str(n)
-        except (TypeError, ValueError):
-            return str(val)
-
-    # Build a working copy with plain delta columns
-    df = audit_df.copy()
-    df["Delta Ordered"] = df["Delta Ordered"] if "Delta Ordered" in df.columns else df.get("\u0394 Ordered")
-    df["Delta Invoiced"] = df["Delta Invoiced"] if "Delta Invoiced" in df.columns else df.get("\u0394 Invoiced")
-    # Rename Unicode columns to plain keys
-    if "\u0394 Ordered" in df.columns:
-        df["Delta Ordered"] = df["\u0394 Ordered"]
-    if "\u0394 Invoiced" in df.columns:
-        df["Delta Invoiced"] = df["\u0394 Invoiced"]
-
-    table_data = [[Paragraph(col, hdr_style) for col in columns]]
-    mismatch_rows = []
-    summary_rows = []
-
-    for idx, record in enumerate(df.to_dict("records"), start=1):
-        project = str(record.get("Project", ""))
-        is_summary = project == "TOTAL / SUMMARY"
-        style = hdr_style if is_summary else cell_style
-
-        d_ordered = record.get("Delta Ordered", record.get("\u0394 Ordered"))
-        d_invoiced = record.get("Delta Invoiced", record.get("\u0394 Invoiced"))
-        row = [
-            Paragraph(_fmt(record.get("Project")), style),
-            Paragraph(_fmt(record.get("Network")), style),
-            Paragraph(_fmt(record.get("Country")), style),
-            Paragraph(_fmt(record.get("Status")), style),
-            Paragraph(_fmt(record.get("# Cams (working)")), style),
-            Paragraph(_fmt(record.get("Ordered")), style),
-            Paragraph(_fmt(record.get("Invoiced (max)")), style),
-            Paragraph(_fmt_delta(d_ordered), style),
-            Paragraph(_fmt_delta(d_invoiced), style),
-            Paragraph(_fmt(record.get("Order Refs")), style),
-            Paragraph(_fmt(record.get("Invoice Refs")), style),
-        ]
-        table_data.append(row)
-        if is_summary:
-            summary_rows.append(idx)
-        elif (d_ordered is not None and not (isinstance(d_ordered, float) and pd.isna(d_ordered)) and int(d_ordered or 0) != 0) or \
-             (d_invoiced is not None and not (isinstance(d_invoiced, float) and pd.isna(d_invoiced)) and int(d_invoiced or 0) != 0):
-            mismatch_rows.append(idx)
-
-    col_widths = [4.8*cm, 1.8*cm, 1.5*cm, 1.6*cm,
-                  1.5*cm, 1.5*cm, 1.6*cm, 1.8*cm, 1.8*cm,
-                  5.5*cm, 5.5*cm]
-    table = Table(table_data, repeatRows=1, colWidths=col_widths)
-    cmds = [
-        ("BACKGROUND", (0, 0), (-1, 0), header_color),
-        ("FONTSIZE", (0, 0), (-1, -1), 6.5),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [rl_colors.white, rl_colors.HexColor("#EBF5FB")]),
-        ("GRID", (0, 0), (-1, -1), 0.3, rl_colors.HexColor("#BDC3C7")),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-        ("TOPPADDING", (0, 0), (-1, -1), 3),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-    ]
-    for r in mismatch_rows:
-        cmds.append(("BACKGROUND", (0, r), (-1, r), mismatch_color))
-    for r in summary_rows:
-        cmds.append(("BACKGROUND", (0, r), (-1, r), summary_color))
-        cmds.append(("FONTNAME", (0, r), (-1, r), "Helvetica-Bold"))
-    table.setStyle(TableStyle(cmds))
-    elems.append(table)
-    doc.build(elems)
-    return buf.getvalue()
 
 
 def _build_trends_pdf(
@@ -2751,7 +2613,7 @@ st.sidebar.title("📊 CaddyCheck CRM")
 st.sidebar.markdown("---")
 page = st.sidebar.radio(
     "Navigation",
-    ["📊 Dashboard", "❓ Ask Data", "🏗️ Projects", "📦 Orders", "📷 Camera Audit", "📡 Job Capacity", "🔐 Licenses", "🧾 Invoice Details", "💸 Debt Report", "📅 Monthly Invoice", "🎫 Tickets", "🏦 Bank Payment", "✅ Order Approvals", "⚙️ Settings"],
+    ["📊 Dashboard", "❓ Ask Data", "🏗️ Projects", "📦 Orders", "📡 Job Capacity", "🔐 Licenses", "🧾 Invoice Details", "💸 Debt Report", "📅 Monthly Invoice", "🎫 Tickets", "🏦 Bank Payment", "✅ Order Approvals", "⚙️ Settings"],
     label_visibility="collapsed",
 )
 st.sidebar.markdown("---")
@@ -4802,7 +4664,7 @@ elif page == "📦 Orders":
     if duplicate_order_rows:
         with st.expander("Duplicate Orders", expanded=bool(order_search.strip())):
             st.caption(
-                "These are repeated order/project combinations. Keep one row and delete or correct the extra rows to avoid double counting in Camera Audit."
+                "These are repeated order/project combinations. Keep one row and delete or correct the extra rows to avoid double counting cameras."
             )
             st.dataframe(
                 pd.DataFrame(duplicate_order_rows),
@@ -5204,354 +5066,6 @@ elif page == "📦 Orders":
             )
         elif _safe_str(selected_order.get("source_filename")).strip():
             st.caption(f"Source file: {_safe_str(selected_order.get('source_filename')).strip()}")
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# PAGE: CAMERA AUDIT
-# ══════════════════════════════════════════════════════════════════════════════
-elif page == "📷 Camera Audit":
-    st.title("📷 Camera Audit")
-    st.caption(
-        "Compare each project's actual working cameras (# Cams) against the cameras "
-        "you invoiced and the cameras the customer ordered."
-    )
-
-    try:
-        ca_orders, ca_orders_source = load_orders_data(_data_path)
-    except Exception as exc:
-        ca_orders, ca_orders_source = [], "unavailable"
-        st.warning(f"Could not load orders ({exc}). Ordered cameras will show as blank.")
-
-    # Aggregate invoiced cameras per project: MAX cameras_number across invoice refs.
-    invoice_cameras_by_project_ref: dict[tuple[str, int], int] = {}
-    invoice_refs_by_project: dict[str, set[str]] = {}
-    for inv in invoices:
-        key = _normalize_project_name_key(canonical_project_name(inv.project_name))
-        if not key:
-            continue
-        invoice_number_key = _safe_int(getattr(inv, "invoice_number", None), default=0)
-        cams = _safe_int(getattr(inv, "cameras_number", None), default=0)
-        invoice_ref = _safe_str(getattr(inv, "invoice_number", "")).strip()
-        if invoice_ref.endswith(".0"):
-            invoice_ref = invoice_ref[:-2]
-        if invoice_ref:
-            invoice_refs_by_project.setdefault(key, set()).add(invoice_ref)
-        if invoice_number_key and cams > 0:
-            invoice_project_key = (key, invoice_number_key)
-            previous_cams = invoice_cameras_by_project_ref.get(invoice_project_key)
-            invoice_cameras_by_project_ref[invoice_project_key] = min(previous_cams, cams) if previous_cams else cams
-
-    invoiced_by_project: dict[str, int] = {}
-    for (project_key, _invoice_number), cams in invoice_cameras_by_project_ref.items():
-        if cams > invoiced_by_project.get(project_key, 0):
-            invoiced_by_project[project_key] = cams
-
-    project_names_for_audit = [
-        _safe_str(project.project_name).strip()
-        for project in projects
-        if _safe_str(project.project_name).strip()
-    ]
-    project_name_by_key: dict[str, str] = {}
-    for project_name in project_names_for_audit:
-        canonical_name = canonical_project_name(project_name)
-        project_name_by_key[_normalize_project_name_key(project_name)] = project_name
-        project_name_by_key[_normalize_project_name_key(canonical_name)] = project_name
-        project_name_by_key[_normalize_order_project_match_key(project_name)] = project_name
-        project_name_by_key[_normalize_order_project_match_key(canonical_name)] = project_name
-
-    # Aggregate ordered cameras per project: SUM of ordered_cameras across all orders.
-    # Use the same smart matching as the Orders page so variants like
-    # "Proxy Delhaize Westkerke" resolve to "Proxy Westkerke".
-    ordered_by_project: dict[str, int] = {}
-    ordered_rows_by_project: dict[str, list[dict[str, str]]] = {}
-    has_order_for_project: set[str] = set()
-    for order in ca_orders:
-        order_project_name = _safe_str(order.get("project_name")).strip()
-        matched_project_name = project_name_by_key.get(_normalize_project_name_key(canonical_project_name(order_project_name)))
-        if matched_project_name is None:
-            matched_project_name = project_name_by_key.get(_normalize_order_project_match_key(order_project_name))
-        if matched_project_name is None:
-            suggested_project_name, suggested_project_score = _suggest_best_order_project_match(order_project_name, project_names_for_audit)
-            if suggested_project_score >= 0.55:
-                matched_project_name = suggested_project_name
-        if not matched_project_name:
-            continue
-        has_order_for_project.add(matched_project_name)
-        ordered_by_project[matched_project_name] = ordered_by_project.get(matched_project_name, 0) + _safe_int(order.get("ordered_cameras"), default=0)
-        ordered_rows_by_project.setdefault(matched_project_name, []).append({
-            "order_id": str(_safe_int(order.get("id"), default=0)),
-            "order_number": _safe_str(order.get("order_number")).strip(),
-            "project_name": order_project_name,
-        })
-
-    rows = []
-    for project in projects:
-        name = _safe_str(project.project_name).strip()
-        if not name:
-            continue
-        key = _normalize_project_name_key(canonical_project_name(name))
-        working = _safe_int(project.num_cams, default=0)
-        invoiced = invoiced_by_project.get(key)
-        ordered = ordered_by_project.get(name) if name in has_order_for_project else None
-        project_order_rows = ordered_rows_by_project.get(name, [])
-        unique_order_ids = sorted({row["order_id"] for row in project_order_rows if row["order_id"] not in {"", "0"}}, key=lambda value: int(value))
-        unique_order_numbers = sorted({row["order_number"] for row in project_order_rows if row["order_number"]}, key=str)
-        unique_invoice_refs = sorted(
-            {
-                invoice_ref.strip()
-                for invoice_ref in invoice_refs_by_project.get(key, set())
-                if _safe_str(invoice_ref).strip()
-            },
-            key=lambda value: (_safe_int(value, default=-1), value),
-            reverse=True,
-        )
-        # Build a map of invoice_ref -> maintenance_year label for this project
-        inv_year_by_ref: dict[str, str] = {}
-        for inv in invoices:
-            inv_key = _normalize_project_name_key(canonical_project_name(inv.project_name))
-            if inv_key != key:
-                continue
-            inv_ref = _safe_str(getattr(inv, "invoice_number", "")).strip()
-            if inv_ref.endswith(".0"):
-                inv_ref = inv_ref[:-2]
-            if inv_ref:
-                inv_year_by_ref[inv_ref] = _safe_str(getattr(inv, "maintenance_year", "")).strip()
-
-        invoice_refs_with_cams = []
-        for invoice_ref in unique_invoice_refs:
-            ref_cams = invoice_cameras_by_project_ref.get((key, _safe_int(invoice_ref, default=0)))
-            year_label = inv_year_by_ref.get(invoice_ref, "")
-            label_str = f"-{year_label}" if year_label else ""
-            cams_str = f" ({ref_cams})" if ref_cams else ""
-            invoice_refs_with_cams.append(f"{invoice_ref}{label_str}{cams_str}")
-        rows.append({
-            "Project": name,
-            "Network": _project_network(name),
-            "Country": _safe_str(project.country).strip(),
-            "Status": _safe_str(project.status).strip(),
-            "# Cams (working)": working,
-            "Ordered": ordered,
-            "Invoiced (max)": invoiced if invoiced else None,
-            "Δ Ordered": (working - ordered) if ordered is not None else None,
-            "Δ Invoiced": (working - invoiced) if invoiced else None,
-            "Order ID Count": len(unique_order_ids),
-            "Invoice Ref Count": len(unique_invoice_refs),
-            "Order IDs": ", ".join(unique_order_ids),
-            "Order Refs": ", ".join(unique_order_numbers),
-            "Invoice Refs": ", ".join(invoice_refs_with_cams),
-        })
-
-    if not rows:
-        st.info("No projects available to compare.")
-        st.stop()
-
-    audit_df = pd.DataFrame(rows)
-
-    # ── Filters ───────────────────────────────────────────────────────────────
-    fc1, fc2, fc3, fc4, fc5, fc6 = st.columns(6)
-    with fc1:
-        network_choices = ["All"] + _ordered_project_networks(set(audit_df["Network"]))
-        sel_net = st.selectbox("Network", network_choices, key="camaudit_network")
-    with fc2:
-        country_vals = sorted(v for v in audit_df["Country"].unique() if v)
-        sel_country = st.selectbox("Country", ["All"] + country_vals, key="camaudit_country")
-    with fc3:
-        status_vals = sorted(v for v in audit_df["Status"].unique() if v)
-        status_choices = ["All"] + status_vals
-        default_status_index = status_choices.index("Active") if "Active" in status_choices else 0
-        sel_status = st.selectbox("Status", status_choices, index=default_status_index, key="camaudit_status")
-    with fc4:
-        audit_view = st.selectbox(
-            "Show rows",
-            [
-                "All",
-                "Δ Ordered != 0",
-                "Δ Ordered > 0 (under-ordered)",
-                "Δ Ordered < 0 (over-ordered)",
-                "Δ Invoiced != 0",
-                "Any delta != 0",
-                "Order ID Count > 1",
-                "No order data",
-            ],
-            key="camaudit_view",
-        )
-    with fc5:
-        audit_sort = st.selectbox(
-            "Sort by",
-            [
-                "Project A-Z",
-                "Δ Ordered != 0",
-                "Δ Invoiced != 0",
-                "Order ID Count > 1",
-                "Action priority",
-            ],
-            index=4,
-            key="camaudit_sort",
-        )
-    with fc6:
-        order_search = st.text_input("Search project", key="camaudit_search").strip().lower()
-
-    filtered = audit_df.copy()
-    if sel_net != "All":
-        filtered = filtered[filtered["Network"] == sel_net]
-    if sel_country != "All":
-        filtered = filtered[filtered["Country"] == sel_country]
-    if sel_status != "All":
-        filtered = filtered[filtered["Status"] == sel_status]
-    if order_search:
-        filtered = filtered[filtered["Project"].str.lower().str.contains(order_search, na=False)]
-    if audit_view == "No order data":
-        filtered = filtered[filtered["Ordered"].isna()]
-    elif audit_view == "Δ Ordered != 0":
-        filtered = filtered[(filtered["Δ Ordered"].notna()) & (filtered["Δ Ordered"] != 0)]
-    elif audit_view == "Δ Ordered > 0 (under-ordered)":
-        filtered = filtered[(filtered["Δ Ordered"].notna()) & (filtered["Δ Ordered"] > 0)]
-    elif audit_view == "Δ Ordered < 0 (over-ordered)":
-        filtered = filtered[(filtered["Δ Ordered"].notna()) & (filtered["Δ Ordered"] < 0)]
-    elif audit_view == "Δ Invoiced != 0":
-        filtered = filtered[(filtered["Δ Invoiced"].notna()) & (filtered["Δ Invoiced"] != 0)]
-    elif audit_view == "Any delta != 0":
-        filtered = filtered[
-            ((filtered["Δ Ordered"].notna()) & (filtered["Δ Ordered"] != 0))
-            | ((filtered["Δ Invoiced"].notna()) & (filtered["Δ Invoiced"] != 0))
-        ]
-    elif audit_view == "Order ID Count > 1":
-        filtered = filtered[filtered["Order ID Count"] > 1]
-
-    sort_helper_columns = [
-        "_sort_delta_ordered",
-        "_sort_delta_invoiced",
-        "_sort_multi_order_ids",
-        "_sort_abs_delta_ordered",
-        "_sort_abs_delta_invoiced",
-    ]
-    if not filtered.empty:
-        filtered = filtered.copy()
-        filtered["_sort_delta_ordered"] = filtered["Δ Ordered"].notna() & (filtered["Δ Ordered"] != 0)
-        filtered["_sort_delta_invoiced"] = filtered["Δ Invoiced"].notna() & (filtered["Δ Invoiced"] != 0)
-        filtered["_sort_multi_order_ids"] = filtered["Order ID Count"] > 1
-        filtered["_sort_abs_delta_ordered"] = filtered["Δ Ordered"].abs().fillna(0)
-        filtered["_sort_abs_delta_invoiced"] = filtered["Δ Invoiced"].abs().fillna(0)
-        if audit_sort == "Δ Ordered != 0":
-            sort_columns = ["_sort_delta_ordered", "_sort_abs_delta_ordered", "Project"]
-            sort_ascending = [False, False, True]
-        elif audit_sort == "Δ Invoiced != 0":
-            sort_columns = ["_sort_delta_invoiced", "_sort_abs_delta_invoiced", "Project"]
-            sort_ascending = [False, False, True]
-        elif audit_sort == "Order ID Count > 1":
-            sort_columns = ["_sort_multi_order_ids", "Order ID Count", "Project"]
-            sort_ascending = [False, False, True]
-        elif audit_sort == "Action priority":
-            sort_columns = [
-                "_sort_delta_ordered",
-                "_sort_delta_invoiced",
-                "_sort_multi_order_ids",
-                "_sort_abs_delta_ordered",
-                "_sort_abs_delta_invoiced",
-                "Project",
-            ]
-            sort_ascending = [False, False, False, False, False, True]
-        else:
-            sort_columns = ["Project"]
-            sort_ascending = [True]
-        filtered = filtered.sort_values(
-            by=sort_columns,
-            ascending=sort_ascending,
-            kind="mergesort",
-        )
-
-    # ── Summary metrics ───────────────────────────────────────────────────────
-    total_working = int(filtered["# Cams (working)"].sum())
-    total_ordered = int(filtered["Ordered"].dropna().sum())
-    total_invoiced = int(filtered["Invoiced (max)"].dropna().sum())
-    order_mismatches = int(((filtered["Δ Ordered"].notna()) & (filtered["Δ Ordered"] != 0)).sum())
-    invoice_mismatches = int(((filtered["Δ Invoiced"].notna()) & (filtered["Δ Invoiced"] != 0)).sum())
-    no_orders = int(filtered["Ordered"].isna().sum())
-
-    m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("Working Cams", total_working)
-    m2.metric("Ordered Cams", total_ordered)
-    m3.metric("Invoiced Cams", total_invoiced)
-    m4.metric("Order Mismatches", order_mismatches)
-    m5.metric("Invoice Mismatches", invoice_mismatches)
-    if no_orders:
-        st.caption(f"⚠️ {no_orders} project(s) have no order data yet (still being uploaded).")
-
-    # ── Highlighted table ─────────────────────────────────────────────────────
-    camera_audit_display_df = filtered.drop(columns=["Order ID Count", "Invoice Ref Count", "Approved", "Remarks"] + sort_helper_columns, errors="ignore").copy()
-    summary_row = {column_name: "" for column_name in camera_audit_display_df.columns}
-    summary_row.update({
-        "Project": "TOTAL / SUMMARY",
-        "# Cams (working)": total_working,
-        "Ordered": total_ordered,
-        "Invoiced (max)": total_invoiced,
-        "Δ Ordered": int(filtered["Δ Ordered"].dropna().sum()),
-        "Δ Invoiced": int(filtered["Δ Invoiced"].dropna().sum()),
-    })
-    camera_audit_display_df = pd.concat(
-        [camera_audit_display_df, pd.DataFrame([summary_row])],
-        ignore_index=True,
-    )
-
-    def _highlight_delta(val):
-        if pd.isna(val):
-            return ""
-        if val == 0:
-            return "color: #2e7d32;"  # green = match
-        return "background-color: #fdecea; color: #c62828; font-weight: bold;"  # red = mismatch
-
-    def _highlight_summary_row(row):
-        if row.get("Project") == "TOTAL / SUMMARY":
-            return ["background-color: #f6f8fa; font-weight: bold; border-top: 2px solid #d0d7de;" for _ in row]
-        return ["" for _ in row]
-
-    styled = (
-        camera_audit_display_df.style
-        .apply(_highlight_summary_row, axis=1)
-        .map(_highlight_delta, subset=["Δ Ordered", "Δ Invoiced"])
-        .format({
-            "Ordered": lambda v: "—" if pd.isna(v) else f"{int(v)}",
-            "Invoiced (max)": lambda v: "—" if pd.isna(v) else f"{int(v)}",
-            "Δ Ordered": lambda v: "—" if pd.isna(v) else f"{int(v):+d}",
-            "Δ Invoiced": lambda v: "—" if pd.isna(v) else f"{int(v):+d}",
-        })
-    )
-    st.dataframe(
-        styled,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Order Refs": st.column_config.TextColumn("Order Refs", width="large"),
-            "Invoice Refs": st.column_config.TextColumn("Invoice Refs", width="large"),
-        },
-    )
-
-    dl_cols = st.columns(2)
-    dl_cols[0].download_button(
-        "⬇️ Download comparison (CSV)",
-        data=camera_audit_display_df.to_csv(index=False).encode("utf-8"),
-        file_name="camera_audit.csv",
-        mime="text/csv",
-        key="camaudit_download",
-    )
-    try:
-        audit_pdf_bytes = _build_camera_audit_pdf(
-            camera_audit_display_df,
-            working=total_working,
-            ordered=total_ordered,
-            invoiced=total_invoiced,
-            order_mismatches=order_mismatches,
-            invoice_mismatches=invoice_mismatches,
-        )
-        dl_cols[1].download_button(
-            "📄 Download comparison (PDF)",
-            data=audit_pdf_bytes,
-            file_name=f"camera_audit_{datetime.date.today().isoformat()}.pdf",
-            mime="application/pdf",
-            key="camaudit_download_pdf",
-        )
-    except Exception as _exc:
-        dl_cols[1].warning(f"PDF export unavailable ({_exc}).")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -8614,6 +8128,12 @@ elif page == "✅ Order Approvals":
         _m3.metric("Rejected", _counts.get("rejected", 0))
         _m4.metric("Needs correction", _counts.get("needs_correction", 0))
 
+        if CAN_EDIT and _counts.get("rejected", 0):
+            if st.button(f"🗑️ Delete all rejected ({_counts.get('rejected', 0)})", key="delete_all_rejected"):
+                _deleted_count = _oas.delete_purchase_orders_by_status("rejected")
+                st.success(f"Deleted {_deleted_count} rejected order(s).")
+                st.rerun()
+
         st.markdown("---")
         for _o in _orders:
             _title = _o.get("project_name") or _o.get("customer_name") or _o.get("customer_email") or "(unknown)"
@@ -8649,6 +8169,12 @@ elif page == "✅ Order Approvals":
                         st.rerun()
                     if _ac3.button("✏️ Needs correction", key=f"corr_{_o['id']}", use_container_width=True):
                         _oas.update_purchase_order(_o["id"], status="needs_correction")
+                        st.rerun()
+
+                if CAN_EDIT:
+                    st.markdown("---")
+                    if st.button("🗑️ Delete this order", key=f"del_{_o['id']}"):
+                        _oas.delete_purchase_order(_o["id"])
                         st.rerun()
 
 
