@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import logging
+import time
 
 from config.settings import get_email_config
 from services.email_service import send_simple_email
@@ -66,11 +67,26 @@ def _split_csv(value: str | None) -> list[str]:
 def _load_projects(source: str) -> tuple[list, str]:
     if source == "excel":
         return load_projects_excel(), "Excel (local fallback)"
+
+    def _load_supabase_with_retry() -> list:
+        last_exc: Exception | None = None
+        for attempt in range(1, 4):
+            try:
+                return load_projects_supabase()
+            except RuntimeError:
+                raise  # credentials misconfigured; retrying won't help
+            except Exception as exc:  # transient network/API errors
+                last_exc = exc
+                logger.warning("Supabase load attempt %d/3 failed: %s", attempt, exc)
+                if attempt < 3:
+                    time.sleep(2 * attempt)
+        raise last_exc  # type: ignore[misc]
+
     if source == "supabase":
-        return load_projects_supabase(), "Supabase"
+        return _load_supabase_with_retry(), "Supabase"
 
     try:
-        return load_projects_supabase(), "Supabase"
+        return _load_supabase_with_retry(), "Supabase"
     except RuntimeError as exc:
         if "Supabase credentials not configured" not in str(exc):
             raise
@@ -260,4 +276,10 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except SystemExit:
+        raise
+    except Exception:
+        logger.exception("License expiry alert crashed unexpectedly.")
+        raise SystemExit(1)
