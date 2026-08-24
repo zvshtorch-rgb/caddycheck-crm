@@ -160,7 +160,7 @@ def send_simple_email(
 
     all_recipients = list(recipients) + (cc or [])
 
-    logger.info("Sending notification '%s' to %s", subject, all_recipients)
+    logger.info("Sending notification '%s' to %s via %s:%s", subject, all_recipients, smtp_host, smtp_port)
 
     if use_tls:
         context = ssl.create_default_context()

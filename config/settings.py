@@ -259,6 +259,19 @@ def get_email_config() -> dict:
         defaults["license_alert_days_before"] = [
             int(x.strip()) for x in _env_alert_days.split(",") if x.strip().isdigit()
         ]
+
+    # Defensive cleanup: a misconfigured secret/env value (stray quotes, or a
+    # "host:port" combo instead of a bare hostname) makes smtplib's DNS lookup
+    # fail with a cryptic socket.gaierror. Normalize it here so every caller
+    # (invoice email, license alerts, order-approval notifications) benefits.
+    host_val = str(defaults.get("smtp_host", "")).strip().strip("'\"")
+    if host_val.count(":") == 1:
+        maybe_host, _, maybe_port = host_val.partition(":")
+        if maybe_port.isdigit():
+            host_val = maybe_host
+            defaults["smtp_port"] = int(maybe_port)
+    defaults["smtp_host"] = host_val
+
     return defaults
 
 
