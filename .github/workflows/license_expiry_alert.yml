@@ -64,6 +64,7 @@ jobs:
           SMTP_SENDER_NAME: ${{ secrets.SMTP_SENDER_NAME }}
           EMAIL_DEFAULT_RECIPIENTS: ${{ secrets.EMAIL_DEFAULT_RECIPIENTS }}
           EMAIL_DEFAULT_CC: ${{ secrets.EMAIL_DEFAULT_CC }}
+          LICENSE_ALERT_RECIPIENTS: ${{ secrets.LICENSE_ALERT_RECIPIENTS }}
         run: |
           ARGS="--source supabase"
           if [ -n "${{ github.event.inputs.days_before }}" ]; then
