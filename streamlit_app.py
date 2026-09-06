@@ -9233,13 +9233,14 @@ elif page == "🏦 Bank Payment":
     st.markdown("---")
     with st.expander("🔍 Manual Lookup (no PDF)", expanded=not bool(uploaded_files)):
         mc1, mc2 = st.columns(2)
-        manual_inv_no = mc1.number_input(
-            "Invoice #", min_value=0, step=1, key="manual_inv_no",
+        manual_inv_text = mc1.text_input(
+            "Invoice #(s)", help="One or more invoice numbers, comma-separated.", key="manual_inv_no",
         )
+        manual_inv_nos = [int(tok) for tok in re.findall(r"\d+", manual_inv_text)]
         manual_date = mc2.date_input(
             "Payment Date", value=datetime.date.today(), key="manual_date",
         )
-        _render_invoice_lookup(manual_inv_no, manual_date, key_prefix="manual")
+        _render_invoice_lookup(manual_inv_nos, manual_date, key_prefix="manual")
 
     with st.expander("🧮 Adjustments & Credits", expanded=False):
         st.caption("Handle partial transactions, duplicate payments (credit), and applying available credit.")
