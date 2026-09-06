@@ -8212,6 +8212,35 @@ elif page == "⚙️ Settings":
     else:
         email_cfg = get_email_config()
 
+        st.subheader("Sender")
+        st.caption(
+            "The 'From' name/address used on outgoing emails (license alerts, order approvals, invoices). "
+            "The SMTP account credentials themselves (host/username/password) are configured via "
+            "Streamlit secrets or environment variables, not here."
+        )
+        with st.form("sender_form"):
+            sender_name_input = st.text_input(
+                "Sender Name", email_cfg.get("sender_name", "CaddyCheck CRM"),
+            )
+            sender_email_input = st.text_input(
+                "Sender Email", email_cfg.get("sender_email", ""),
+                help="E.g. caddycheck2030@video-inform.com. Must be a mailbox the configured SMTP account can send as.",
+            )
+            save_sender_btn = st.form_submit_button("Save Sender", type="primary")
+
+        if save_sender_btn:
+            new_sender_cfg = dict(email_cfg)
+            new_sender_cfg.pop("smtp_password", None)
+            new_sender_cfg["sender_name"] = sender_name_input.strip() or "CaddyCheck CRM"
+            new_sender_cfg["sender_email"] = sender_email_input.strip()
+            try:
+                save_email_config(new_sender_cfg)
+                st.success("Sender settings saved.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Save failed: {e}")
+
+        st.markdown("---")
         st.subheader("Default Recipients")
         with st.form("smtp_form"):
             recipients = st.text_input("To (comma-separated)",
