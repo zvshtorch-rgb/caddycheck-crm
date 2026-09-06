@@ -2642,6 +2642,29 @@ if page_flash_success:
     st.toast(page_flash_success, icon="✅")
 
 
+def _build_confirmed_invoices_zip(invoice_numbers: list[int]) -> tuple[bytes, list[int]]:
+    """Build a ZIP of one PDF per invoice number. Returns (zip_bytes, invoice_numbers_included)."""
+    from services.pdf_service import generate_invoice_pdf_from_rows
+
+    buf = io.BytesIO()
+    included: list[int] = []
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for inv_no in sorted({n for n in invoice_numbers if n}):
+            invoice_rows_for_pdf = [inv for inv in invoices if _safe_int(inv.invoice_number) == int(inv_no)]
+            if not invoice_rows_for_pdf:
+                continue
+            try:
+                pdf_bytes = generate_invoice_pdf_from_rows(
+                    invoice_rows=invoice_rows_for_pdf,
+                    invoice_number=int(inv_no),
+                )
+            except Exception:
+                continue
+            zf.writestr(f"CC_inv_{inv_no}.pdf", pdf_bytes)
+            included.append(inv_no)
+    return buf.getvalue(), included
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE: DASHBOARD
 # ══════════════════════════════════════════════════════════════════════════════
@@ -8680,6 +8703,35 @@ elif page == "🏦 Bank Payment":
                         f"📷 Cameras: **{_rl['cameras']}**"
                     )
                     _lc2.code(_url, language=None)
+        if _rr.get("confirmed_invoice_numbers"):
+            zip_bytes, zip_included = _build_confirmed_invoices_zip(_rr["confirmed_invoice_numbers"])
+            if zip_included:
+                st.download_button(
+                    "📦 Download confirmed invoices (ZIP)",
+                    data=zip_bytes,
+                    file_name=f"invoices_{'_'.join(str(n) for n in zip_included)}.zip",
+                    mime="application/zip",
+                    key="download_confirmed_invoices_zip",
+                )
+        st.markdown("---")
+
+    # ── Show result from previous "Save All Parsed Payments" ──────────────────
+    if "_batch_bank_result" in st.session_state:
+        _br = st.session_state.pop("_batch_bank_result")
+        if _br["saved"]:
+            st.success(f"Saved {_br['saved']} bank payment(s).")
+        if _br["skipped"]:
+            st.warning("\n".join(_br["skipped"]))
+        if _br.get("confirmed_invoice_numbers"):
+            zip_bytes, zip_included = _build_confirmed_invoices_zip(_br["confirmed_invoice_numbers"])
+            if zip_included:
+                st.download_button(
+                    "📦 Download confirmed invoices (ZIP)",
+                    data=zip_bytes,
+                    file_name=f"invoices_{'_'.join(str(n) for n in zip_included)}.zip",
+                    mime="application/zip",
+                    key="download_batch_confirmed_invoices_zip",
+                )
         st.markdown("---")
 
     def _render_invoice_lookup(inv_nos: list[int], pay_date: datetime.date, key_prefix: str, payment_context: Optional[dict] = None):
@@ -8869,6 +8921,7 @@ elif page == "🏦 Bank Payment":
                     "inv_no": inv_nos_label,
                     "count":  len(selected),
                     "links":  renewal_links,
+                    "confirmed_invoice_numbers": sorted({r["invoice_number"] for r in allocation_rows if r.get("invoice_number")}),
                 }
                 st.rerun()
 
@@ -8994,6 +9047,7 @@ elif page == "🏦 Bank Payment":
             batch_skipped = []
             batch_errors = []
             batch_saved_records = []
+            batch_confirmed_invoice_numbers: set[int] = set()
 
             for item in parsed_bank_files:
                 try:
@@ -9141,6 +9195,8 @@ elif page == "🏦 Bank Payment":
                                 "year": _safe_int(row.get("year"), default=0) or None,
                                 "amount_applied": amount_applied,
                             })
+                            if row.get("_invoice_number"):
+                                batch_confirmed_invoice_numbers.add(row["_invoice_number"])
 
                             try:
                                 sub = get_subscription(proj)
@@ -9223,10 +9279,11 @@ elif page == "🏦 Bank Payment":
 
             if batch_saved_records:
                 st.cache_data.clear()
-            if batch_saved:
-                st.success(f"Saved {batch_saved} bank payment(s).")
-            if batch_skipped:
-                st.warning("\n".join(batch_skipped))
+            st.session_state["_batch_bank_result"] = {
+                "saved": batch_saved,
+                "skipped": batch_skipped,
+                "confirmed_invoice_numbers": sorted(batch_confirmed_invoice_numbers),
+            }
             st.rerun()
 
     # ── Manual lookup (no PDF) ────────────────────────────────────────────────
