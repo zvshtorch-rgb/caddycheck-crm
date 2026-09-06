@@ -244,6 +244,33 @@ def list_incoming_emails(limit: int = 200) -> List[dict]:
     return resp.data or []
 
 
+def get_incoming_email(email_id: str) -> Optional[dict]:
+    """Fetch a single incoming-email row by id (used to recover its extracted PDF text)."""
+    if not email_id:
+        return None
+    client = _get_client()
+    resp = (
+        client.table("incoming_order_emails")
+        .select("*")
+        .eq("id", email_id)
+        .limit(1)
+        .execute()
+    )
+    return resp.data[0] if resp.data else None
+
+
+def download_purchase_order_pdf_bytes(bucket_name: str, storage_path: str) -> Optional[bytes]:
+    """Best-effort download of a private PO PDF's raw bytes (or None)."""
+    if not bucket_name or not storage_path:
+        return None
+    client = _get_client()
+    try:
+        return client.storage.from_(bucket_name).download(storage_path)
+    except Exception as exc:
+        logger.warning("Could not download purchase order PDF: %s", exc)
+        return None
+
+
 # ── Purchase orders ───────────────────────────────────────────────────────────
 def create_purchase_order(**fields) -> dict:
     client = _get_client()

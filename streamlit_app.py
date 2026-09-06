@@ -2665,6 +2665,90 @@ def _build_confirmed_invoices_zip(invoice_numbers: list[int]) -> tuple[bytes, li
     return buf.getvalue(), included
 
 
+def _auto_provision_order_and_project(purchase_order_id: str) -> list[str]:
+    """After a purchase order is approved: ensure a Project exists and create an Orders record.
+
+    Best-effort — never raises. Returns a list of human-readable status messages.
+    """
+    from services import order_approval_service as _oas
+    from models.project import Project as ProjectModel
+
+    messages: list[str] = []
+    try:
+        po = _oas.get_purchase_order(purchase_order_id)
+    except Exception as exc:
+        return [f"Could not load purchase order: {exc}"]
+    if not po:
+        return ["Purchase order not found."]
+
+    project_name = canonical_project_name(_safe_str(po.get("project_name")).strip())
+    if not project_name:
+        return ["No project name on the purchase order — skipped Order/Project creation."]
+
+    # 1. Recover the PDF text (best effort) to determine the camera count.
+    text = ""
+    try:
+        incoming_email = _oas.get_incoming_email(po.get("incoming_email_id"))
+        text = _safe_str(incoming_email.get("extracted_text")) if incoming_email else ""
+    except Exception:
+        pass
+    if not text and po.get("pdf_storage_bucket") and po.get("pdf_storage_path"):
+        try:
+            pdf_bytes = _oas.download_purchase_order_pdf_bytes(po["pdf_storage_bucket"], po["pdf_storage_path"])
+            if pdf_bytes:
+                text = _extract_project_order_pdf_text(pdf_bytes)
+        except Exception:
+            pass
+
+    amount = _safe_float(po.get("amount"), default=0.0)
+    ordered_cameras = _extract_order_camera_total_from_text(text) if text else 0
+    if not ordered_cameras:
+        ordered_cameras = _infer_order_camera_total_from_amount(amount)
+
+    # 2. Create the Project if none matches yet.
+    project_name_choices = [p.project_name for p in projects if _safe_str(p.project_name).strip()]
+    if not _order_project_matches(project_name, project_name_choices):
+        projects.append(ProjectModel(
+            project_name=project_name,
+            country=_guess_order_country(project_name),
+            num_cams=ordered_cameras,
+            installation_year=datetime.date.today().year,
+            status="New",
+        ))
+        try:
+            _save_projects(projects, _data_path)
+            load_data.clear()
+            messages.append(f"Created new project '{project_name}' ({ordered_cameras} camera(s)).")
+        except Exception as exc:
+            messages.append(f"Could not save new project '{project_name}': {exc}")
+    else:
+        messages.append(f"Project '{project_name}' already exists — left unchanged.")
+
+    # 3. Create the Orders-page record.
+    try:
+        created = _create_orders([{
+            "order_number": _safe_str(po.get("order_reference")).strip() or f"PO-{purchase_order_id[:8]}",
+            "project_name": project_name,
+            "country": _guess_order_country(project_name),
+            "ordered_cameras": ordered_cameras,
+            "payment_amount": amount,
+            "payment_month": "",
+            "installation_year": datetime.date.today().year,
+            "order_date": _parse_order_date(po.get("created_at")),
+            "status": "Ordered",
+            "notes": f"Auto-created from approved purchase order {purchase_order_id}.",
+            "source_filename": _safe_str(po.get("pdf_storage_path")),
+        }], _data_path)
+        if created:
+            messages.append(f"Created order record ({ordered_cameras} camera(s), €{amount:,.2f}).")
+        else:
+            messages.append("Order record already existed — no duplicate created.")
+    except Exception as exc:
+        messages.append(f"Could not create order record: {exc}")
+
+    return messages
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE: DASHBOARD
 # ══════════════════════════════════════════════════════════════════════════════
@@ -8186,6 +8270,9 @@ elif page == "✅ Order Approvals":
                     if _ac1.button("✅ Approve", key=f"appr_{_o['id']}", use_container_width=True):
                         _oas.update_purchase_order(_o["id"], status="approved")
                         _oas.auto_create_invoice_for_approved_order(_o["id"])
+                        _provision_messages = _auto_provision_order_and_project(_o["id"])
+                        st.session_state["_flash_success"] = " | ".join(_provision_messages) or "Purchase order approved."
+                        st.session_state["_flash_success_page"] = "✅ Order Approvals"
                         st.rerun()
                     if _ac2.button("❌ Reject", key=f"rej_{_o['id']}", use_container_width=True):
                         _oas.update_purchase_order(_o["id"], status="rejected")
@@ -8193,6 +8280,12 @@ elif page == "✅ Order Approvals":
                     if _ac3.button("✏️ Needs correction", key=f"corr_{_o['id']}", use_container_width=True):
                         _oas.update_purchase_order(_o["id"], status="needs_correction")
                         st.rerun()
+
+                if CAN_EDIT and _o.get("status") == "approved":
+                    if st.button("🔁 (Re-)create Order + Project record", key=f"provision_{_o['id']}"):
+                        _provision_messages = _auto_provision_order_and_project(_o["id"])
+                        for _pm in _provision_messages:
+                            st.info(_pm)
 
                 if CAN_EDIT:
                     st.markdown("---")
