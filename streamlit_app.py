@@ -8782,6 +8782,15 @@ elif page == "🏦 Bank Payment":
         unpaid_projects = list(df[df["Paid"] != "Yes"]["Project"])
         if not unpaid_projects:
             st.success(f"All rows for invoice(s) {inv_nos_label} are already marked as paid.")
+            zip_bytes, zip_included = _build_confirmed_invoices_zip(inv_nos)
+            if zip_included:
+                st.download_button(
+                    "📦 Download these invoices (ZIP)",
+                    data=zip_bytes,
+                    file_name=f"invoices_{'_'.join(str(n) for n in zip_included)}.zip",
+                    mime="application/zip",
+                    key=f"{key_prefix}_download_zip_already_paid",
+                )
             return
 
         selected = st.multiselect(
