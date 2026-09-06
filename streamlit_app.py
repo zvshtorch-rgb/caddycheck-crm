@@ -8682,25 +8682,37 @@ elif page == "🏦 Bank Payment":
                     _lc2.code(_url, language=None)
         st.markdown("---")
 
-    def _render_invoice_lookup(inv_no: int, pay_date: datetime.date, key_prefix: str, payment_context: Optional[dict] = None):
-        """Look up rows for inv_no and render selection + confirm UI."""
-        if inv_no <= 0:
+    def _render_invoice_lookup(inv_nos: list[int], pay_date: datetime.date, key_prefix: str, payment_context: Optional[dict] = None):
+        """Look up rows for one or more invoice numbers and render selection + confirm UI."""
+        inv_nos = sorted({n for n in inv_nos if n and n > 0})
+        if not inv_nos:
             st.info("Enter a valid invoice number to look up matching rows.")
             return
 
+        inv_nos_label = ", ".join(f"#{n}" for n in inv_nos)
+
         with st.spinner("Looking up invoice in database…"):
             try:
-                rows = get_invoices_by_number(inv_no)
+                rows = []
+                missing = []
+                for inv_no in inv_nos:
+                    inv_rows = get_invoices_by_number(inv_no)
+                    if not inv_rows:
+                        missing.append(inv_no)
+                    for r in inv_rows:
+                        rows.append({**r, "_invoice_number": inv_no})
             except Exception as exc:
                 st.error(f"Lookup failed: {exc}")
                 return
 
+        if missing:
+            st.warning(f"No invoice rows found for invoice(s): {', '.join(f'#{n}' for n in missing)}.")
         if not rows:
-            st.warning(f"No invoice rows found for invoice **#{inv_no}**.")
             return
 
         df = pd.DataFrame([{
             "id":           r["id"],
+            "Invoice #":    r["_invoice_number"],
             "Project":      r["project_name"],
             "Maint. Year":  r["maintenance_year"],
             "Amount (€)":   _safe_float(r.get("payment_amount")),
@@ -8710,14 +8722,14 @@ elif page == "🏦 Bank Payment":
         } for r in rows])
 
         st.dataframe(
-            df[["Project", "Maint. Year", "Amount (€)", "Cameras", "Paid", "Payment Date"]],
+            df[["Invoice #", "Project", "Maint. Year", "Amount (€)", "Cameras", "Paid", "Payment Date"]],
             use_container_width=True,
             hide_index=True,
         )
 
         unpaid_projects = list(df[df["Paid"] != "Yes"]["Project"])
         if not unpaid_projects:
-            st.success(f"All rows for invoice **#{inv_no}** are already marked as paid.")
+            st.success(f"All rows for invoice(s) {inv_nos_label} are already marked as paid.")
             return
 
         selected = st.multiselect(
@@ -8736,7 +8748,7 @@ elif page == "🏦 Bank Payment":
             key=f"{key_prefix}_confirm_date",
         )
 
-        sel_df = df[df["Project"].isin(selected)][["Project", "Amount (€)", "Cameras"]].copy()
+        sel_df = df[df["Project"].isin(selected)][["Invoice #", "Project", "Amount (€)", "Cameras"]].copy()
         st.caption("The following rows will be marked paid. If subscription tables exist, renewal links will also be generated.")
         st.dataframe(sel_df, use_container_width=True, hide_index=True)
 
@@ -8749,6 +8761,7 @@ elif page == "🏦 Bank Payment":
 
             for _, row in df[df["Project"].isin(selected)].iterrows():
                 proj = row["Project"]
+                row_inv_no = int(row["Invoice #"])
                 try:
                     # 1. Mark invoice row as paid
                     mark_invoice_row_paid(
@@ -8761,7 +8774,7 @@ elif page == "🏦 Bank Payment":
                     total_applied += amount_applied
                     allocation_rows.append({
                         "invoice_row_id": int(row["id"]),
-                        "invoice_number": inv_no,
+                        "invoice_number": row_inv_no,
                         "project_name": proj,
                         "maintenance_year": _safe_str(row["Maint. Year"]),
                         "year": None,
@@ -8796,7 +8809,7 @@ elif page == "🏦 Bank Payment":
                             project_name=proj,
                             target_valid_until=target_until,
                             cameras_allowed=cameras,
-                            invoice_number=str(inv_no),
+                            invoice_number=str(row_inv_no),
                             payment_amount=row["Amount (€)"],
                         )
 
@@ -8826,13 +8839,14 @@ elif page == "🏦 Bank Payment":
                 if renewal_warnings:
                     st.warning("\n".join(renewal_warnings))
 
+                inv_nos_joined = ",".join(str(n) for n in inv_nos)
                 payment_entry = {
                     "payment_date": confirm_date.isoformat(),
-                    "invoice_number": inv_no,
-                    "source_name": payment_context.get("source_name") if payment_context else f"manual-invoice-{inv_no}",
+                    "invoice_number": inv_nos_joined,
+                    "source_name": payment_context.get("source_name") if payment_context else f"manual-invoice-{inv_nos_joined}",
                     "source_kind": payment_context.get("source_kind") if payment_context else "manual",
                     "payment_fingerprint": payment_context.get("payment_fingerprint") if payment_context else hashlib.sha256(
-                        f"manual|{inv_no}|{confirm_date.isoformat()}|{','.join(str(r['invoice_row_id']) for r in allocation_rows)}|{total_applied:.2f}".encode("utf-8")
+                        f"manual|{inv_nos_joined}|{confirm_date.isoformat()}|{','.join(str(r['invoice_row_id']) for r in allocation_rows)}|{total_applied:.2f}".encode("utf-8")
                     ).hexdigest(),
                     "instructed_amount": payment_context.get("instructed_amount") if payment_context else None,
                     "received_amount": payment_context.get("received_amount") if payment_context else None,
@@ -8852,7 +8866,7 @@ elif page == "🏦 Bank Payment":
 
                 st.cache_data.clear()
                 st.session_state["_renewal_result"] = {
-                    "inv_no": inv_no,
+                    "inv_no": inv_nos_label,
                     "count":  len(selected),
                     "links":  renewal_links,
                 }
@@ -8878,13 +8892,16 @@ elif page == "🏦 Bank Payment":
                 st.caption("All fields are editable — correct any parsing errors before proceeding.")
 
                 ec1, ec2, ec3 = st.columns(3)
-                inv_no = ec1.number_input(
-                    "Invoice #",
-                    value=int(parsed["invoice_number"]) if parsed["invoice_number"] else 0,
-                    min_value=0,
-                    step=1,
+                detected_inv_nos = parsed.get("invoice_numbers") or ([parsed["invoice_number"]] if parsed.get("invoice_number") else [])
+                inv_no_text = ec1.text_input(
+                    "Invoice #(s)",
+                    value=", ".join(str(n) for n in detected_inv_nos),
+                    help="One or more invoice numbers, comma-separated. A single transfer can settle several invoices.",
                     key=f"pdf_inv_no_{index}",
                 )
+                inv_nos = [int(tok) for tok in re.findall(r"\d+", inv_no_text)]
+                if len(detected_inv_nos) > 1:
+                    ec1.caption(f"Detected {len(detected_inv_nos)} invoice numbers in this transfer's remittance info.")
                 pay_date = ec2.date_input(
                     "Payment Date",
                     value=parsed["payment_date"] if parsed["payment_date"] else datetime.date.today(),
@@ -8905,7 +8922,7 @@ elif page == "🏦 Bank Payment":
                             "The invoiced amount will be kept as-is."
                         )
 
-                if not parsed["invoice_number"] and not parsed["payment_date"]:
+                if not inv_nos and not parsed["payment_date"]:
                     st.warning(
                         "Could not extract payment data from this PDF. "
                         "Use the manual lookup below instead."
@@ -8914,7 +8931,7 @@ elif page == "🏦 Bank Payment":
                 st.markdown("---")
                 st.markdown("### Matching Invoice Rows")
                 _render_invoice_lookup(
-                    inv_no,
+                    inv_nos,
                     pay_date,
                     key_prefix=f"pdf_{index}",
                     payment_context={
@@ -8949,7 +8966,10 @@ elif page == "🏦 Bank Payment":
         summary_rows = []
         for item in parsed_bank_files:
             parsed = item["parsed"]
-            current_inv = _safe_int(st.session_state.get(item["inv_no_key"], parsed.get("invoice_number") or 0), default=0)
+            state_value = st.session_state.get(item["inv_no_key"], "")
+            if not state_value:
+                state_value = ", ".join(str(n) for n in (parsed.get("invoice_numbers") or []))
+            current_invs = [tok for tok in re.findall(r"\d+", str(state_value))]
             current_date = st.session_state.get(item["pay_date_key"], parsed.get("payment_date"))
             instructed = parsed.get("instructed_amount") or 0.0
             received = parsed.get("received_amount") or 0.0
@@ -8957,7 +8977,7 @@ elif page == "🏦 Bank Payment":
             summary_rows.append({
                 "#": item["index"],
                 "File": item["name"],
-                "Invoice #": current_inv if current_inv else "—",
+                "Invoice #(s)": ", ".join(current_invs) if current_invs else "—",
                 "Payment Date": str(current_date) if current_date else "—",
                 "Instructed (€)": float(instructed) if instructed else 0.0,
                 "Received (€)": float(received) if received else 0.0,
@@ -8977,7 +8997,12 @@ elif page == "🏦 Bank Payment":
 
             for item in parsed_bank_files:
                 try:
-                    item_inv_no = _safe_int(st.session_state.get(item["inv_no_key"], 0), default=0)
+                    item_inv_nos = sorted({
+                        n for n in (
+                            int(tok) for tok in re.findall(r"\d+", str(st.session_state.get(item["inv_no_key"], "")))
+                        ) if n > 0
+                    })
+                    item_inv_nos_joined = ",".join(str(n) for n in item_inv_nos) or None
                     item_pay_date = st.session_state.get(item["pay_date_key"], item["parsed"].get("payment_date") or datetime.date.today())
                     item_storage_meta: dict = {}
                     try:
@@ -9000,7 +9025,7 @@ elif page == "🏦 Bank Payment":
                         "parsed_payload": item["parsed"],
                     }
 
-                    if item_inv_no <= 0:
+                    if not item_inv_nos:
                         # Keep the payment record even when no invoice number is available.
                         payment_entry = {
                             "payment_date": item_pay_date.isoformat() if hasattr(item_pay_date, "isoformat") else str(item_pay_date),
@@ -9029,11 +9054,14 @@ elif page == "🏦 Bank Payment":
                         batch_skipped.append(f"{item['name']}: saved without invoice match")
                         continue
 
-                    rows = get_invoices_by_number(item_inv_no)
+                    rows = []
+                    for _inv_no in item_inv_nos:
+                        for _r in get_invoices_by_number(_inv_no):
+                            rows.append({**_r, "_invoice_number": _inv_no})
                     if not rows:
                         payment_entry = {
                             "payment_date": item_pay_date.isoformat() if hasattr(item_pay_date, "isoformat") else str(item_pay_date),
-                            "invoice_number": item_inv_no,
+                            "invoice_number": item_inv_nos_joined,
                             "source_name": item["name"],
                             "source_kind": "pdf-batch",
                             "payment_fingerprint": item["hash"],
@@ -9062,7 +9090,7 @@ elif page == "🏦 Bank Payment":
                     if not unpaid_rows:
                         payment_entry = {
                             "payment_date": item_pay_date.isoformat() if hasattr(item_pay_date, "isoformat") else str(item_pay_date),
-                            "invoice_number": item_inv_no,
+                            "invoice_number": item_inv_nos_joined,
                             "source_name": item["name"],
                             "source_kind": "pdf-batch",
                             "payment_fingerprint": item["hash"],
@@ -9107,7 +9135,7 @@ elif page == "🏦 Bank Payment":
                             total_applied += amount_applied
                             allocation_rows.append({
                                 "invoice_row_id": int(row["id"]),
-                                "invoice_number": item_inv_no,
+                                "invoice_number": row.get("_invoice_number"),
                                 "project_name": proj,
                                 "maintenance_year": _safe_str(row.get("maintenance_year")),
                                 "year": _safe_int(row.get("year"), default=0) or None,
@@ -9137,7 +9165,7 @@ elif page == "🏦 Bank Payment":
                                     project_name=proj,
                                     target_valid_until=target_until,
                                     cameras_allowed=cameras,
-                                    invoice_number=str(item_inv_no),
+                                    invoice_number=str(row.get("_invoice_number")),
                                     payment_amount=row.get("payment_amount"),
                                 )
                                 renewal_links.append({
@@ -9159,7 +9187,7 @@ elif page == "🏦 Bank Payment":
 
                     payment_entry = {
                         "payment_date": item_pay_date.isoformat() if hasattr(item_pay_date, "isoformat") else str(item_pay_date),
-                        "invoice_number": item_inv_no,
+                        "invoice_number": item_inv_nos_joined,
                         "source_name": item["name"],
                         "source_kind": "pdf-batch",
                         "payment_fingerprint": item["hash"],

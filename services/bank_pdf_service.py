@@ -38,7 +38,8 @@ def parse_swift_pdf(file_bytes: bytes) -> dict:
     Parse a SWIFT MT103 bank transfer PDF.
 
     Returns dict with:
-        invoice_number   : int | None
+        invoice_number   : int | None        — first detected invoice number (back-compat)
+        invoice_numbers  : list[int]          — every invoice number found in the remittance info
         payment_date     : datetime.date | None
         instructed_amount: float | None  — :33B field (what customer sent)
         received_amount  : float | None  — :32A field (what arrived after fees)
@@ -47,20 +48,27 @@ def parse_swift_pdf(file_bytes: bytes) -> dict:
     text = _extract_text(file_bytes)
     result: dict = {
         "invoice_number": None,
+        "invoice_numbers": [],
         "payment_date": None,
         "instructed_amount": None,
         "received_amount": None,
         "raw_text": text,
     }
 
-    # ── Invoice number ─────────────────────────────────────────────────────────
-    # Matches: ":70: REMITTANCE INFORMATION :8665" or ":70:REMITTANCE INFORMATION:8665"
+    # ── Invoice number(s) ───────────────────────────────────────────────────────
+    # The remittance info can reference a single invoice ("...INFORMATION :8665")
+    # or several, separated by slashes/commas when one transfer settles multiple
+    # invoices at once ("...INFORMATION :8688/8689/8690/8691/8692/8693/8694").
+    # Capture the whole remittance value (up to end of line), then split it.
     m = re.search(
-        r':70[:\s]+REMITTANCE\s+INFORMATION\s*:?\s*(\d+)',
+        r':70[:\s]+REMITTANCE\s+INFORMATION\s*:?\s*([\d/,\s]+)',
         text, re.IGNORECASE,
     )
     if m:
-        result["invoice_number"] = int(m.group(1))
+        numbers = [int(tok) for tok in re.findall(r'\d+', m.group(1))]
+        if numbers:
+            result["invoice_numbers"] = numbers
+            result["invoice_number"] = numbers[0]
 
     # ── Payment date ───────────────────────────────────────────────────────────
     # Matches: "VALUE FOR CUSTOMER: 22/01/26"  (DD/MM/YY)
@@ -85,9 +93,10 @@ def parse_swift_pdf(file_bytes: bytes) -> dict:
         result["instructed_amount"] = _parse_swift_amount(m.group(1))
 
     # ── Received amount :32A ───────────────────────────────────────────────────
-    # Matches: ":32A:AMNT.(COL/ACP/ACK) 260122EUR10704.28"
+    # Matches ":32A:AMNT.(COL/ACP/ACK) 260122EUR10704.28" as well as the
+    # colon-separated variant ":32A:AMNT.(COL/ACP/ACK) :260901EUR38548,4"
     m = re.search(
-        r':32A[:\s]+AMNT\.\s*\(COL/ACP/ACK\)\s*\d{6}EUR([\d.,]+)',
+        r':32A[:\s]+AMNT\.\s*\(COL/ACP/ACK\)\s*:?\s*\d{6}EUR([\d.,]+)',
         text, re.IGNORECASE,
     )
     if m:
