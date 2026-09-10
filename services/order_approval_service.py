@@ -555,7 +555,7 @@ def create_invoice_from_purchase_order(purchase_order_id: str) -> dict:
     row = {
         "invoice_number": str(invoice_number),
         "project_name": order.get("project_name") or customer,
-        "maintenance_year": "Purchase Order",
+        "maintenance_year": "Y1",
         "payment_amount": float(amount) if amount is not None else 0.0,
         "cameras_number": None,
         "payment_date": None,
