@@ -232,7 +232,9 @@ def _run_for_days_before(
 
     # Prefer Microsoft Graph (no SMTP Basic Auth) since Microsoft 365 intermittently
     # rejects SMTP AUTH logins from GitHub-hosted runners (535 5.7.139).
-    if graph_email_available():
+    use_graph = graph_email_available()
+    logger.info("Sending via %s.", "Microsoft Graph" if use_graph else "SMTP")
+    if use_graph:
         send_graph_email(subject, body, recipients, cc=cc_list, html_body=html)
     else:
         send_simple_email(subject, body, recipients, cc=cc_list, html_body=html, config=email_cfg)
