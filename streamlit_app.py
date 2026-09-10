@@ -3751,6 +3751,29 @@ elif page == "🏗️ Projects":
 
     projects_summary_df = df
 
+    if not df.empty:
+        from services.pdf_service import build_table_pdf
+
+        _pdf_columns = [c for c in df.columns if c != "_original_project_name"]
+        _filter_bits = [
+            f"Country: {sel_country}", f"Status: {sel_status}", f"Network: {sel_network}",
+        ]
+        if search:
+            _filter_bits.append(f"Search: {search}")
+        _projects_pdf_bytes = build_table_pdf(
+            title="CaddyCheck CRM - Projects",
+            subtitle=f"{len(df)} project(s) | " + " | ".join(_filter_bits),
+            columns=_pdf_columns,
+            rows=df[_pdf_columns].values.tolist(),
+        )
+        st.download_button(
+            "⬇️ Download filtered projects (PDF)",
+            data=_projects_pdf_bytes,
+            file_name="caddycheck_projects_filtered.pdf",
+            mime="application/pdf",
+            key="download_projects_pdf",
+        )
+
     def _render_projects_bottom_summary(table_df: pd.DataFrame):
         if table_df is None or table_df.empty:
             return

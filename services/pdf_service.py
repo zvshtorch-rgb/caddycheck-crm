@@ -306,3 +306,75 @@ def generate_invoice_pdf_from_rows(
         invoice_number=invoice_number,
         description=resolved_description,
     )
+
+
+def build_table_pdf(
+    title: str,
+    columns: list[str],
+    rows: list[list],
+    subtitle: Optional[str] = None,
+) -> bytes:
+    """
+    Render an arbitrary table (e.g. a filtered grid export) as a landscape PDF.
+
+    Parameters
+    ----------
+    title : str
+        Page heading.
+    columns : list of str
+        Column header labels, in order.
+    rows : list of list
+        Row values, already formatted as strings/numbers matching ``columns``.
+    subtitle : str, optional
+        Small caption line under the title (e.g. active filters, row count).
+
+    Returns
+    -------
+    bytes
+        Raw PDF bytes ready for st.download_button.
+    """
+    from reportlab.lib.pagesizes import landscape
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=landscape(A4),
+        leftMargin=12 * mm,
+        rightMargin=12 * mm,
+        topMargin=12 * mm,
+        bottomMargin=12 * mm,
+    )
+
+    styles = getSampleStyleSheet()
+    h1 = ParagraphStyle("h1", parent=styles["Normal"], fontSize=16, textColor=BLUE_DARK, leading=20)
+    small = ParagraphStyle("small", parent=styles["Normal"], fontSize=8, textColor=colors.grey, leading=10)
+
+    elems = [Paragraph(title, h1)]
+    if subtitle:
+        elems.append(Paragraph(subtitle, small))
+    elems.append(Spacer(1, 6 * mm))
+
+    header = [Paragraph(f"<b>{col}</b>", ParagraphStyle("th", fontSize=7, textColor=colors.white, leading=9)) for col in columns]
+    body_style = ParagraphStyle("td", fontSize=7, textColor=TEXT_DARK, leading=9)
+    table_data = [header]
+    for row in rows:
+        table_data.append([Paragraph("" if value is None else str(value), body_style) for value in row])
+
+    page_width = landscape(A4)[0] - 24 * mm
+    col_width = page_width / max(len(columns), 1)
+    table = Table(table_data, colWidths=[col_width] * len(columns), repeatRows=1)
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), BLUE_DARK),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, BLUE_LIGHT]),
+        ("GRID", (0, 0), (-1, -1), 0.4, GREY_LINE),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ("LEFTPADDING", (0, 0), (-1, -1), 3),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+    ]))
+    elems.append(table)
+
+    doc.build(elems)
+    return buf.getvalue()
+
