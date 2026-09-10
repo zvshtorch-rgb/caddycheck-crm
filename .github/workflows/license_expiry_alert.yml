@@ -55,6 +55,14 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # Microsoft Graph (preferred: avoids SMTP Basic Auth, which Microsoft 365
+          # intermittently rejects with 535 5.7.139 for GitHub-hosted runner IPs).
+          ORDER_INTAKE_GRAPH_TENANT_ID: ${{ secrets.ORDER_INTAKE_GRAPH_TENANT_ID }}
+          ORDER_INTAKE_GRAPH_CLIENT_ID: ${{ secrets.ORDER_INTAKE_GRAPH_CLIENT_ID }}
+          ORDER_INTAKE_GRAPH_CLIENT_SECRET: ${{ secrets.ORDER_INTAKE_GRAPH_CLIENT_SECRET }}
+          ORDER_INTAKE_GRAPH_MAILBOX: ${{ secrets.ORDER_INTAKE_GRAPH_MAILBOX }}
+          INVOICE_SENDER_MAILBOX: ${{ secrets.INVOICE_SENDER_MAILBOX }}
+          # SMTP fallback (used only if the Graph credentials above aren't set)
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USE_TLS: ${{ secrets.SMTP_USE_TLS }}

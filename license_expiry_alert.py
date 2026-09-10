@@ -15,7 +15,7 @@ import logging
 import time
 
 from config.settings import get_email_config
-from services.email_service import send_simple_email
+from services.email_service import graph_email_available, send_graph_email, send_simple_email
 from services.excel_service import load_projects as load_projects_excel
 from services.supabase_service import (
     append_license_expiry_alert_log,
@@ -230,7 +230,12 @@ def _run_for_days_before(
         logger.info("Dry run only. No email sent and no alert log written.\n%s", body)
         return False
 
-    send_simple_email(subject, body, recipients, cc=cc_list, html_body=html, config=email_cfg)
+    # Prefer Microsoft Graph (no SMTP Basic Auth) since Microsoft 365 intermittently
+    # rejects SMTP AUTH logins from GitHub-hosted runners (535 5.7.139).
+    if graph_email_available():
+        send_graph_email(subject, body, recipients, cc=cc_list, html_body=html)
+    else:
+        send_simple_email(subject, body, recipients, cc=cc_list, html_body=html, config=email_cfg)
     _log_sent_alerts(projects_to_alert, days_before, recipients, cc_list, source_name)
     logger.info("License expiry alert (%d day(s) before) sent successfully.", days_before)
     return True
