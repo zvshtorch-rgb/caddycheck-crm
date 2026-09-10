@@ -3230,9 +3230,12 @@ if page == "📊 Dashboard":
     fig.update_xaxes(fixedrange=True)
     fig.update_yaxes(fixedrange=True)
 
-    st.plotly_chart(
+    _trends_chart_event = st.plotly_chart(
         fig,
         use_container_width=True,
+        on_select="rerun",
+        selection_mode="points",
+        key="trends_chart",
         config={
             "scrollZoom": False,
             "displaylogo": False,
@@ -3250,6 +3253,37 @@ if page == "📊 Dashboard":
     )
     if metric in ("Income (Paid)", "Income (All)"):
         st.caption("Blue bars show real payments. Orange line shows the 3M moving average.")
+
+    # ── Drill down: clicking a Yearly Income bar lists the contributing invoices ──
+    if resolution == "Yearly" and metric in ("Income (Paid)", "Income (All)"):
+        _clicked_points = (_trends_chart_event or {}).get("selection", {}).get("points", [])
+        if _clicked_points:
+            try:
+                _clicked_year = int(_safe_str(_clicked_points[0].get("x")))
+            except Exception:
+                _clicked_year = None
+            if _clicked_year is not None:
+                _drill_invoices = [
+                    inv for inv in invoices
+                    if inv.year == _clicked_year and (metric != "Income (Paid)" or inv.is_paid())
+                ]
+                st.markdown(f"#### {metric} invoices — {_clicked_year}")
+                if _drill_invoices:
+                    _drill_df = pd.DataFrame([{
+                        "Invoice #": inv.invoice_number,
+                        "Project": inv.project_name,
+                        "Maint. Year": inv.maintenance_year,
+                        "Amount": _convert_amount(inv.payment_amount, _clicked_year),
+                        "Paid": inv.paid,
+                        "Payment Date": inv.payment_date.date() if inv.payment_date else None,
+                    } for inv in sorted(
+                        _drill_invoices,
+                        key=lambda i: (_safe_str(i.project_name).lower(), _safe_str(i.invoice_number)),
+                    )])
+                    st.dataframe(_drill_df, use_container_width=True, hide_index=True)
+                    st.caption(f"{len(_drill_df)} invoice(s) totaling {money_label} {_drill_df['Amount'].sum():,.0f}")
+                else:
+                    st.info(f"No invoices found for {_clicked_year}.")
 
     # ── Export Trends as PDF (one or more metrics) ──
     _all_metrics = [
