@@ -1602,6 +1602,8 @@ def _resolve_ask_data_arg(kind: str, value: object, projects) -> tuple[bool, obj
         return (True, resolved) if resolved else (False, None)
     if kind == "status":
         text = _safe_str(value).strip()
+        if text.lower() == "all":
+            return True, "All"
         for option in PROJECT_STATUS_OPTIONS:
             if option.lower() == text.lower():
                 return True, option
@@ -1747,25 +1749,33 @@ def _execute_ask_data_tool(
 
     if tool_name in ("get_projects", "count_projects"):
         rows = list(projects)
+        status_arg = args.get("status")
+        status_scope = ""
+        if status_arg == "All":
+            pass
+        elif status_arg:
+            rows = [p for p in rows if _normalize_project_status(p.status) == status_arg]
+        else:
+            # Default to active/installed only, matching the Dashboard's "Active Projects" KPI.
+            rows = [p for p in rows if p.is_active()]
+            status_scope = "active "
         if args.get("country"):
             rows = [p for p in rows if p.country == args["country"]]
-        if args.get("status"):
-            rows = [p for p in rows if _normalize_project_status(p.status) == args["status"]]
         if args.get("month"):
             rows = get_projects_for_month(rows, args["month"])
         if args.get("min_cameras") is not None:
             rows = [p for p in rows if _safe_int(p.num_cams) > args["min_cameras"]]
         if tool_name == "count_projects":
             qualifiers = []
-            if args.get("status"):
-                qualifiers.append(f"with status {args['status']}")
+            if status_arg and status_arg != "All":
+                qualifiers.append(f"with status {status_arg}")
             if args.get("country"):
                 qualifiers.append(f"in {args['country']}")
             suffix = (" " + " ".join(qualifiers)) if qualifiers else ""
-            return f"There are {len(rows)} project(s){suffix}.", None
+            return f"There are {len(rows)} {status_scope}project(s){suffix}.", None
         if not rows:
             return "No projects match that question.", None
-        return f"Found {len(rows)} project(s).", _build_project_answer_df(rows)
+        return f"Found {len(rows)} {status_scope}project(s).", _build_project_answer_df(rows)
 
     if tool_name == "get_debt":
         rows = _filter_invoices_for_debt_tools(invoices, projects, args, lambda inv: inv.is_unpaid())
@@ -1832,10 +1842,18 @@ def _execute_ask_data_tool(
 
     if tool_name == "get_camera_statistics":
         rows = list(projects)
+        status_arg = args.get("status")
+        status_scope = ""
+        if status_arg == "All":
+            pass
+        elif status_arg:
+            rows = [p for p in rows if _normalize_project_status(p.status) == status_arg]
+        else:
+            # Default to active/installed only, matching the Dashboard's "Total Cameras" KPI.
+            rows = [p for p in rows if p.is_active()]
+            status_scope = "active "
         if args.get("country"):
             rows = [p for p in rows if p.country == args["country"]]
-        if args.get("status"):
-            rows = [p for p in rows if _normalize_project_status(p.status) == args["status"]]
         camera_type = args.get("camera_type") or "all"
         aggregation = args.get("aggregation") or "sum"
         metric_label = "camera" if camera_type == "all" else camera_type
@@ -1852,7 +1870,7 @@ def _execute_ask_data_tool(
                 for country, total in sorted(totals.items(), key=lambda item: item[1], reverse=True)
             ])
             top_country, top_total = max(totals.items(), key=lambda item: item[1])
-            return f"{top_country} has the most {metric_label} cameras ({top_total}).", df
+            return f"{top_country} has the most {metric_label} cameras ({top_total}, {status_scope or 'any status '}projects).", df
 
         if aggregation == "list_projects":
             if not rows:
@@ -1866,16 +1884,16 @@ def _execute_ask_data_tool(
                 }
                 for p in rows
             ])
-            return f"Found {len(rows)} project(s).", df
+            return f"Found {len(rows)} {status_scope}project(s).", df
 
         total = sum(_camera_metric_for_project(p, camera_type) for p in rows)
         country_txt = f" in {args['country']}" if args.get("country") else ""
         if aggregation == "count_projects":
-            return f"There are {len(rows)} project(s){country_txt}.", None
+            return f"There are {len(rows)} {status_scope}project(s){country_txt}.", None
         if aggregation == "average_per_project":
             avg = (total / len(rows)) if rows else 0.0
-            return f"Average {metric_label} cameras per project is {avg:.1f} (across {len(rows)} project(s)).", None
-        return f"There are {total} {metric_label} camera(s) across {len(rows)} project(s){country_txt}.", None
+            return f"Average {metric_label} cameras per {status_scope}project is {avg:.1f} (across {len(rows)} project(s)).", None
+        return f"There are {total} {metric_label} camera(s) across {len(rows)} {status_scope}project(s){country_txt}.", None
 
     return "I could not execute that tool.", None
 
@@ -1931,7 +1949,10 @@ def _llm_parse_data_question(question: str) -> Optional[dict]:
             "every tool in the catalog is read-only, so only ever select one of them.\n"
             "- 'year', 'invoice_number', 'min_cameras' and 'limit' must be plain integers.\n"
             "- 'country' should be the country name/code exactly as it appears in the question.\n"
-            "- 'project' should be the project name exactly as it appears in the question.\n\n"
+            "- 'project' should be the project name exactly as it appears in the question.\n"
+            "- For get_projects/count_projects/get_camera_statistics, omitting 'status' means 'active "
+            "projects only' (the CRM's default reporting scope). Only set status to 'All' if the user "
+            "explicitly asks to include cancelled/offline/inactive projects too.\n\n"
             f"Tool catalog:\n{_ask_data_tool_catalog_text()}\n\n"
             f"Question: {question}"
         )
