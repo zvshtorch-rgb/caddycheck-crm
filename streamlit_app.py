@@ -1561,6 +1561,13 @@ _ASK_DATA_TOOL_SPECS: dict[str, dict[str, tuple[str, bool]]] = {
     "get_last_bank_payment": {
         "project": ("project", False),
     },
+    "get_licenses": {
+        "project": ("project", False),
+        "country": ("country", False),
+        "license_status": ("enum:Active,Expired,Missing,Update Next Month,Cancelled", False),
+        "eop_year": ("int", False),
+        "eop_month": ("month", False),
+    },
 }
 
 
@@ -1901,6 +1908,38 @@ def _execute_ask_data_tool(
         subject = f"invoice #{inv_no}" if inv_no else (last_payment.get("source_name") or "an invoice")
         return f"Last bank payment ({date_txt}): {subject}, €{total:,.0f}.", None
 
+    if tool_name == "get_licenses":
+        today = datetime.date.today()
+        entries = [(p, _project_license_date(p), _license_status(p, today)) for p in projects]
+        if args.get("project"):
+            entries = [e for e in entries if e[0].project_name == args["project"]]
+        if args.get("country"):
+            entries = [e for e in entries if e[0].country == args["country"]]
+        if args.get("license_status"):
+            entries = [e for e in entries if e[2] == args["license_status"]]
+        if args.get("eop_year") is not None:
+            entries = [e for e in entries if e[1] and e[1].year == args["eop_year"]]
+        if args.get("eop_month"):
+            month_index = MONTH_ORDER.index(args["eop_month"]) + 1
+            entries = [e for e in entries if e[1] and e[1].month == month_index]
+        if not entries:
+            return "No projects match that license question.", None
+        entries.sort(key=lambda e: e[1] or datetime.date.max)
+        df = pd.DataFrame([
+            {
+                "Project": p.project_name,
+                "Country": p.country,
+                "License EOP": eop.isoformat() if eop else "",
+                "License Status": status,
+            }
+            for p, eop, status in entries
+        ])
+        status_counts: dict[str, int] = {}
+        for _, _, status in entries:
+            status_counts[status] = status_counts.get(status, 0) + 1
+        summary = ", ".join(f"{count} {status}" for status, count in status_counts.items())
+        return f"Found {len(entries)} project(s) ({summary}).", df
+
     if tool_name == "get_camera_statistics":
         rows = list(projects)
         status_arg = args.get("status")
@@ -2017,7 +2056,11 @@ def _llm_parse_data_question(question: str) -> Optional[dict]:
             "- For questions about a specific bank payment / wire transfer / remittance event (e.g. "
             "'last bank payment', 'latest payment received', 'what did the last bank transfer cover'), "
             "use get_last_bank_payment — NOT get_invoices/get_paid_amount, which only aggregate the "
-            "overall paid-invoice history and don't identify a single payment event.\n\n"
+            "overall paid-invoice history and don't identify a single payment event.\n"
+            "- For questions about license expiry/status (e.g. 'expired licenses', 'licenses needing "
+            "update', 'license for AD Anderlecht', 'licenses expiring in October'), use get_licenses. "
+            "'eop_year'/'eop_month' filter by the License EOP date, not an invoice year. "
+            "'license_status' is one of: Active, Expired, Missing, Update Next Month, Cancelled.\n\n"
             f"Tool catalog:\n{_ask_data_tool_catalog_text()}\n\n"
             f"Question: {question}"
         )
