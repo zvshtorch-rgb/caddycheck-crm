@@ -1207,6 +1207,7 @@ def _build_invoice_answer_df(invoice_rows, projects) -> pd.DataFrame:
             "Maint. Year": inv.maintenance_year,
             "Amount (€)": float(inv.payment_amount),
             "Paid": inv.paid,
+            "Payment Date": inv.payment_date.date().isoformat() if inv.payment_date else "",
             "Year": inv.year or "",
         }
         for inv in invoice_rows
