@@ -1273,6 +1273,17 @@ def _answer_data_question(question: str, projects, invoices, debt_summaries) -> 
             active_projects = [p for p in active_projects if p.country == country_name]
         return f"There are {len(active_projects)} active project(s){' in ' + country_name if country_name else ''}.", None
 
+    if ("camera" in q or "cams" in q) and not project_name and ("how many" in q or "total" in q or "count" in q):
+        camera_projects = [p for p in projects if p.is_active()]
+        if country_name:
+            camera_projects = [p for p in camera_projects if p.country == country_name]
+        total_cams = sum(_safe_int(p.num_cams) for p in camera_projects)
+        return (
+            f"There are {total_cams} camera(s) across {len(camera_projects)} active project(s)"
+            f"{' in ' + country_name if country_name else ''}.",
+            None,
+        )
+
     if ("project" in q or "bill" in q) and month_name:
         month_projects = get_projects_for_month(projects, month_name)
         if year is not None:
@@ -1354,7 +1365,8 @@ def _answer_data_question(question: str, projects, invoices, debt_summaries) -> 
 
     return (
         "I can answer questions like: 'What is the Y1 debt for 2026?', 'Show unpaid invoices for AD Denderleeuw', "
-        "'How many active projects are in Belgium?', 'What invoices exist for Rewe Schorn - Bergheim?', "
+        "'How many active projects are in Belgium?', 'How many cameras do we have in total?', "
+        "'What invoices exist for Rewe Schorn - Bergheim?', "
         "'Show invoice 8676', 'Was invoice 8676 sent?', 'Which projects are billed in April?', or 'Show sent PDF invoices for 2026'.",
         None,
     )
@@ -1368,6 +1380,8 @@ _ASK_DATA_TEMPLATE_CATALOG = """\
 - Show invoice <invoice number>
 - Was invoice <invoice number> sent?
 - How many active projects are in <country>?
+- How many cameras do we have in total?
+- How many cameras are in <country>?
 - Which projects are billed in <month>?
 - Show sent PDF invoices for <year>
 - What invoices exist for <project name>?
