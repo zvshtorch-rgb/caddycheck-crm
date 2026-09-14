@@ -1558,6 +1558,9 @@ _ASK_DATA_TOOL_SPECS: dict[str, dict[str, tuple[str, bool]]] = {
         "camera_type": ("enum:all,TopDown,Backtray,Pushout", False),
         "aggregation": ("enum:sum,count_projects,average_per_project,group_by_country,list_projects", False),
     },
+    "get_last_bank_payment": {
+        "project": ("project", False),
+    },
 }
 
 
@@ -1840,6 +1843,64 @@ def _execute_ask_data_tool(
         next_inv = _get_next_invoice_number(invoices, _data_path)
         return f"The next invoice number is {next_inv}.", None
 
+    if tool_name == "get_last_bank_payment":
+        from config.settings import load_bank_payments_log
+        try:
+            payments = load_bank_payments_log()
+        except Exception as exc:
+            return f"Could not load bank payments: {exc}", None
+        if not payments:
+            return "No bank payments have been recorded yet.", None
+
+        try:
+            from services.supabase_service import load_bank_payment_allocations
+        except Exception:
+            load_bank_payment_allocations = None
+
+        def _allocations_for(payment):
+            payment_id = payment.get("id")
+            if not payment_id or load_bank_payment_allocations is None:
+                return []
+            try:
+                return load_bank_payment_allocations(payment_id) or []
+            except Exception:
+                return []
+
+        target_project = args.get("project")
+        last_payment, allocations = None, []
+        if target_project:
+            for payment in payments:  # already newest-first
+                candidate_allocations = _allocations_for(payment)
+                names_in_payment = {a.get("project_name") for a in candidate_allocations if a.get("project_name")}
+                if target_project in names_in_payment:
+                    last_payment, allocations = payment, candidate_allocations
+                    break
+            if last_payment is None:
+                return f"No bank payment found for {target_project}.", None
+        else:
+            last_payment = payments[0]
+            allocations = _allocations_for(last_payment)
+
+        date_txt = _safe_str(last_payment.get("payment_date")) or "unknown date"
+        if allocations:
+            df = pd.DataFrame([
+                {
+                    "Invoice #": a.get("invoice_number"),
+                    "Project": a.get("project_name"),
+                    "Maint. Year": a.get("maintenance_year"),
+                    "Amount (€)": a.get("amount_applied"),
+                    "Year": a.get("year"),
+                }
+                for a in allocations
+            ])
+            total = sum(_safe_float(a.get("amount_applied")) for a in allocations)
+            return f"Last bank payment ({date_txt}) covered {len(df)} invoice line(s) totaling €{total:,.0f}.", df
+
+        total = _safe_float(last_payment.get("applied_amount")) or _safe_float(last_payment.get("received_amount"))
+        inv_no = last_payment.get("invoice_number")
+        subject = f"invoice #{inv_no}" if inv_no else (last_payment.get("source_name") or "an invoice")
+        return f"Last bank payment ({date_txt}): {subject}, €{total:,.0f}.", None
+
     if tool_name == "get_camera_statistics":
         rows = list(projects)
         status_arg = args.get("status")
@@ -1952,7 +2013,11 @@ def _llm_parse_data_question(question: str) -> Optional[dict]:
             "- 'project' should be the project name exactly as it appears in the question.\n"
             "- For get_projects/count_projects/get_camera_statistics, omitting 'status' means 'active "
             "projects only' (the CRM's default reporting scope). Only set status to 'All' if the user "
-            "explicitly asks to include cancelled/offline/inactive projects too.\n\n"
+            "explicitly asks to include cancelled/offline/inactive projects too.\n"
+            "- For questions about a specific bank payment / wire transfer / remittance event (e.g. "
+            "'last bank payment', 'latest payment received', 'what did the last bank transfer cover'), "
+            "use get_last_bank_payment — NOT get_invoices/get_paid_amount, which only aggregate the "
+            "overall paid-invoice history and don't identify a single payment event.\n\n"
             f"Tool catalog:\n{_ask_data_tool_catalog_text()}\n\n"
             f"Question: {question}"
         )
