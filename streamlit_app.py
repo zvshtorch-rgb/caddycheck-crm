@@ -1504,12 +1504,14 @@ _ASK_DATA_TOOL_SPECS: dict[str, dict[str, tuple[str, bool]]] = {
     "get_invoices": {
         "project": ("project", False),
         "year": ("int", False),
+        "paid_year": ("int", False),
         "country": ("country", False),
         "paid": ("enum:yes,no,cancelled", False),
     },
     "get_unpaid_invoices": {
         "project": ("project", False),
         "year": ("int", False),
+        "paid_year": ("int", False),
         "country": ("country", False),
         "category": ("enum:trial,y1,y2plus", False),
     },
@@ -1535,6 +1537,7 @@ _ASK_DATA_TOOL_SPECS: dict[str, dict[str, tuple[str, bool]]] = {
     "get_paid_amount": {
         "project": ("project", False),
         "year": ("int", False),
+        "paid_year": ("int", False),
         "country": ("country", False),
     },
     "get_outstanding_amount": {
@@ -1687,6 +1690,8 @@ def _filter_invoices_for_debt_tools(invoices, projects, args: dict, paid_predica
     rows = [inv for inv in invoices if paid_predicate(inv)]
     if args.get("year") is not None:
         rows = [inv for inv in rows if inv.year == args["year"]]
+    if args.get("paid_year") is not None:
+        rows = [inv for inv in rows if inv.payment_date and inv.payment_date.year == args["paid_year"]]
     if args.get("country"):
         names_in_country = {p.project_name for p in projects if p.country == args["country"]}
         rows = [inv for inv in rows if inv.project_name in names_in_country]
@@ -1734,6 +1739,8 @@ def _execute_ask_data_tool(
             rows = [inv for inv in rows if inv.project_name == args["project"]]
         if args.get("year") is not None:
             rows = [inv for inv in rows if inv.year == args["year"]]
+        if args.get("paid_year") is not None:
+            rows = [inv for inv in rows if inv.payment_date and inv.payment_date.year == args["paid_year"]]
         if args.get("country"):
             names_in_country = {p.project_name for p in projects if p.country == args["country"]}
             rows = [inv for inv in rows if inv.project_name in names_in_country]
@@ -2057,6 +2064,11 @@ def _llm_parse_data_question(question: str) -> Optional[dict]:
             "- Never produce SQL, Python, or any instruction to write/update/delete/send anything — "
             "every tool in the catalog is read-only, so only ever select one of them.\n"
             "- 'year', 'invoice_number', 'min_cameras' and 'limit' must be plain integers.\n"
+            "- 'year' filters an invoice's billing/maintenance year (when it was invoiced FOR). "
+            "'paid_year' filters by when the invoice was ACTUALLY PAID (its payment date). For "
+            "questions like 'paid in 2026', 'payments received in 2026', or 'bank transactions in "
+            "2026', use 'paid_year', not 'year' — an invoice can be billed for one year but paid "
+            "in a later one.\n"
             "- 'country' should be the country name/code exactly as it appears in the question.\n"
             "- 'project' should be the project name exactly as it appears in the question.\n"
             "- For get_projects/count_projects/get_camera_statistics, omitting 'status' means 'active "
