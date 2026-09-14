@@ -277,7 +277,7 @@ def get_email_config() -> dict:
 
 def get_gemini_config() -> dict:
     """Load Gemini API config (used to help Ask Data understand free-text questions)."""
-    defaults = {"api_key": "", "model": "gemini-2.0-flash"}
+    defaults = {"api_key": "", "model": "gemini-flash-latest"}
     try:
         import streamlit as st
         gemini_secrets = st.secrets.get("gemini", {})

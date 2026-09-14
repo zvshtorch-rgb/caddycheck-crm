@@ -1404,10 +1404,10 @@ def _llm_normalize_question(question: str) -> Optional[str]:
             f"Templates:\n{_ASK_DATA_TEMPLATE_CATALOG}\n"
             f"Question: {question}"
         )
-        model = gemini_cfg.get("model", "gemini-2.0-flash")
+        model = gemini_cfg.get("model", "gemini-flash-latest")
         resp = requests.post(
             f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-            params={"key": api_key},
+            headers={"x-goog-api-key": api_key},
             json={
                 "contents": [{"parts": [{"text": prompt}]}],
                 "generationConfig": {"temperature": 0, "maxOutputTokens": 100},
@@ -1423,8 +1423,12 @@ def _llm_normalize_question(question: str) -> Optional[str]:
         return text
     except Exception as exc:
         try:
+            import re as _re
             import streamlit as st
-            st.session_state["_ask_data_llm_error"] = str(exc)
+            # Never surface the API key even if it ended up in a URL/message somewhere.
+            safe_msg = _re.sub(r"key=[^&\s]+", "key=***", str(exc))
+            safe_msg = safe_msg.replace(api_key, "***")
+            st.session_state["_ask_data_llm_error"] = safe_msg
         except Exception:
             pass
         return None
