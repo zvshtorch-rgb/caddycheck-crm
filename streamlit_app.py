@@ -4411,6 +4411,15 @@ elif page == "❓ Ask Data":
             return _answer_data_question_smart(raw_question, projects, invoices, debt_summaries)
         return _answer_data_question(raw_question, projects, invoices, debt_summaries)
 
+    def _remember_ask_data_question(raw_question: str) -> None:
+        text = _safe_str(raw_question).strip()
+        if not text:
+            return
+        history = st.session_state.get("ask_data_history", [])
+        history = [q for q in history if q != text]  # move to front if repeated
+        history.insert(0, text)
+        st.session_state["ask_data_history"] = history[:10]
+
     quick_question_cols = st.columns(4)
     quick_questions = [
         "How many cameras do we have in total?",
@@ -4422,6 +4431,7 @@ elif page == "❓ Ask Data":
         if quick_question_cols[idx].button(quick_question, key=f"ask_quick_{idx}", use_container_width=True):
             st.session_state["ask_data_question"] = quick_question
             answer_text, answer_df = _ask_data_answer(quick_question)
+            _remember_ask_data_question(quick_question)
             st.session_state["ask_data_answer_text"] = answer_text
             st.session_state["ask_data_answer_df"] = answer_df.to_dict(orient="records") if answer_df is not None else None
             st.rerun()
@@ -4438,8 +4448,21 @@ elif page == "❓ Ask Data":
     if submitted:
         st.session_state["ask_data_question"] = question
         answer_text, answer_df = _ask_data_answer(question)
+        _remember_ask_data_question(question)
         st.session_state["ask_data_answer_text"] = answer_text
         st.session_state["ask_data_answer_df"] = answer_df.to_dict(orient="records") if answer_df is not None else None
+
+    _ask_data_history = st.session_state.get("ask_data_history", [])
+    if _ask_data_history:
+        with st.expander(f"🕘 Recent questions ({len(_ask_data_history)})", expanded=False):
+            for _hist_idx, _hist_question in enumerate(_ask_data_history):
+                if st.button(_hist_question, key=f"ask_history_{_hist_idx}", use_container_width=True):
+                    st.session_state["ask_data_question"] = _hist_question
+                    answer_text, answer_df = _ask_data_answer(_hist_question)
+                    _remember_ask_data_question(_hist_question)
+                    st.session_state["ask_data_answer_text"] = answer_text
+                    st.session_state["ask_data_answer_df"] = answer_df.to_dict(orient="records") if answer_df is not None else None
+                    st.rerun()
 
     if CAN_EDIT and _ask_data_llm_on:
         _llm_error = st.session_state.get("_ask_data_llm_error")
