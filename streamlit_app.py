@@ -1161,13 +1161,40 @@ def _match_project_from_question(question: str, projects, invoices) -> str:
 
 
 def _match_country_from_question(question: str, projects) -> str:
+    matches = _match_countries_from_question(question, projects)
+    return matches[0] if matches else ""
+
+
+def _match_countries_from_question(question: str, projects, fuzzy_threshold: float = 0.8) -> list[str]:
+    """
+    Return every distinct project country mentioned in the question.
+
+    Matches both the short DB code (e.g. 'Bel') and its full name (e.g.
+    'Belgium'), and tolerates small typos in the full name (e.g. 'blegium')
+    via a fuzzy ratio so users don't need exact spelling.
+    """
     q = _normalize_query_text(question)
-    countries = sorted({p.country for p in projects if p.country}, key=len, reverse=True)
-    for country in countries:
-        normalized = _normalize_query_text(country)
-        if normalized and normalized in q:
-            return country
-    return ""
+    if not q:
+        return []
+    words = q.split(" ")
+    known_codes = sorted({p.country for p in projects if p.country})
+    matched = []
+    for code in known_codes:
+        code_lower = code.lower()
+        full_name = _normalize_country(code).lower()
+        if code_lower in q or full_name in q:
+            matched.append(code)
+            continue
+        if len(full_name) >= 4:
+            from difflib import SequenceMatcher
+            for word in words:
+                if len(word) < 4:
+                    continue
+                if SequenceMatcher(None, word, full_name).ratio() >= fuzzy_threshold:
+                    matched.append(code)
+                    break
+    return matched
+
 
 
 def _build_invoice_answer_df(invoice_rows, projects) -> pd.DataFrame:
@@ -1205,7 +1232,7 @@ def _answer_data_question(question: str, projects, invoices, debt_summaries) -> 
         return "Ask a question about projects, invoices, debt, or sent PDFs.", None
 
     project_name = _match_project_from_question(question, projects, invoices)
-    country_name = _match_country_from_question(question, projects)
+    country_names = _match_countries_from_question(question, projects)
     year = _extract_question_year(question)
     invoice_number = _extract_question_invoice_number(question)
     month_name = _extract_question_month(question)
@@ -1269,18 +1296,18 @@ def _answer_data_question(question: str, projects, invoices, debt_summaries) -> 
 
     if "active" in q and "project" in q and ("how many" in q or "count" in q or "number" in q):
         active_projects = [p for p in projects if p.is_active()]
-        if country_name:
-            active_projects = [p for p in active_projects if p.country == country_name]
-        return f"There are {len(active_projects)} active project(s){' in ' + country_name if country_name else ''}.", None
+        if country_names:
+            active_projects = [p for p in active_projects if p.country in country_names]
+        return f"There are {len(active_projects)} active project(s){' in ' + ' + '.join(country_names) if country_names else ''}.", None
 
     if ("camera" in q or "cams" in q) and not project_name and ("how many" in q or "total" in q or "count" in q):
         camera_projects = [p for p in projects if p.is_active()]
-        if country_name:
-            camera_projects = [p for p in camera_projects if p.country == country_name]
+        if country_names:
+            camera_projects = [p for p in camera_projects if p.country in country_names]
         total_cams = sum(_safe_int(p.num_cams) for p in camera_projects)
         return (
             f"There are {total_cams} camera(s) across {len(camera_projects)} active project(s)"
-            f"{' in ' + country_name if country_name else ''}.",
+            f"{' in ' + ' + '.join(country_names) if country_names else ''}.",
             None,
         )
 
@@ -1290,8 +1317,8 @@ def _answer_data_question(question: str, projects, invoices, debt_summaries) -> 
             filtered_projects = month_projects
         else:
             filtered_projects = month_projects
-        if country_name:
-            filtered_projects = [p for p in filtered_projects if p.country == country_name]
+        if country_names:
+            filtered_projects = [p for p in filtered_projects if p.country in country_names]
         if not filtered_projects:
             return f"No projects found for {month_name}{' ' + str(year) if year else ''}.", None
         df = _build_project_answer_df(filtered_projects)
@@ -1317,8 +1344,8 @@ def _answer_data_question(question: str, projects, invoices, debt_summaries) -> 
             debt_rows = [inv for inv in debt_rows if _safe_int(inv.invoice_number, default=0) == invoice_number]
         if year is not None:
             debt_rows = [inv for inv in debt_rows if inv.year == year]
-        if country_name:
-            project_names_in_country = {p.project_name for p in projects if p.country == country_name}
+        if country_names:
+            project_names_in_country = {p.project_name for p in projects if p.country in country_names}
             debt_rows = [inv for inv in debt_rows if inv.project_name in project_names_in_country]
         if project_name:
             debt_rows = [inv for inv in debt_rows if inv.project_name == project_name]
@@ -1360,7 +1387,7 @@ def _answer_data_question(question: str, projects, invoices, debt_summaries) -> 
         df = _build_invoice_answer_df(project_invoices, projects)
         return f"I found {len(df)} invoice row(s) for {project_name}.", df
 
-    if "country" in q and ("debt" in q or "unpaid" in q) and not country_name:
+    if "country" in q and ("debt" in q or "unpaid" in q) and not country_names:
         return "I could not match the country name in that question.", None
 
     return (
