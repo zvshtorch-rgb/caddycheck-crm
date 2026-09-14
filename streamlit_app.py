@@ -1421,7 +1421,12 @@ def _llm_normalize_question(question: str) -> Optional[str]:
         if not text or text.upper() == "UNKNOWN":
             return None
         return text
-    except Exception:
+    except Exception as exc:
+        try:
+            import streamlit as st
+            st.session_state["_ask_data_llm_error"] = str(exc)
+        except Exception:
+            pass
         return None
 
 
@@ -3659,7 +3664,9 @@ elif page == "❓ Ask Data":
         st.caption("Ask questions about projects, invoices, debt, or sent PDF invoices.")
 
     def _ask_data_answer(raw_question: str) -> tuple[str, Optional[pd.DataFrame]]:
+        st.session_state.pop("_ask_data_llm_error", None)
         normalized = _llm_normalize_question(raw_question) if _ask_data_llm_on else None
+        st.session_state["_ask_data_llm_rewrite"] = normalized
         effective_question = normalized or raw_question
         return _answer_data_question(effective_question, projects, invoices, debt_summaries)
 
@@ -3693,6 +3700,13 @@ elif page == "❓ Ask Data":
         st.session_state["ask_data_answer_text"] = answer_text
         st.session_state["ask_data_answer_df"] = answer_df.to_dict(orient="records") if answer_df is not None else None
 
+    if CAN_EDIT and _ask_data_llm_on:
+        _llm_error = st.session_state.get("_ask_data_llm_error")
+        _llm_rewrite = st.session_state.get("_ask_data_llm_rewrite")
+        if _llm_error:
+            st.caption(f"⚠️ LLM assist failed, used keyword matcher instead: {_llm_error}")
+        elif _llm_rewrite:
+            st.caption(f"🤖 LLM rewrote your question as: \"{_llm_rewrite}\"")
 
     answer_text = st.session_state.get("ask_data_answer_text")
     answer_rows = st.session_state.get("ask_data_answer_df")
