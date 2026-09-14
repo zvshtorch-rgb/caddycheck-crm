@@ -1567,6 +1567,7 @@ _ASK_DATA_TOOL_SPECS: dict[str, dict[str, tuple[str, bool]]] = {
         "license_status": ("enum:Active,Expired,Missing,Update Next Month,Cancelled", False),
         "eop_year": ("int", False),
         "eop_month": ("month", False),
+        "eop_date": ("date", False),
     },
 }
 
@@ -1602,6 +1603,12 @@ def _resolve_ask_data_arg(kind: str, value: object, projects) -> tuple[bool, obj
     if kind == "int":
         try:
             return True, int(value)
+        except Exception:
+            return False, None
+    if kind == "date":
+        text = _safe_str(value).strip()
+        try:
+            return True, datetime.date.fromisoformat(text[:10])
         except Exception:
             return False, None
     if kind == "project":
@@ -1922,6 +1929,8 @@ def _execute_ask_data_tool(
         if args.get("eop_month"):
             month_index = MONTH_ORDER.index(args["eop_month"]) + 1
             entries = [e for e in entries if e[1] and e[1].month == month_index]
+        if args.get("eop_date") is not None:
+            entries = [e for e in entries if e[1] == args["eop_date"]]
         if not entries:
             return "No projects match that license question.", None
         entries.sort(key=lambda e: e[1] or datetime.date.max)
@@ -2060,7 +2069,9 @@ def _llm_parse_data_question(question: str) -> Optional[dict]:
             "- For questions about license expiry/status (e.g. 'expired licenses', 'licenses needing "
             "update', 'license for AD Anderlecht', 'licenses expiring in October'), use get_licenses. "
             "'eop_year'/'eop_month' filter by the License EOP date, not an invoice year. "
-            "'license_status' is one of: Active, Expired, Missing, Update Next Month, Cancelled.\n\n"
+            "'license_status' is one of: Active, Expired, Missing, Update Next Month, Cancelled. "
+            "If the user gives an exact day (e.g. 'on October 1st 2026', '2026-10-01'), use 'eop_date' "
+            "(format YYYY-MM-DD) instead of eop_year/eop_month, so only that exact date matches.\n\n"
             f"Tool catalog:\n{_ask_data_tool_catalog_text()}\n\n"
             f"Question: {question}"
         )
