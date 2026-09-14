@@ -1410,13 +1410,21 @@ def _llm_normalize_question(question: str) -> Optional[str]:
             headers={"x-goog-api-key": api_key},
             json={
                 "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {"temperature": 0, "maxOutputTokens": 100},
+                "generationConfig": {
+                    "temperature": 0,
+                    "maxOutputTokens": 200,
+                    # Disable "thinking" tokens (some Gemini 2.x models enable
+                    # reasoning by default) so the token budget isn't consumed
+                    # before the actual rewritten line is produced.
+                    "thinkingConfig": {"thinkingBudget": 0},
+                },
             },
             timeout=8,
         )
         resp.raise_for_status()
-        text = (
-            resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+        text = " ".join(
+            part.get("text", "")
+            for part in resp.json()["candidates"][0]["content"]["parts"]
         ).strip()
         if not text or text.upper() == "UNKNOWN":
             return None
