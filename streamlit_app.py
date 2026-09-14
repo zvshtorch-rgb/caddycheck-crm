@@ -2072,24 +2072,30 @@ def _llm_parse_data_question(question: str) -> Optional[dict]:
                 "contents": [{"parts": [{"text": prompt}]}],
                 "generationConfig": {
                     "temperature": 0,
-                    "maxOutputTokens": 500,
+                    "maxOutputTokens": 2048,
                     "thinkingConfig": {"thinkingBudget": 0},
                     "responseMimeType": "application/json",
                 },
             },
-            timeout=12,
+            timeout=20,
         )
         resp.raise_for_status()
+        payload = resp.json()
         text = " ".join(
             part.get("text", "")
-            for part in resp.json()["candidates"][0]["content"]["parts"]
+            for part in payload["candidates"][0]["content"]["parts"]
         ).strip()
         if not text:
             return None
         try:
             parsed = json.loads(text)
         except json.JSONDecodeError as exc:
-            raise ValueError(f"Gemini returned invalid/truncated JSON ({len(text)} chars): {text[:200]!r}") from exc
+            finish_reason = payload["candidates"][0].get("finishReason", "?")
+            usage = payload.get("usageMetadata", {})
+            raise ValueError(
+                f"Gemini returned invalid/truncated JSON ({len(text)} chars, "
+                f"finishReason={finish_reason}, usage={usage}): {text[:200]!r}"
+            ) from exc
         return parsed if isinstance(parsed, dict) else None
     except Exception as exc:
         try:
