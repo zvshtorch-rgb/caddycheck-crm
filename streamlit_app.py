@@ -3825,7 +3825,10 @@ if page == "📊 Dashboard":
             for yr in range(from_yr, to_yr + 1):
                 m_labels.append(str(yr))
                 if metric_name == "Income (Paid)":
-                    v = sum(_convert_amount(i.payment_amount, yr) for i in invoices if i.is_paid() and i.year == yr)
+                    v = sum(
+                        _convert_amount(i.payment_amount, yr) for i in invoices
+                        if i.is_paid() and i.payment_date and i.payment_date.year == yr
+                    )
                 elif metric_name == "Income (All)":
                     v = sum(_convert_amount(i.payment_amount, yr) for i in invoices if i.year == yr)
                 elif metric_name == "Active Projects":
@@ -3901,7 +3904,10 @@ if page == "📊 Dashboard":
         for yr in range(from_yr, to_yr + 1):
             labels.append(str(yr))
             if metric == "Income (Paid)":
-                v = sum(_convert_amount(i.payment_amount, yr) for i in invoices if i.is_paid() and i.year == yr)
+                v = sum(
+                    _convert_amount(i.payment_amount, yr) for i in invoices
+                    if i.is_paid() and i.payment_date and i.payment_date.year == yr
+                )
             elif metric == "Income (All)":
                 v = sum(_convert_amount(i.payment_amount, yr) for i in invoices if i.year == yr)
             elif metric == "Active Projects":
@@ -4068,7 +4074,11 @@ if page == "📊 Dashboard":
             if _clicked_year is not None:
                 _drill_invoices = [
                     inv for inv in invoices
-                    if inv.year == _clicked_year and (metric != "Income (Paid)" or inv.is_paid())
+                    if (
+                        inv.payment_date and inv.payment_date.year == _clicked_year and inv.is_paid()
+                        if metric == "Income (Paid)"
+                        else inv.year == _clicked_year
+                    )
                 ]
                 st.markdown(f"#### {metric} invoices — {_clicked_year}")
                 if _drill_invoices:
