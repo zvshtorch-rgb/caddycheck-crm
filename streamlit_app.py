@@ -3685,8 +3685,8 @@ if page == "📊 Dashboard":
     total_income = total_paid + total_unpaid
 
     yearly_val = sum(
-        _invoice_display_amount(i) for i in f_inv
-        if i.is_paid() and i.year == ref_year
+        _invoice_display_amount(i, prefer_payment_date=True) for i in f_inv
+        if i.is_paid() and i.payment_date and i.payment_date.year == ref_year
     )
 
     current_month_start = datetime.date.today().replace(day=1)
