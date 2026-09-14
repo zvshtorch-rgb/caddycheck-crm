@@ -1483,6 +1483,524 @@ def _llm_normalize_question(question: str) -> Optional[str]:
         return None
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# Ask Data v2: structured tool-selection architecture.
+#
+# Flow: question -> Gemini picks {"tool": ..., "arguments": {...}} from a fixed,
+# read-only tool catalog -> Python validates every argument -> Python computes
+# the exact answer deterministically. Gemini never sees invoice/project data,
+# never writes SQL, never performs arithmetic, and cannot select anything
+# outside `_ASK_DATA_TOOL_SPECS`. Any failure at any step falls back to the
+# original `_answer_data_question` (unchanged).
+# ══════════════════════════════════════════════════════════════════════════════
+
+# arg_name -> (kind, required). kind is one of:
+#   "int", "project", "country", "status", "month", or "enum:a,b,c"
+_ASK_DATA_TOOL_SPECS: dict[str, dict[str, tuple[str, bool]]] = {
+    "get_invoice": {
+        "invoice_number": ("int", True),
+        "year": ("int", False),
+    },
+    "get_invoices": {
+        "project": ("project", False),
+        "year": ("int", False),
+        "country": ("country", False),
+        "paid": ("enum:yes,no,cancelled", False),
+    },
+    "get_unpaid_invoices": {
+        "project": ("project", False),
+        "year": ("int", False),
+        "country": ("country", False),
+        "category": ("enum:trial,y1,y2plus", False),
+    },
+    "get_project": {
+        "project": ("project", True),
+    },
+    "get_projects": {
+        "country": ("country", False),
+        "status": ("status", False),
+        "month": ("month", False),
+        "min_cameras": ("int", False),
+    },
+    "count_projects": {
+        "country": ("country", False),
+        "status": ("status", False),
+    },
+    "get_debt": {
+        "project": ("project", False),
+        "year": ("int", False),
+        "country": ("country", False),
+        "category": ("enum:trial,y1,y2plus", False),
+    },
+    "get_paid_amount": {
+        "project": ("project", False),
+        "year": ("int", False),
+        "country": ("country", False),
+    },
+    "get_outstanding_amount": {
+        "project": ("project", False),
+        "year": ("int", False),
+        "country": ("country", False),
+    },
+    "get_top_debt_projects": {
+        "year": ("int", False),
+        "limit": ("int", False),
+    },
+    "get_sent_invoices": {
+        "invoice_number": ("int", False),
+        "year": ("int", False),
+        "project": ("project", False),
+    },
+    "get_next_invoice_number": {},
+    "get_camera_statistics": {
+        "country": ("country", False),
+        "status": ("status", False),
+        "camera_type": ("enum:all,TopDown,Backtray,Pushout", False),
+        "aggregation": ("enum:sum,count_projects,average_per_project,group_by_country,list_projects", False),
+    },
+}
+
+
+def _resolve_project_arg(value: object, projects) -> Optional[str]:
+    """Fuzzy-resolve a free-text project name to a real project name (reuses `_suggest_best_project_match`)."""
+    text = _safe_str(value).strip()
+    if not text:
+        return None
+    project_names = sorted({p.project_name for p in projects if p.project_name})
+    best_name, score = _suggest_best_project_match(text, project_names)
+    return best_name if best_name and score >= 0.55 else None
+
+
+def _resolve_single_country(value: object, projects) -> Optional[str]:
+    """Resolve a free-text country name/code (typo-tolerant) to a real project country code."""
+    text = _safe_str(value).strip()
+    if not text:
+        return None
+    known_codes = sorted({p.country for p in projects if p.country})
+    text_lower = text.lower()
+    for code in known_codes:
+        if code.lower() == text_lower or _normalize_country(code).lower() == text_lower:
+            return code
+    matches = _match_countries_from_question(text, projects)
+    return matches[0] if matches else None
+
+
+def _resolve_ask_data_arg(kind: str, value: object, projects) -> tuple[bool, object]:
+    """Validate + resolve one tool argument. Returns (ok, resolved_value)."""
+    if value is None:
+        return True, None
+    if kind == "int":
+        try:
+            return True, int(value)
+        except Exception:
+            return False, None
+    if kind == "project":
+        resolved = _resolve_project_arg(value, projects)
+        return (True, resolved) if resolved else (False, None)
+    if kind == "country":
+        resolved = _resolve_single_country(value, projects)
+        return (True, resolved) if resolved else (False, None)
+    if kind == "status":
+        text = _safe_str(value).strip()
+        for option in PROJECT_STATUS_OPTIONS:
+            if option.lower() == text.lower():
+                return True, option
+        return False, None
+    if kind == "month":
+        text = _safe_str(value).strip().lower()
+        for month in MONTH_ORDER:
+            if month.lower() == text or month[:3].lower() == text:
+                return True, month
+        return False, None
+    if kind.startswith("enum:"):
+        allowed = kind.split(":", 1)[1].split(",")
+        text = _safe_str(value).strip()
+        for option in allowed:
+            if option.lower() == text.lower():
+                return True, option
+        return False, None
+    return False, None
+
+
+def _validate_ask_data_tool_call(parsed: object, projects) -> tuple[Optional[str], dict, Optional[str]]:
+    """
+    Validate a parsed {"tool": ..., "arguments": {...}} payload against
+    `_ASK_DATA_TOOL_SPECS`. Rejects unknown tools, unresolvable/mistyped
+    arguments, and missing required arguments. Unknown argument keys are
+    silently ignored. Returns (tool_name, cleaned_arguments, error) — tool_name
+    is None on any validation failure.
+    """
+    if not isinstance(parsed, dict):
+        return None, {}, "LLM response was not a JSON object."
+    tool_name = _safe_str(parsed.get("tool")).strip()
+    if tool_name not in _ASK_DATA_TOOL_SPECS:
+        return None, {}, f"Unknown or missing tool name: {tool_name!r}."
+    raw_args = parsed.get("arguments")
+    if raw_args is None:
+        raw_args = {}
+    if not isinstance(raw_args, dict):
+        return None, {}, "Tool 'arguments' was not a JSON object."
+
+    spec = _ASK_DATA_TOOL_SPECS[tool_name]
+    cleaned: dict = {}
+    for arg_name, (kind, required) in spec.items():
+        raw_value = raw_args.get(arg_name)
+        ok, resolved = _resolve_ask_data_arg(kind, raw_value, projects)
+        if not ok:
+            return None, {}, f"Could not validate argument '{arg_name}'={raw_value!r} for tool '{tool_name}'."
+        if required and resolved is None:
+            return None, {}, f"Missing required argument '{arg_name}' for tool '{tool_name}'."
+        cleaned[arg_name] = resolved
+    # Any keys in raw_args beyond the spec are simply ignored (never executed).
+    return tool_name, cleaned, None
+
+
+def _camera_metric_for_project(project, camera_type: str) -> int:
+    if not camera_type or camera_type == "all":
+        return _safe_int(project.num_cams)
+    counts = _project_detection_counts(project)
+    field_map = {label: field_name for label, field_name, _ in DETECTION_CAMERA_FIELDS}
+    field_name = field_map.get(camera_type)
+    return _safe_int(counts.get(field_name, 0)) if field_name else 0
+
+
+def _filter_invoices_for_debt_tools(invoices, projects, args: dict, paid_predicate) -> list:
+    rows = [inv for inv in invoices if paid_predicate(inv)]
+    if args.get("year") is not None:
+        rows = [inv for inv in rows if inv.year == args["year"]]
+    if args.get("country"):
+        names_in_country = {p.project_name for p in projects if p.country == args["country"]}
+        rows = [inv for inv in rows if inv.project_name in names_in_country]
+    if args.get("project"):
+        rows = [inv for inv in rows if inv.project_name == args["project"]]
+    category = args.get("category")
+    if category == "trial":
+        rows = [inv for inv in rows if _is_paid_trial_category(inv)]
+    elif category == "y1":
+        rows = [inv for inv in rows if _is_new_installation_category(inv)]
+    elif category == "y2plus":
+        rows = [inv for inv in rows if _is_maintenance_category(inv)]
+    return rows
+
+
+def _execute_ask_data_tool(
+    tool_name: str, args: dict, projects, invoices, debt_summaries
+) -> tuple[str, Optional[pd.DataFrame]]:
+    """
+    Execute one validated, read-only tool call against the already-loaded
+    CRM data. All numbers are computed here in plain Python — the LLM never
+    sees or calculates any of this.
+    """
+    if tool_name == "get_invoice":
+        invoice_number = args["invoice_number"]
+        rows = [inv for inv in invoices if _safe_int(inv.invoice_number, default=0) == invoice_number]
+        if args.get("year") is not None:
+            rows = [inv for inv in rows if inv.year == args["year"]]
+        if not rows:
+            return f"Invoice {invoice_number} is not in the invoice ledger.", None
+        total = sum(float(inv.payment_amount) for inv in rows)
+        return f"Invoice {invoice_number} has {len(rows)} row(s) totaling €{total:,.0f}.", _build_invoice_answer_df(rows, projects)
+
+    if tool_name in ("get_invoices", "get_unpaid_invoices"):
+        rows = list(invoices)
+        if tool_name == "get_unpaid_invoices":
+            rows = [inv for inv in rows if inv.is_unpaid()]
+        elif args.get("paid") == "yes":
+            rows = [inv for inv in rows if inv.is_paid()]
+        elif args.get("paid") == "no":
+            rows = [inv for inv in rows if inv.is_unpaid()]
+        elif args.get("paid") == "cancelled":
+            rows = [inv for inv in rows if inv.is_cancelled()]
+        if args.get("project"):
+            rows = [inv for inv in rows if inv.project_name == args["project"]]
+        if args.get("year") is not None:
+            rows = [inv for inv in rows if inv.year == args["year"]]
+        if args.get("country"):
+            names_in_country = {p.project_name for p in projects if p.country == args["country"]}
+            rows = [inv for inv in rows if inv.project_name in names_in_country]
+        category = args.get("category")
+        if category == "trial":
+            rows = [inv for inv in rows if _is_paid_trial_category(inv)]
+        elif category == "y1":
+            rows = [inv for inv in rows if _is_new_installation_category(inv)]
+        elif category == "y2plus":
+            rows = [inv for inv in rows if _is_maintenance_category(inv)]
+        if not rows:
+            return "No invoices match that question.", None
+        total = sum(float(inv.payment_amount) for inv in rows)
+        label = "unpaid invoice" if tool_name == "get_unpaid_invoices" else "invoice"
+        return f"Found {len(rows)} {label} row(s) totaling €{total:,.0f}.", _build_invoice_answer_df(rows, projects)
+
+    if tool_name == "get_project":
+        project = next((p for p in projects if p.project_name == args["project"]), None)
+        if project is None:
+            return f"I could not find project details for {args['project']}.", None
+        df = pd.DataFrame([{
+            "Project": project.project_name,
+            "Country": project.country,
+            "# Cams": project.num_cams,
+            "Payment Month": project.payment_month,
+            "Install Year": project.installation_year or "",
+            "Status": project.status,
+        }])
+        return f"Here are the project details for {project.project_name}.", df
+
+    if tool_name in ("get_projects", "count_projects"):
+        rows = list(projects)
+        if args.get("country"):
+            rows = [p for p in rows if p.country == args["country"]]
+        if args.get("status"):
+            rows = [p for p in rows if _normalize_project_status(p.status) == args["status"]]
+        if args.get("month"):
+            rows = get_projects_for_month(rows, args["month"])
+        if args.get("min_cameras") is not None:
+            rows = [p for p in rows if _safe_int(p.num_cams) > args["min_cameras"]]
+        if tool_name == "count_projects":
+            qualifiers = []
+            if args.get("status"):
+                qualifiers.append(f"with status {args['status']}")
+            if args.get("country"):
+                qualifiers.append(f"in {args['country']}")
+            suffix = (" " + " ".join(qualifiers)) if qualifiers else ""
+            return f"There are {len(rows)} project(s){suffix}.", None
+        if not rows:
+            return "No projects match that question.", None
+        return f"Found {len(rows)} project(s).", _build_project_answer_df(rows)
+
+    if tool_name == "get_debt":
+        rows = _filter_invoices_for_debt_tools(invoices, projects, args, lambda inv: inv.is_unpaid())
+        if not rows:
+            return "No unpaid invoice rows match that question.", None
+        total = sum(float(inv.payment_amount) for inv in rows)
+        return f"I found {len(rows)} unpaid invoice row(s) totaling €{total:,.0f}.", _build_invoice_answer_df(rows, projects)
+
+    if tool_name == "get_outstanding_amount":
+        rows = _filter_invoices_for_debt_tools(invoices, projects, args, lambda inv: inv.is_unpaid())
+        total = sum(float(inv.payment_amount) for inv in rows)
+        subject = args.get("project") or args.get("country") or "the selected filters"
+        return f"Outstanding (unpaid) amount for {subject} is €{total:,.0f} across {len(rows)} invoice row(s).", None
+
+    if tool_name == "get_paid_amount":
+        rows = _filter_invoices_for_debt_tools(invoices, projects, args, lambda inv: inv.is_paid())
+        total = sum(float(inv.payment_amount) for inv in rows)
+        subject = args.get("project") or args.get("country") or "the selected filters"
+        return f"Paid amount for {subject} is €{total:,.0f} across {len(rows)} invoice row(s).", None
+
+    if tool_name == "get_top_debt_projects":
+        year = args.get("year")
+        limit = max(1, args.get("limit") or 10)
+        debt_by_project: dict[str, float] = {}
+        for inv in invoices:
+            if not inv.is_unpaid():
+                continue
+            if year is not None and inv.year != year:
+                continue
+            debt_by_project.setdefault(inv.project_name, 0.0)
+            debt_by_project[inv.project_name] += float(inv.payment_amount)
+        if not debt_by_project:
+            return "No unpaid debt rows match that question.", None
+        top = sorted(debt_by_project.items(), key=lambda item: item[1], reverse=True)[:limit]
+        df = pd.DataFrame([{"Project": name, "Debt (€)": amount} for name, amount in top])
+        return f"Here are the top {len(top)} debt project(s).", df
+
+    if tool_name == "get_sent_invoices":
+        rows = load_sent_invoices_log()
+        if args.get("invoice_number") is not None:
+            rows = [row for row in rows if _safe_int(row.get("invoice_number"), default=0) == args["invoice_number"]]
+        if args.get("year") is not None:
+            rows = [row for row in rows if _safe_int(row.get("year"), default=0) == args["year"]]
+        if args.get("project"):
+            rows = [row for row in rows if args["project"].lower() in _safe_str(row.get("subject", "")).lower()]
+        if not rows:
+            return "No sent PDF invoices match that question.", None
+        df = pd.DataFrame([
+            {
+                "Sent At": _safe_str(row.get("sent_at", "")).replace("T", " ")[:19],
+                "Invoice #": _safe_int(row.get("invoice_number"), default=0),
+                "Month": _safe_str(row.get("month", "")),
+                "Year": _safe_int(row.get("year"), default=0),
+                "PDF": _safe_str(row.get("pdf_filename", "")),
+                "To": ", ".join(row.get("recipients", [])),
+            }
+            for row in reversed(rows)
+        ])
+        return f"Found {len(df)} sent PDF invoice record(s).", df
+
+    if tool_name == "get_next_invoice_number":
+        next_inv = _get_next_invoice_number(invoices, _data_path)
+        return f"The next invoice number is {next_inv}.", None
+
+    if tool_name == "get_camera_statistics":
+        rows = list(projects)
+        if args.get("country"):
+            rows = [p for p in rows if p.country == args["country"]]
+        if args.get("status"):
+            rows = [p for p in rows if _normalize_project_status(p.status) == args["status"]]
+        camera_type = args.get("camera_type") or "all"
+        aggregation = args.get("aggregation") or "sum"
+        metric_label = "camera" if camera_type == "all" else camera_type
+
+        if aggregation == "group_by_country":
+            totals: dict[str, int] = {}
+            for p in rows:
+                key = p.country or "Unknown"
+                totals[key] = totals.get(key, 0) + _camera_metric_for_project(p, camera_type)
+            if not totals:
+                return "No projects match that question.", None
+            df = pd.DataFrame([
+                {"Country": country, f"{metric_label.title()} Cameras": total}
+                for country, total in sorted(totals.items(), key=lambda item: item[1], reverse=True)
+            ])
+            top_country, top_total = max(totals.items(), key=lambda item: item[1])
+            return f"{top_country} has the most {metric_label} cameras ({top_total}).", df
+
+        if aggregation == "list_projects":
+            if not rows:
+                return "No projects match that question.", None
+            df = pd.DataFrame([
+                {
+                    "Project": p.project_name,
+                    "Country": p.country,
+                    f"{metric_label.title()} Cameras": _camera_metric_for_project(p, camera_type),
+                    "Status": p.status,
+                }
+                for p in rows
+            ])
+            return f"Found {len(rows)} project(s).", df
+
+        total = sum(_camera_metric_for_project(p, camera_type) for p in rows)
+        country_txt = f" in {args['country']}" if args.get("country") else ""
+        if aggregation == "count_projects":
+            return f"There are {len(rows)} project(s){country_txt}.", None
+        if aggregation == "average_per_project":
+            avg = (total / len(rows)) if rows else 0.0
+            return f"Average {metric_label} cameras per project is {avg:.1f} (across {len(rows)} project(s)).", None
+        return f"There are {total} {metric_label} camera(s) across {len(rows)} project(s){country_txt}.", None
+
+    return "I could not execute that tool.", None
+
+
+def _ask_data_tool_catalog_text() -> str:
+    lines = []
+    for tool_name, spec in _ASK_DATA_TOOL_SPECS.items():
+        if not spec:
+            lines.append(f"- {tool_name}(): no arguments")
+            continue
+        parts = []
+        for arg_name, (kind, required) in spec.items():
+            marker = "required" if required else "optional"
+            if kind.startswith("enum:"):
+                parts.append(f"{arg_name} ({marker}, one of: {kind.split(':', 1)[1]})")
+            else:
+                parts.append(f"{arg_name} ({marker}, {kind})")
+        lines.append(f"- {tool_name}({', '.join(parts)})")
+    return "\n".join(lines)
+
+
+def _llm_parse_data_question(question: str) -> Optional[dict]:
+    """
+    Ask Gemini to translate a free-text question into ONE structured,
+    read-only tool call: {"tool": "<name>", "arguments": {...}}.
+
+    Gemini only ever sees this prompt (the question + a fixed tool catalog)
+    — never any invoice/project/customer data — and only ever picks a tool
+    name + arguments. It cannot write SQL, cannot write Python, cannot select
+    a write/update/delete action (none exist in the catalog), and never
+    computes any number itself; `_execute_ask_data_tool` does that
+    deterministically in Python. Returns None on any failure (missing key,
+    network error, timeout, invalid JSON), so the caller falls back to the
+    legacy `_answer_data_question`.
+    """
+    gemini_cfg = get_gemini_config()
+    api_key = gemini_cfg.get("api_key", "")
+    if not api_key or not str(question).strip():
+        return None
+    try:
+        import json
+        import requests
+
+        prompt = (
+            "You are a strict, read-only query router for a CRM. Given the user's question, choose "
+            "exactly ONE tool from the catalog below plus the arguments it needs, then reply with ONLY "
+            "raw JSON (no markdown fences, no explanation) in exactly this shape:\n"
+            '{"tool": "<tool_name>", "arguments": {"<arg_name>": <value>, ...}}\n\n'
+            "Rules:\n"
+            "- Only use tool names and argument names that appear in the catalog below. Never invent one.\n"
+            "- Omit any argument you are not confident about; it will default to 'no filter'.\n"
+            "- Never produce SQL, Python, or any instruction to write/update/delete/send anything — "
+            "every tool in the catalog is read-only, so only ever select one of them.\n"
+            "- 'year', 'invoice_number', 'min_cameras' and 'limit' must be plain integers.\n"
+            "- 'country' should be the country name/code exactly as it appears in the question.\n"
+            "- 'project' should be the project name exactly as it appears in the question.\n\n"
+            f"Tool catalog:\n{_ask_data_tool_catalog_text()}\n\n"
+            f"Question: {question}"
+        )
+        model = gemini_cfg.get("model", "gemini-flash-latest")
+        resp = requests.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+            headers={"x-goog-api-key": api_key},
+            json={
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {
+                    "temperature": 0,
+                    "maxOutputTokens": 300,
+                    "thinkingConfig": {"thinkingBudget": 0},
+                    "responseMimeType": "application/json",
+                },
+            },
+            timeout=8,
+        )
+        resp.raise_for_status()
+        text = " ".join(
+            part.get("text", "")
+            for part in resp.json()["candidates"][0]["content"]["parts"]
+        ).strip()
+        if not text:
+            return None
+        parsed = json.loads(text)
+        return parsed if isinstance(parsed, dict) else None
+    except Exception as exc:
+        try:
+            import re as _re
+            import streamlit as st
+            safe_msg = _re.sub(r"key=[^&\s]+", "key=***", str(exc))
+            safe_msg = safe_msg.replace(api_key, "***")
+            st.session_state["_ask_data_llm_error"] = safe_msg
+        except Exception:
+            pass
+        return None
+
+
+def _answer_data_question_smart(question: str, projects, invoices, debt_summaries) -> tuple[str, Optional[pd.DataFrame]]:
+    """
+    Preferred Ask Data entry point: Gemini tool-selection first, deterministic
+    Python execution second, with the original keyword-based
+    `_answer_data_question` (which itself still tries an LLM template-rewrite)
+    as the fallback for any failure along the way.
+    """
+    import streamlit as st
+
+    st.session_state.pop("_ask_data_llm_error", None)
+    st.session_state.pop("_ask_data_llm_tool_call", None)
+
+    parsed = _llm_parse_data_question(question)
+    if parsed is not None:
+        tool_name, cleaned_args, error = _validate_ask_data_tool_call(parsed, projects)
+        if tool_name is not None:
+            try:
+                st.session_state["_ask_data_llm_tool_call"] = {"tool": tool_name, "arguments": cleaned_args}
+                return _execute_ask_data_tool(tool_name, cleaned_args, projects, invoices, debt_summaries)
+            except Exception as exc:
+                st.session_state["_ask_data_llm_error"] = f"Tool execution failed: {exc}"
+        else:
+            st.session_state["_ask_data_llm_error"] = error
+
+    # Fallback: legacy keyword matcher (with its own internal LLM template-rewrite attempt).
+    normalized = _llm_normalize_question(question)
+    effective_question = normalized or question
+    return _answer_data_question(effective_question, projects, invoices, debt_summaries)
+
+
 def _find_invoice_header_row(worksheet) -> Optional[tuple[int, dict[str, int]]]:
     for row_idx in range(1, min(worksheet.max_row, 80) + 1):
         labels = {}
@@ -3712,23 +4230,21 @@ elif page == "❓ Ask Data":
     st.title("❓ Ask Data")
     _ask_data_llm_on = bool(get_gemini_config().get("api_key", ""))
     if _ask_data_llm_on:
-        st.caption("Ask in plain language — an LLM interprets your question, then the exact numbers are computed from the data.")
+        st.caption("Ask naturally about projects, invoices, debt, payments, licenses, or camera statistics.")
     else:
         st.caption("Ask questions about projects, invoices, debt, or sent PDF invoices.")
 
     def _ask_data_answer(raw_question: str) -> tuple[str, Optional[pd.DataFrame]]:
-        st.session_state.pop("_ask_data_llm_error", None)
-        normalized = _llm_normalize_question(raw_question) if _ask_data_llm_on else None
-        st.session_state["_ask_data_llm_rewrite"] = normalized
-        effective_question = normalized or raw_question
-        return _answer_data_question(effective_question, projects, invoices, debt_summaries)
+        if _ask_data_llm_on:
+            return _answer_data_question_smart(raw_question, projects, invoices, debt_summaries)
+        return _answer_data_question(raw_question, projects, invoices, debt_summaries)
 
     quick_question_cols = st.columns(4)
     quick_questions = [
-        "What is the Y1 debt for 2026?",
-        "Show unpaid invoices for AD Denderleeuw",
-        "Show invoice 8669",
-        "Show sent PDF invoices for 2026",
+        "How many cameras do we have in total?",
+        "How many TopDown cameras are in Belgium?",
+        "Which country has the most cameras?",
+        "How much Y1 debt do we have in 2026?",
     ]
     for idx, quick_question in enumerate(quick_questions):
         if quick_question_cols[idx].button(quick_question, key=f"ask_quick_{idx}", use_container_width=True):
@@ -3743,7 +4259,7 @@ elif page == "❓ Ask Data":
             "Question",
             value=st.session_state.get("ask_data_question", ""),
             height=100,
-            placeholder="Examples: What is the Y2+ debt for 2026? Show unpaid invoices for AD Denderleeuw. Show invoice 8676. Which projects are billed in April?",
+            placeholder="Examples: How many cameras do we have in total? Show unpaid invoices for AD Anderlecht. Which country has the most cameras? Show invoice 8676.",
         )
         submitted = st.form_submit_button("Ask")
 
@@ -3755,11 +4271,11 @@ elif page == "❓ Ask Data":
 
     if CAN_EDIT and _ask_data_llm_on:
         _llm_error = st.session_state.get("_ask_data_llm_error")
-        _llm_rewrite = st.session_state.get("_ask_data_llm_rewrite")
-        if _llm_error:
+        _llm_tool_call = st.session_state.get("_ask_data_llm_tool_call")
+        if _llm_tool_call:
+            st.caption(f"🤖 Tool call: `{_llm_tool_call['tool']}({_llm_tool_call['arguments']})`")
+        elif _llm_error:
             st.caption(f"⚠️ LLM assist failed, used keyword matcher instead: {_llm_error}")
-        elif _llm_rewrite:
-            st.caption(f"🤖 LLM rewrote your question as: \"{_llm_rewrite}\"")
 
     answer_text = st.session_state.get("ask_data_answer_text")
     answer_rows = st.session_state.get("ask_data_answer_df")
@@ -3768,8 +4284,9 @@ elif page == "❓ Ask Data":
         st.success(answer_text)
     else:
         st.info(
-            "Try: 'What is the Y1 debt for 2026?', 'Show unpaid invoices for Proxy Muizen', "
-            "'How many active projects are in Belgium?', 'Show invoice 8676', or 'Show sent PDF invoices'."
+            "Try: 'How many cameras do we have in total?', 'How many TopDown cameras are in Belgium?', "
+            "'Which country has the most cameras?', 'How much Y1 debt do we have in 2026?', "
+            "'Show unpaid invoices for AD Anderlecht', or 'Show invoice 8676'."
         )
 
     if answer_rows:
