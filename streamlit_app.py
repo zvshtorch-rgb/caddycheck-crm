@@ -2089,20 +2089,30 @@ def _llm_parse_data_question(question: str) -> Optional[dict]:
             f"Question: {question}"
         )
         model = gemini_cfg.get("model", "gemini-flash-latest")
-        resp = requests.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-            headers={"x-goog-api-key": api_key},
-            json={
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {
-                    "temperature": 0,
-                    "maxOutputTokens": 2048,
-                    "thinkingConfig": {"thinkingBudget": 0},
-                    "responseMimeType": "application/json",
-                },
+        request_body = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": 0,
+                "maxOutputTokens": 2048,
+                "thinkingConfig": {"thinkingBudget": 0},
+                "responseMimeType": "application/json",
             },
-            timeout=20,
-        )
+        }
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        headers = {"x-goog-api-key": api_key}
+        resp = None
+        last_exc: Optional[Exception] = None
+        for attempt in range(2):  # transient 5xx from Gemini is common; retry once
+            try:
+                resp = requests.post(url, headers=headers, json=request_body, timeout=20)
+                if resp.status_code >= 500:
+                    last_exc = ValueError(f"{resp.status_code} Server Error from Gemini")
+                    continue
+                break
+            except requests.exceptions.RequestException as exc:
+                last_exc = exc
+        if resp is None or resp.status_code >= 500:
+            raise last_exc or ValueError("Gemini request failed with no response")
         resp.raise_for_status()
         payload = resp.json()
         text = " ".join(
