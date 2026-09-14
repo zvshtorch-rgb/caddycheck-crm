@@ -275,6 +275,26 @@ def get_email_config() -> dict:
     return defaults
 
 
+def get_gemini_config() -> dict:
+    """Load Gemini API config (used to help Ask Data understand free-text questions)."""
+    defaults = {"api_key": "", "model": "gemini-2.0-flash"}
+    try:
+        import streamlit as st
+        gemini_secrets = st.secrets.get("gemini", {})
+        if gemini_secrets:
+            defaults["api_key"] = str(gemini_secrets.get("api_key", "")).strip() or defaults["api_key"]
+            defaults["model"] = str(gemini_secrets.get("model", "")).strip() or defaults["model"]
+    except Exception:
+        pass
+    env_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if env_key:
+        defaults["api_key"] = env_key
+    env_model = os.environ.get("GEMINI_MODEL", "").strip()
+    if env_model:
+        defaults["model"] = env_model
+    return defaults
+
+
 def get_project_overrides() -> dict:
     """
     Load per-project rate overrides from file.

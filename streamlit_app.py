@@ -263,6 +263,7 @@ from config.settings import (
     save_project_change_log,
     load_orders_records,
     save_orders_records,
+    get_gemini_config,
 )
 
 try:
@@ -1357,6 +1358,71 @@ def _answer_data_question(question: str, projects, invoices, debt_summaries) -> 
         "'Show invoice 8676', 'Was invoice 8676 sent?', 'Which projects are billed in April?', or 'Show sent PDF invoices for 2026'.",
         None,
     )
+
+
+_ASK_DATA_TEMPLATE_CATALOG = """\
+- What is the Y1 debt for <year>?
+- What is the Y2+ debt for <year>?
+- What is the Paid Trial debt for <year>?
+- Show unpaid invoices for <project name>
+- Show invoice <invoice number>
+- Was invoice <invoice number> sent?
+- How many active projects are in <country>?
+- Which projects are billed in <month>?
+- Show sent PDF invoices for <year>
+- What invoices exist for <project name>?
+- What is the next invoice number?
+- Show top debt projects
+- Show project details for <project name>
+"""
+
+
+def _llm_normalize_question(question: str) -> Optional[str]:
+    """
+    Best-effort: ask Gemini to rewrite a free-text question into the closest
+    matching template from `_ASK_DATA_TEMPLATE_CATALOG`, substituting real
+    values (project/country/month/year/invoice number) found in the question.
+
+    Only the question text is sent to the LLM — never any invoice/project
+    data — and the actual answer is still computed deterministically by
+    `_answer_data_question` on the rewritten text. Returns None (silently)
+    if no API key is configured or the call fails for any reason, so Ask
+    Data always keeps working via the plain keyword matcher.
+    """
+    gemini_cfg = get_gemini_config()
+    api_key = gemini_cfg.get("api_key", "")
+    if not api_key or not str(question).strip():
+        return None
+    try:
+        import requests
+
+        prompt = (
+            "You rewrite a user's question into ONE line matching the closest template below, "
+            "substituting real values from the question (project name, country, month, year, "
+            "invoice number) in place of the placeholders. Reply with ONLY the rewritten line, "
+            "no explanation. If nothing fits, reply exactly UNKNOWN.\n\n"
+            f"Templates:\n{_ASK_DATA_TEMPLATE_CATALOG}\n"
+            f"Question: {question}"
+        )
+        model = gemini_cfg.get("model", "gemini-2.0-flash")
+        resp = requests.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+            params={"key": api_key},
+            json={
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {"temperature": 0, "maxOutputTokens": 100},
+            },
+            timeout=8,
+        )
+        resp.raise_for_status()
+        text = (
+            resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+        ).strip()
+        if not text or text.upper() == "UNKNOWN":
+            return None
+        return text
+    except Exception:
+        return None
 
 
 def _find_invoice_header_row(worksheet) -> Optional[tuple[int, dict[str, int]]]:
@@ -3586,7 +3652,16 @@ if page == "📊 Dashboard":
 # ══════════════════════════════════════════════════════════════════════════════
 elif page == "❓ Ask Data":
     st.title("❓ Ask Data")
-    st.caption("Ask questions about projects, invoices, debt, or sent PDF invoices.")
+    _ask_data_llm_on = bool(get_gemini_config().get("api_key", ""))
+    if _ask_data_llm_on:
+        st.caption("Ask in plain language — an LLM interprets your question, then the exact numbers are computed from the data.")
+    else:
+        st.caption("Ask questions about projects, invoices, debt, or sent PDF invoices.")
+
+    def _ask_data_answer(raw_question: str) -> tuple[str, Optional[pd.DataFrame]]:
+        normalized = _llm_normalize_question(raw_question) if _ask_data_llm_on else None
+        effective_question = normalized or raw_question
+        return _answer_data_question(effective_question, projects, invoices, debt_summaries)
 
     quick_question_cols = st.columns(4)
     quick_questions = [
@@ -3598,7 +3673,7 @@ elif page == "❓ Ask Data":
     for idx, quick_question in enumerate(quick_questions):
         if quick_question_cols[idx].button(quick_question, key=f"ask_quick_{idx}", use_container_width=True):
             st.session_state["ask_data_question"] = quick_question
-            answer_text, answer_df = _answer_data_question(quick_question, projects, invoices, debt_summaries)
+            answer_text, answer_df = _ask_data_answer(quick_question)
             st.session_state["ask_data_answer_text"] = answer_text
             st.session_state["ask_data_answer_df"] = answer_df.to_dict(orient="records") if answer_df is not None else None
             st.rerun()
@@ -3614,9 +3689,10 @@ elif page == "❓ Ask Data":
 
     if submitted:
         st.session_state["ask_data_question"] = question
-        answer_text, answer_df = _answer_data_question(question, projects, invoices, debt_summaries)
+        answer_text, answer_df = _ask_data_answer(question)
         st.session_state["ask_data_answer_text"] = answer_text
         st.session_state["ask_data_answer_df"] = answer_df.to_dict(orient="records") if answer_df is not None else None
+
 
     answer_text = st.session_state.get("ask_data_answer_text")
     answer_rows = st.session_state.get("ask_data_answer_df")
