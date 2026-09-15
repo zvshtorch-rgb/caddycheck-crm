@@ -235,7 +235,9 @@ def _run_for_days_before(
     use_graph = graph_email_available()
     logger.info("Sending via %s.", "Microsoft Graph" if use_graph else "SMTP")
     if use_graph:
-        send_graph_email(subject, body, recipients, cc=cc_list, html_body=html)
+        from services.email_service import _get_graph_setting
+        sender_mailbox = _get_graph_setting("INVOICE_SENDER_MAILBOX") or None
+        send_graph_email(subject, body, recipients, cc=cc_list, html_body=html, sender_mailbox=sender_mailbox)
     else:
         send_simple_email(subject, body, recipients, cc=cc_list, html_body=html, config=email_cfg)
     _log_sent_alerts(projects_to_alert, days_before, recipients, cc_list, source_name)
