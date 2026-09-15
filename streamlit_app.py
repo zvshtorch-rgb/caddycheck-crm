@@ -4733,6 +4733,12 @@ elif page == "🏗️ Projects":
             num_rows="dynamic",
             column_config={
                 "_original_project_name": None,
+                "# Cams": st.column_config.NumberColumn(
+                    "# Cams",
+                    min_value=1,
+                    max_value=30,
+                    step=1,
+                ),
                 "Country": st.column_config.SelectboxColumn(
                     "Country",
                     options=[""] + sorted(set(countries) | {"Bel", "Ger", "Hol", "Lux", "Fra", "Ita", "Esp", "Gbr"}),
