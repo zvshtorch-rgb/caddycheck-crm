@@ -4733,9 +4733,10 @@ elif page == "🏗️ Projects":
             num_rows="dynamic",
             column_config={
                 "_original_project_name": None,
-                "Country": st.column_config.TextColumn(
+                "Country": st.column_config.SelectboxColumn(
                     "Country",
-                    help="Type any country label you need, such as Lux.",
+                    options=[""] + sorted(set(countries) | {"Bel", "Ger", "Hol", "Lux", "Fra", "Ita", "Esp", "Gbr"}),
+                    help="Pick an existing country code, or add a new one to Settings/the list if needed.",
                 ),
                 "Install Year": st.column_config.SelectboxColumn(
                     "Install Year",
