@@ -624,12 +624,40 @@ def load_bank_payments_log() -> list:
     """Load bank payment history, preferring Supabase when available."""
     local_entries = _load_local_bank_payments_log()
     try:
-        from services.supabase_service import load_bank_payments, save_bank_payment_bundles
+        from services.supabase_service import load_bank_payments, save_bank_payment_bundles, append_bank_payment_with_allocations
 
         remote_entries = load_bank_payments()
         if not remote_entries and local_entries:
             save_bank_payment_bundles(local_entries)
             remote_entries = load_bank_payments()
+        else:
+            # Self-heal: a payment saved to the local fallback file (e.g. during
+            # a transient Supabase error) would otherwise be silently hidden
+            # forever once at least one other payment exists in Supabase, and
+            # lost outright once this ephemeral local file disappears on the
+            # next deploy/restart. Push any such not-yet-synced entries now.
+            remote_fingerprints = {
+                str(e.get("payment_fingerprint") or "").strip()
+                for e in remote_entries
+                if e.get("payment_fingerprint")
+            }
+            unsynced = [
+                entry for entry in local_entries
+                if str(entry.get("payment_fingerprint") or "").strip() not in remote_fingerprints
+            ]
+            if unsynced:
+                synced_any = False
+                for entry in unsynced:
+                    try:
+                        allocations = entry.get("allocations", []) or []
+                        append_bank_payment_with_allocations(
+                            {k: v for k, v in entry.items() if k != "allocations"}, allocations
+                        )
+                        synced_any = True
+                    except Exception as exc:
+                        logger.warning("Could not sync local-only bank payment to Supabase: %s", exc)
+                if synced_any:
+                    remote_entries = load_bank_payments()
         return remote_entries or local_entries
     except RuntimeError as exc:
         if "Supabase credentials not configured" not in str(exc):
