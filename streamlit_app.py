@@ -4733,11 +4733,9 @@ elif page == "🏗️ Projects":
             num_rows="dynamic",
             column_config={
                 "_original_project_name": None,
-                "# Cams": st.column_config.NumberColumn(
+                "# Cams": st.column_config.SelectboxColumn(
                     "# Cams",
-                    min_value=1,
-                    max_value=30,
-                    step=1,
+                    options=list(range(1, 31)),
                 ),
                 "Country": st.column_config.SelectboxColumn(
                     "Country",
