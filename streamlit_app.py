@@ -1737,78 +1737,83 @@ def _filter_license_entries(projects, args: dict) -> list:
     return entries
 
 
-def _license_payment_row(project, eop, license_status: str, invoices) -> dict:
+def _annual_payment_month(project) -> str:
+    """Resolve the project's recurring annual billing month: `payment_month` (the real
+    field driving get_projects_for_month/the monthly invoicing job) with a fallback to
+    the License EOP's month name if payment_month is blank."""
+    month = _safe_str(getattr(project, "payment_month", "")).strip()
+    if month in MONTH_ORDER:
+        return month
+    eop = _project_license_date(project)
+    return MONTH_ORDER[eop.month - 1] if eop else ""
+
+
+def _latest_annual_invoice_year(annual_month: str, today: datetime.date) -> Optional[int]:
+    """Latest calendar year whose Annual Payment Month has already started (<= today)."""
+    if annual_month not in MONTH_ORDER:
+        return None
+    month_index = MONTH_ORDER.index(annual_month) + 1
+    return today.year if today.month >= month_index else today.year - 1
+
+
+def _annual_license_payment_row(project, eop, invoices, today: datetime.date) -> dict:
     """
-    Join one project's license info with its actual invoice/payment rows
-    (real Supabase `invoices` data — never inferred). Computes:
-    - Total Invoiced / Total Paid / Outstanding Balance from non-cancelled rows.
-    - Payment Status: Fully Paid / No Debt, Partially Paid, Unpaid, or No Invoice Found.
-    - Paid Through: the latest billing year that is fully paid with NO earlier
-      unpaid gap (e.g. paid Y1+Y2 but not Y3, then Y4 paid -> Paid Through stays
-      at Y2's year, since Y3 is an unpaid gap, not simply the newest payment).
+    Determine whether THIS project's latest already-due annual license/maintenance
+    invoice (not simply its most recent/highest-numbered invoice) has been paid.
+    See `_annual_payment_month`/`_latest_annual_invoice_year` for how the due period
+    is anchored. Historical all-time totals are included for reference only — they
+    never influence the Annual Payment Status.
     """
     key = _safe_str(project.project_name).lower().strip()
-    rows = [inv for inv in invoices if _safe_str(inv.project_name).lower().strip() == key]
-    active_rows = [inv for inv in rows if not inv.is_cancelled()]
+    active_rows = [
+        inv for inv in invoices
+        if _safe_str(inv.project_name).lower().strip() == key and not inv.is_cancelled()
+    ]
+    hist_invoiced = sum(float(inv.payment_amount) for inv in active_rows)
+    hist_paid = sum(float(inv.payment_amount) for inv in active_rows if inv.is_paid())
+    hist_outstanding = sum(float(inv.payment_amount) for inv in active_rows if inv.is_unpaid())
 
-    if not active_rows:
-        return {
-            "Project": project.project_name,
-            "Country": project.country,
-            "License EOP": eop.isoformat() if eop else "",
-            "License Status": license_status,
-            "Invoice Number": "",
-            "Invoice Period / License Year": "",
-            "Total Invoiced": 0.0,
-            "Total Paid": 0.0,
-            "Outstanding Balance": 0.0,
-            "Paid Through": "None",
-            "Payment Status": "No Invoice Found",
-        }
+    annual_month = _annual_payment_month(project)
+    target_year = _latest_annual_invoice_year(annual_month, today)
 
-    total_invoiced = sum(float(inv.payment_amount) for inv in active_rows)
-    total_paid = sum(float(inv.payment_amount) for inv in active_rows if inv.is_paid())
-    outstanding = sum(float(inv.payment_amount) for inv in active_rows if inv.is_unpaid())
+    invoice_number, period_text = "", ""
+    invoice_amount, outstanding = 0.0, 0.0
+    paid_flag = "N/A"
 
-    paid_count = sum(1 for inv in active_rows if inv.is_paid())
-    if paid_count == len(active_rows):
-        payment_status = "Fully Paid / No Debt"
-    elif paid_count == 0:
-        payment_status = "Unpaid"
+    if target_year is None:
+        status = "No Annual Invoice Found"
+    elif project.installation_year and target_year < project.installation_year:
+        status = "Not Yet Due"
     else:
-        payment_status = "Partially Paid"
-
-    # Sort by billing period ascending (year, then maintenance-year number) to detect gaps.
-    ordered = sorted(
-        active_rows,
-        key=lambda inv: (inv.year if inv.year is not None else -1, inv.maintenance_year_number()),
-    )
-    paid_through = "None"
-    for inv in ordered:
-        if not inv.is_paid():
-            break
-        period_label = inv.maintenance_year or ""
-        paid_through = f"{inv.year} ({period_label})" if inv.year else period_label or "Unknown"
-
-    latest = ordered[-1]
-    invoice_numbers = sorted({
-        _safe_int(inv.invoice_number, default=0) for inv in active_rows if inv.invoice_number
-    })
-    period_label = latest.maintenance_year or ""
-    invoice_period = f"{latest.year} ({period_label})" if latest.year else period_label or ""
+        maintenance_year_number = project.get_maintenance_year(target_year) if project.installation_year else None
+        period_rows = [inv for inv in active_rows if inv.year == target_year]
+        label = f"Y{maintenance_year_number}" if maintenance_year_number else (period_rows[0].maintenance_year if period_rows else "")
+        period_text = f"{target_year} ({label})" if label else str(target_year)
+        if not period_rows:
+            status = "No Annual Invoice Found"
+        else:
+            invoice_amount = sum(float(inv.payment_amount) for inv in period_rows)
+            outstanding = sum(float(inv.payment_amount) for inv in period_rows if inv.is_unpaid())
+            invoice_number = ", ".join(
+                str(n) for n in sorted({_safe_int(inv.invoice_number, default=0) for inv in period_rows if inv.invoice_number})
+            )
+            paid_flag = "Yes" if outstanding == 0 else "No"
+            status = "Paid" if outstanding == 0 else "Unpaid"
 
     return {
         "Project": project.project_name,
         "Country": project.country,
         "License EOP": eop.isoformat() if eop else "",
-        "License Status": license_status,
-        "Invoice Number": ", ".join(str(n) for n in invoice_numbers),
-        "Invoice Period / License Year": invoice_period,
-        "Total Invoiced": total_invoiced,
-        "Total Paid": total_paid,
-        "Outstanding Balance": outstanding,
-        "Paid Through": paid_through,
-        "Payment Status": payment_status,
+        "Annual Payment Month": annual_month or "Unknown",
+        "Latest Annual Invoice Number": invoice_number,
+        "Latest Annual Invoice Period / Maintenance Year": period_text,
+        "Latest Annual Invoice Amount": invoice_amount,
+        "Latest Annual Invoice Paid?": paid_flag,
+        "Latest Annual Invoice Outstanding Amount": outstanding,
+        "Annual Payment Status": status,
+        "Total Invoiced (All-Time)": hist_invoiced,
+        "Total Paid (All-Time)": hist_paid,
+        "Outstanding Balance (All-Time)": hist_outstanding,
     }
 
 
@@ -2050,13 +2055,14 @@ def _execute_ask_data_tool(
         entries = _filter_license_entries(projects, args)
         if not entries:
             return "No projects match that license question.", None
-        rows = [_license_payment_row(p, eop, status, invoices) for p, eop, status in entries]
+        today = datetime.date.today()
+        rows = [_annual_license_payment_row(p, eop, invoices, today) for p, eop, _status in entries]
         df = pd.DataFrame(rows)
         status_counts: dict[str, int] = {}
         for row in rows:
-            status_counts[row["Payment Status"]] = status_counts.get(row["Payment Status"], 0) + 1
+            status_counts[row["Annual Payment Status"]] = status_counts.get(row["Annual Payment Status"], 0) + 1
         summary = ", ".join(f"{count} {status}" for status, count in status_counts.items())
-        return f"Found {len(rows)} project(s) with license + payment status ({summary}).", df
+        return f"Found {len(rows)} project(s) with latest annual payment status ({summary}).", df
 
     if tool_name == "get_camera_statistics":
         rows = list(projects)
@@ -2188,9 +2194,11 @@ def _llm_parse_data_question(question: str) -> Optional[dict]:
             "(format YYYY-MM-DD) instead of eop_year/eop_month, so only that exact date matches.\n"
             "- If the question about licenses ALSO asks about invoices, payments, debt, outstanding "
             "balance, or whether projects are paid/fully paid, use get_license_payment_status instead "
-            "of get_licenses — it takes the exact same arguments but also joins in each project's real "
-            "invoice/payment rows (total invoiced, total paid, outstanding balance, paid-through period, "
-            "and a Fully Paid / Partially Paid / Unpaid / No Invoice Found payment status).\n\n"
+            "of get_licenses — it takes the exact same arguments but also resolves, per project, the "
+            "LATEST already-due annual license/maintenance invoice (based on the project's recurring "
+            "Annual Payment Month, not merely its most recent or highest-numbered invoice) and whether "
+            "THAT specific invoice is paid: Paid, Unpaid, Not Yet Due, or No Annual Invoice Found. "
+            "All-time historical totals are included for reference only.\n\n"
             f"Tool catalog:\n{_ask_data_tool_catalog_text()}\n\n"
             f"Question: {question}"
         )
