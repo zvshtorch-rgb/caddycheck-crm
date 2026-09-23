@@ -7995,6 +7995,7 @@ elif page == "💸 Debt Report":
         s = _ud.normalize('NFKD', s).encode('ascii', 'ignore').decode('ascii')  # strip accents
         return _re.sub(r'\s+', ' ', s).strip().lower()
     proj_country_map = {}
+    proj_license_eop_map = {}
     for p in projects:
         key = _norm(canonical_project_name(p.project_name))
         if not key:
@@ -8005,6 +8006,12 @@ elif page == "💸 Debt Report":
             proj_country_map[key] = country
         elif key not in proj_country_map:
             proj_country_map[key] = country
+        license_date = _project_license_date(p)
+        if license_date and key not in proj_license_eop_map:
+            proj_license_eop_map[key] = license_date.isoformat()
+
+    def _get_license_eop(name):
+        return proj_license_eop_map.get(_norm(canonical_project_name(name)), "")
 
     ds_country_map = {}
     for ds in debt_summaries:
@@ -8251,6 +8258,7 @@ elif page == "💸 Debt Report":
         invoice_numbers = []
         project_names = []
         countries = []
+        license_eops = []
         maint_years = []
         years = []
         total_amount = 0.0
@@ -8261,6 +8269,9 @@ elif page == "💸 Debt Report":
             project_name = _safe_str(invoice_row.project_name).strip()
             if project_name:
                 project_names.append(canonical_project_name(project_name))
+            license_eop = _get_license_eop(invoice_row.project_name)
+            if license_eop:
+                license_eops.append(license_eop)
             country = _normalize_country(_safe_str(_get_country(invoice_row.project_name)).strip())
             if not country:
                 invoice_number_hint = _safe_int(invoice_row.invoice_number, default=0)
@@ -8281,6 +8292,7 @@ elif page == "💸 Debt Report":
 
         unique_project_names = sorted({name for name in project_names if name})
         unique_countries = sorted({country for country in countries if country})
+        unique_license_eops = sorted({eop for eop in license_eops if eop})
         unique_maint_years = sorted({label for label in maint_years if label})
         is_credit_row = (
             len(unique_maint_years) == 1
@@ -8321,13 +8333,15 @@ elif page == "💸 Debt Report":
             "Project Name": unique_project_names[0] if len(unique_project_names) <= 1 else f"{unique_project_names[0]} (+{len(unique_project_names) - 1} more)",
             "Projects": "" if is_credit_row else len(unique_project_names),
             "Country": ", ".join(unique_countries),
+            "License EOP": ", ".join(unique_license_eops),
             "Maint. Year": ", ".join(unique_maint_years),
             "Amount (€)": total_amount,
             "Year": str(max(years)) if years else "",
             "Invoice Age": _fmt_invoice_age(
                 _invoice_reference_date(row_for_month, row_sent_at, max(years) if years else None)
             ),
-            **invoice_meta,
+            "Type": invoice_meta.get("Type", ""),
+            "For Month": invoice_meta.get("For Month", ""),
             "Description": row_description,
         })
 
