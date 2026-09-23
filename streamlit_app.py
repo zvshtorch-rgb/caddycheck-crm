@@ -1899,7 +1899,15 @@ def _execute_ask_data_tool(
         if not rows:
             return f"Invoice {invoice_number} is not in the invoice ledger.", None
         total = sum(float(inv.payment_amount) for inv in rows)
-        return f"Invoice {invoice_number} has {len(rows)} row(s) totaling €{total:,.0f}.", _build_invoice_answer_df(rows, projects)
+        if len(rows) == 1:
+            paid_txt = "Cancelled" if rows[0].is_cancelled() else ("Paid" if rows[0].is_paid() else "Unpaid")
+            summary = f"Invoice {invoice_number} totals €{total:,.0f} and is {paid_txt}."
+        else:
+            summary = (
+                f"Invoice {invoice_number} has {len(rows)} row(s) totaling €{total:,.0f}; "
+                "see the Paid column below for each row's status."
+            )
+        return summary, _build_invoice_answer_df(rows, projects)
 
     if tool_name in ("get_invoices", "get_unpaid_invoices"):
         rows = list(invoices)
@@ -1994,7 +2002,20 @@ def _execute_ask_data_tool(
         rows = _filter_invoices_for_debt_tools(invoices, projects, args, lambda inv: inv.is_paid())
         total = sum(float(inv.payment_amount) for inv in rows)
         subject = args.get("project") or args.get("country") or "the selected filters"
-        return f"Paid amount for {subject} is €{total:,.0f} across {len(rows)} invoice row(s).", None
+        # Also report the outstanding balance so "is X fully paid?" can never be answered with
+        # just a paid-amount figure that silently omits money still owed (paid_year is dropped
+        # here since it's a payment-date filter and unpaid invoices have no payment_date).
+        outstanding_args = {k: v for k, v in args.items() if k != "paid_year"}
+        outstanding_rows = _filter_invoices_for_debt_tools(invoices, projects, outstanding_args, lambda inv: inv.is_unpaid())
+        outstanding_total = sum(float(inv.payment_amount) for inv in outstanding_rows)
+        if outstanding_total <= 0:
+            status_txt = " No outstanding balance remains — fully paid."
+        else:
+            status_txt = (
+                f" €{outstanding_total:,.0f} across {len(outstanding_rows)} invoice row(s) is still "
+                "outstanding — NOT fully paid."
+            )
+        return f"Paid amount for {subject} is €{total:,.0f} across {len(rows)} invoice row(s).{status_txt}", None
 
     if tool_name == "get_top_debt_projects":
         year = args.get("year")
