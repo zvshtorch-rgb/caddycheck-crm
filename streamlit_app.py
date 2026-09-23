@@ -1583,6 +1583,72 @@ _ASK_DATA_TOOL_SPECS: dict[str, dict[str, tuple[str, bool]]] = {
     },
 }
 
+# Per-tool description shown to the LLM alongside its argument list. This is the primary
+# lever for disambiguating "payment event/history" (bank_payments/bank_payment_allocations —
+# an audit log that may be incomplete) from "financial/payment status" (invoices table — the
+# authoritative source for paid/unpaid/outstanding/debt). See `_llm_parse_data_question`'s
+# prompt for the higher-level routing rules that reference these tools by name.
+_ASK_DATA_TOOL_DESCRIPTIONS: dict[str, str] = {
+    "get_invoice": (
+        "Looks up a single invoice by number from the invoices table, the authoritative source "
+        "for invoice-level financial status. Use this for 'is invoice N paid', 'show invoice N', "
+        "'was invoice N sent' style questions."
+    ),
+    "get_invoices": (
+        "Lists/filters invoice ledger rows (invoices table). Use this for actual payment status, "
+        "paid/unpaid status, and invoice-level or project-level financial status questions. The "
+        "invoices table is the authoritative source for these questions — do NOT use "
+        "get_last_bank_payment for them."
+    ),
+    "get_unpaid_invoices": (
+        "Lists unpaid invoice ledger rows (invoices table), filterable by project/country/year/"
+        "category. Authoritative for 'which invoices/projects are unpaid or not fully paid' "
+        "questions — do NOT use get_last_bank_payment for these."
+    ),
+    "get_project": "Looks up static details (country, cameras, payment month, status) for one project.",
+    "get_projects": "Lists/filters projects by country, status, billing month, or minimum camera count.",
+    "count_projects": "Counts projects matching a country/status filter.",
+    "get_debt": (
+        "Computes modeled/expected outstanding debt from the invoices table. Use this for debt, "
+        "outstanding balance, and 'how much is owed' questions — the invoices table is the "
+        "authoritative source for actual payment status, paid/unpaid status, outstanding "
+        "balances, debt, and partial payments, not the bank-payment event log."
+    ),
+    "get_paid_amount": (
+        "Sums amounts actually paid from the invoices table (authoritative paid-status source). "
+        "Use this for 'has X paid', 'is X fully paid', 'how much has X paid' financial-status "
+        "questions — NOT get_last_bank_payment, which only covers a possibly-incomplete log of "
+        "individual transfer events, not overall paid/unpaid status."
+    ),
+    "get_outstanding_amount": (
+        "Sums unpaid invoice amounts from the invoices table. Use this for 'what is still "
+        "outstanding/owed for X' and 'how much is outstanding across all projects' questions — "
+        "the invoices table is authoritative for outstanding balances, not the bank-payment log."
+    ),
+    "get_top_debt_projects": "Ranks projects by outstanding debt (invoices table), optionally for one year.",
+    "get_sent_invoices": "Looks up the log of invoice PDFs actually emailed out (not payment status).",
+    "get_next_invoice_number": "Returns the next unused invoice number.",
+    "get_camera_statistics": "Aggregates camera counts (sum/average/by-country/etc.) across projects.",
+    "get_last_bank_payment": (
+        "Returns recorded bank-payment events and allocations from the bank_payments/"
+        "bank_payment_allocations audit log (optionally for one project). Use ONLY for questions "
+        "about a specific payment/transfer/remittance EVENT — when it happened, or what invoices/"
+        "amounts it covered (e.g. 'when was the last bank payment for X', 'what was included in "
+        "the last transfer', 'show the bank payment history'). This audit log may be INCOMPLETE "
+        "(not every paid invoice has a logged event here) and must NOT be used to determine "
+        "whether a project or invoice is paid, unpaid, fully paid, or has outstanding debt — use "
+        "get_invoice/get_invoices/get_unpaid_invoices/get_debt/get_paid_amount/"
+        "get_outstanding_amount/get_license_payment_status for those instead."
+    ),
+    "get_licenses": "Filters projects by license status/expiry date. Not for payment/debt questions.",
+    "get_license_payment_status": (
+        "Same license filtering as get_licenses, PLUS the authoritative paid/unpaid status of "
+        "each project's latest already-due annual invoice, joined from the invoices table. Use "
+        "this instead of get_licenses when a license question also asks about invoices, "
+        "payments, debt, outstanding balance, or whether projects are paid/fully paid."
+    ),
+}
+
 
 def _resolve_project_arg(value: object, projects) -> Optional[str]:
     """Fuzzy-resolve a free-text project name to a real project name (reuses `_suggest_best_project_match`)."""
@@ -2007,7 +2073,12 @@ def _execute_ask_data_tool(
                     last_payment, allocations = payment, candidate_allocations
                     break
             if last_payment is None:
-                return f"No bank payment found for {target_project}.", None
+                return (
+                    f"No recorded bank payment event was found for {target_project}. This audit log "
+                    "may be incomplete and this result does not indicate whether the project is paid "
+                    "or unpaid — ask about its payment/paid status separately to check that.",
+                    None,
+                )
         else:
             last_payment = payments[0]
             allocations = _allocations_for(last_payment)
@@ -2126,16 +2197,18 @@ def _ask_data_tool_catalog_text() -> str:
     lines = []
     for tool_name, spec in _ASK_DATA_TOOL_SPECS.items():
         if not spec:
-            lines.append(f"- {tool_name}(): no arguments")
-            continue
-        parts = []
-        for arg_name, (kind, required) in spec.items():
-            marker = "required" if required else "optional"
-            if kind.startswith("enum:"):
-                parts.append(f"{arg_name} ({marker}, one of: {kind.split(':', 1)[1]})")
-            else:
-                parts.append(f"{arg_name} ({marker}, {kind})")
-        lines.append(f"- {tool_name}({', '.join(parts)})")
+            signature = f"- {tool_name}(): no arguments"
+        else:
+            parts = []
+            for arg_name, (kind, required) in spec.items():
+                marker = "required" if required else "optional"
+                if kind.startswith("enum:"):
+                    parts.append(f"{arg_name} ({marker}, one of: {kind.split(':', 1)[1]})")
+                else:
+                    parts.append(f"{arg_name} ({marker}, {kind})")
+            signature = f"- {tool_name}({', '.join(parts)})"
+        description = _ASK_DATA_TOOL_DESCRIPTIONS.get(tool_name)
+        lines.append(f"{signature}\n  {description}" if description else signature)
     return "\n".join(lines)
 
 
@@ -2182,10 +2255,35 @@ def _llm_parse_data_question(question: str) -> Optional[dict]:
             "- For get_projects/count_projects/get_camera_statistics, omitting 'status' means 'active "
             "projects only' (the CRM's default reporting scope). Only set status to 'All' if the user "
             "explicitly asks to include cancelled/offline/inactive projects too.\n"
-            "- For questions about a specific bank payment / wire transfer / remittance event (e.g. "
-            "'last bank payment', 'latest payment received', 'what did the last bank transfer cover'), "
-            "use get_last_bank_payment — NOT get_invoices/get_paid_amount, which only aggregate the "
-            "overall paid-invoice history and don't identify a single payment event.\n"
+            "- Distinguish PAYMENT-EVENT/HISTORY questions from FINANCIAL-STATUS questions — this is "
+            "the single most important routing decision:\n"
+            "  * PAYMENT-EVENT/HISTORY: the question asks about a specific bank transfer/wire/"
+            "remittance as an EVENT — WHEN it happened, or WHAT it covered/included. Trigger words: "
+            "'bank payment', 'bank transfer', 'wire', 'remittance', 'last payment'/'last bank payment' "
+            "used to ask for a date or contents, 'payment history'. Examples: 'when was the last bank "
+            "payment for X', 'when did X last pay us', 'what was included/covered in the last payment/"
+            "transfer for X', 'show the bank payment history for X', 'show the latest bank transfer "
+            "allocations'. Use get_last_bank_payment for ALL of these, even if the wording also "
+            "contains 'paid'/'pay'. Its underlying bank_payments/bank_payment_allocations audit log "
+            "may be INCOMPLETE (not every paid invoice has a logged event) — NEVER use it to answer "
+            "whether a project/invoice is paid, unpaid, fully paid, partially paid, settled, or has "
+            "outstanding debt/balance.\n"
+            "  * FINANCIAL-STATUS: the question asks about the current paid/unpaid state, balance, "
+            "or debt, regardless of individual payment events. Trigger words: 'paid', 'unpaid', 'fully "
+            "paid', 'partially paid', 'settled', 'balance', 'outstanding', 'debt', 'owe'/'owes', "
+            "'payment status'. Examples: 'is X fully paid', 'has X paid us', 'does X owe us money', "
+            "'what is the outstanding amount for X', 'which invoices/projects are unpaid or not fully "
+            "paid', 'is invoice N paid', 'how much is still outstanding across all projects'. Use "
+            "get_invoice/get_invoices/get_unpaid_invoices/get_debt/get_paid_amount/"
+            "get_outstanding_amount/get_top_debt_projects/get_license_payment_status for these — the "
+            "invoices table is the authoritative source of paid/unpaid/outstanding/debt status, never "
+            "the bank-payment log.\n"
+            "  * Tie-break rule when a question uses 'paid'/'pay' AND could go either way: if it asks "
+            "WHEN something happened or WHAT a transfer contained, it's a payment-EVENT question "
+            "(e.g. 'when did X last pay us' -> get_last_bank_payment, because it wants a date). If it "
+            "asks whether something IS paid/settled or what balance/debt remains, it's a FINANCIAL-"
+            "STATUS question (e.g. 'has X paid us' -> get_paid_amount/get_invoices, because it wants "
+            "a yes/no payment-status answer, not a specific transfer's date or contents).\n"
             "- For questions about license expiry/status (e.g. 'expired licenses', 'licenses needing "
             "update', 'license for AD Anderlecht', 'licenses expiring in October'), use get_licenses. "
             "'eop_year'/'eop_month' filter by the License EOP date, not an invoice year. "
