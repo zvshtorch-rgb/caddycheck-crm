@@ -1569,6 +1569,7 @@ _ASK_DATA_TOOL_SPECS: dict[str, dict[str, tuple[str, bool]]] = {
         "project": ("project", False),
         "country": ("country", False),
         "license_status": ("enum:Active,Expired,Missing,Update Next Month,Cancelled", False),
+        "project_status": ("status", False),
         "eop_year": ("int", False),
         "eop_month": ("month", False),
         "eop_date": ("date", False),
@@ -1577,6 +1578,7 @@ _ASK_DATA_TOOL_SPECS: dict[str, dict[str, tuple[str, bool]]] = {
         "project": ("project", False),
         "country": ("country", False),
         "license_status": ("enum:Active,Expired,Missing,Update Next Month,Cancelled", False),
+        "project_status": ("status", False),
         "eop_year": ("int", False),
         "eop_month": ("month", False),
         "eop_date": ("date", False),
@@ -1640,12 +1642,23 @@ _ASK_DATA_TOOL_DESCRIPTIONS: dict[str, str] = {
         "get_invoice/get_invoices/get_unpaid_invoices/get_debt/get_paid_amount/"
         "get_outstanding_amount/get_license_payment_status for those instead."
     ),
-    "get_licenses": "Filters projects by license status/expiry date. Not for payment/debt questions.",
+    "get_licenses": (
+        "Filters projects by license_status (the computed license classification: Active, "
+        "Expired, Missing, Update Next Month, Cancelled) and/or expiry date. 'license_status' is "
+        "NOT the same as 'project_status' (the project's own operational status: Active, "
+        "Offline, Cancelled, New, etc. -- the same values used by get_projects). For questions "
+        "combining both concepts, e.g. 'expired licenses on Active/Offline projects', 'licenses "
+        "that expired but the project is still active', set license_status='Expired' AND "
+        "project_status accordingly -- never drop the 'expired' part of the question just "
+        "because a project-status word like 'Active' is also mentioned. Not for payment/debt "
+        "questions."
+    ),
     "get_license_payment_status": (
-        "Same license filtering as get_licenses, PLUS the authoritative paid/unpaid status of "
-        "each project's latest already-due annual invoice, joined from the invoices table. Use "
-        "this instead of get_licenses when a license question also asks about invoices, "
-        "payments, debt, outstanding balance, or whether projects are paid/fully paid."
+        "Same license filtering as get_licenses (including the license_status vs project_status "
+        "distinction -- see get_licenses), PLUS the authoritative paid/unpaid status of each "
+        "project's latest already-due annual invoice, joined from the invoices table. Use this "
+        "instead of get_licenses when a license question also asks about invoices, payments, "
+        "debt, outstanding balance, or whether projects are paid/fully paid."
     ),
 }
 
@@ -1792,6 +1805,11 @@ def _filter_license_entries(projects, args: dict) -> list:
         entries = [e for e in entries if e[0].country == args["country"]]
     if args.get("license_status"):
         entries = [e for e in entries if e[2] == args["license_status"]]
+    if args.get("project_status") and args["project_status"] != "All":
+        # project_status is the project's OWN operational status (Active/Offline/Cancelled/...),
+        # deliberately separate from license_status (the computed license classification above) —
+        # lets a question distinguish "expired license" from "project still operationally active".
+        entries = [e for e in entries if _normalize_project_status(e[0].status) == args["project_status"]]
     if args.get("eop_year") is not None:
         entries = [e for e in entries if e[1] and e[1].year == args["eop_year"]]
     if args.get("eop_month"):
@@ -2138,6 +2156,7 @@ def _execute_ask_data_tool(
                 "Country": p.country,
                 "License EOP": eop.isoformat() if eop else "",
                 "License Status": status,
+                "Project Status": p.status,
             }
             for p, eop, status in entries
         ])
@@ -2312,7 +2331,17 @@ def _llm_parse_data_question(question: str) -> Optional[dict]:
             "- For questions about license expiry/status (e.g. 'expired licenses', 'licenses needing "
             "update', 'license for AD Anderlecht', 'licenses expiring in October'), use get_licenses. "
             "'eop_year'/'eop_month' filter by the License EOP date, not an invoice year. "
-            "'license_status' is one of: Active, Expired, Missing, Update Next Month, Cancelled. "
+            "'license_status' is one of: Active, Expired, Missing, Update Next Month, Cancelled — it "
+            "is the COMPUTED license classification (already accounts for whether the EOP date has "
+            "passed). It is NOT the same field as 'project_status' (the project's own operational "
+            "status: Active, Offline, Cancelled, New, Installed, etc. — same values as get_projects' "
+            "'status'). Do not confuse the two: a project can be license_status='Expired' while its "
+            "project_status is still 'Active' (license needs renewal but the site is still running) — "
+            "that is a normal, common, and important combination, NOT a contradiction. If a question "
+            "names both concepts (e.g. 'expired licenses on Active projects', 'licenses that expired "
+            "but the project is still active/offline'), set license_status='Expired' AND set "
+            "project_status to the mentioned operational status — never drop 'expired' just because "
+            "another status word like 'Active' also appears in the question. "
             "If the user gives an exact day (e.g. 'on October 1st 2026', '2026-10-01'), use 'eop_date' "
             "(format YYYY-MM-DD) instead of eop_year/eop_month, so only that exact date matches.\n"
             "- If the question about licenses ALSO asks about invoices, payments, debt, outstanding "
