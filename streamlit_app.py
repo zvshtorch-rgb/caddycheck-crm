@@ -993,6 +993,63 @@ def _add_months(base_date: datetime.date, months: int) -> datetime.date:
     return datetime.date(year, month, day)
 
 
+def _compute_target_license_date(
+    extend_action: str, new_license_date: datetime.date, reference_license_date: datetime.date
+) -> datetime.date:
+    """Pure computation of the License EOP a given Licenses-page action would produce.
+    Shared by the live preview (shown before saving) and the actual save, so the date the
+    user confirms is guaranteed to be the exact date that gets written."""
+    if extend_action == "Set exact date":
+        return new_license_date
+    if extend_action == "Extend by 15 days":
+        return reference_license_date + datetime.timedelta(days=15)
+    if extend_action == "Extend by 1 month":
+        return _add_months(reference_license_date, 1)
+    if extend_action == "Extend by 12 months":
+        return _add_months(reference_license_date, 12)
+    if extend_action == "Extend to 1st of next month":
+        return _add_months(reference_license_date.replace(day=1), 1)
+    return datetime.date(reference_license_date.year + 1, 1, 1)  # "Extend to 1st day of next year"
+
+
+def _resolve_license_project_selection(
+    previous_selection: Optional[str], project_names: list[str]
+) -> tuple[str, Optional[str]]:
+    """
+    Decide which project the Licenses page's update-form dropdown should show, given the
+    previously selected name and the CURRENT filtered project list. Returns
+    (selected_name, warning_message_or_None). Fires the warning for ANY filter change that
+    removes the previous selection (not just the search box) -- None on first load (no
+    previous selection yet) or when the previous selection is still present/valid.
+    """
+    if not project_names:
+        return "", None
+    if previous_selection in project_names:
+        return previous_selection, None
+    auto_selected = project_names[0]
+    if previous_selection is None:
+        return auto_selected, None
+    return auto_selected, (
+        "The previously selected project is no longer available under the current filters. "
+        f"The selection has been changed automatically to: {auto_selected}."
+    )
+
+
+def _license_confirmation_still_valid(
+    pending: Optional[dict], project_name: str, target_license_date_iso: str
+) -> bool:
+    """True iff a stored pending license-update confirmation still matches the currently
+    selected project and currently computed target date -- invalidated by any change to
+    either, so a reviewed confirmation can never be silently reused for a different
+    project or date."""
+    if not pending:
+        return False
+    return (
+        pending.get("project_name") == project_name
+        and pending.get("target_license_date") == target_license_date_iso
+    )
+
+
 def _license_status(project, today: Optional[datetime.date] = None) -> str:
     today = today or datetime.date.today()
     if _normalize_project_status(getattr(project, "status", "")).lower() == "cancelled":
@@ -1007,6 +1064,7 @@ def _license_status(project, today: Optional[datetime.date] = None) -> str:
     if license_date.month == next_month and license_date.year == next_month_year:
         return "Update Next Month"
     return "Active"
+
 
 
 def _normalize_detection_key(value: str) -> str:
@@ -6938,11 +6996,17 @@ elif page == "🔐 Licenses":
         elif license_search.strip() and not filtered_license_rows:
             st.warning("No projects match your current filters; showing all projects below.")
 
-        # Keep the Project dropdown in sync with the active filters: if the
-        # previously selected project fell out of the filtered list, default
-        # to the first (or only) match instead.
-        if st.session_state.get("license_project") not in project_names:
-            st.session_state["license_project"] = project_names[0]
+        # Keep the Project dropdown in sync with the active filters: if the previously
+        # selected project fell out of the filtered list for ANY reason (not just search),
+        # auto-select the first match, warn loudly, and invalidate any pending save
+        # confirmation -- it may no longer refer to the project the user actually intends.
+        _resolved_project_name, _reselect_warning = _resolve_license_project_selection(
+            st.session_state.get("license_project"), project_names
+        )
+        if _reselect_warning:
+            st.warning(f"⚠️ {_reselect_warning}")
+            st.session_state.pop("_license_pending_confirm", None)
+        st.session_state["license_project"] = _resolved_project_name
 
         with st.form("license_update_form"):
             lu1, lu2 = st.columns(2)
@@ -6978,57 +7042,89 @@ elif page == "🔐 Licenses":
                 st.caption(f"Current License EOP: {current_license_date.strftime('%Y-%m-%d')}")
             else:
                 st.caption("Current License EOP: not set")
-            submit_license = st.form_submit_button(
-                "Save License Update",
+            review_license = st.form_submit_button(
+                "Review Update",
                 on_click=lambda: st.session_state.__setitem__("_license_form_submitting", True),
             )
 
-        if submit_license and selected_project is not None:
-            previous_license_date = current_license_date
-            reference_license_date = max(base_license_date, today)
-            if extend_action == "Set exact date":
-                target_license_date = new_license_date
-            elif extend_action == "Extend by 15 days":
-                target_license_date = reference_license_date + datetime.timedelta(days=15)
-            elif extend_action == "Extend by 1 month":
-                target_license_date = _add_months(reference_license_date, 1)
-            elif extend_action == "Extend by 12 months":
-                target_license_date = _add_months(reference_license_date, 12)
-            elif extend_action == "Extend to 1st of next month":
-                target_license_date = _add_months(reference_license_date.replace(day=1), 1)
-            else:  # "Extend to 1st day of next year"
-                target_license_date = datetime.date(reference_license_date.year + 1, 1, 1)
+        reference_license_date = max(base_license_date, today)
+        preview_target_date = _compute_target_license_date(extend_action, new_license_date, reference_license_date)
 
-            target_license_datetime = datetime.datetime.combine(target_license_date, datetime.time.min)
-            selected_project.license_eop = target_license_datetime
-            try:
-                with st.spinner("Saving license update..."):
-                    if _is_excel_source(_data_path):
-                        for project in projects:
-                            if project.project_name == selected_project.project_name:
-                                project.license_eop = target_license_datetime
-                        _save_projects(projects, _data_path)
-                    else:
-                        update_project_license_eop_supabase(selected_project.project_name, target_license_date)
-                        for project in projects:
-                            if project.project_name == selected_project.project_name:
-                                project.license_eop = target_license_datetime
-                    append_license_change_log({
-                        "project_name": selected_project.project_name,
-                        "country": selected_project.country,
-                        "old_license_eop": previous_license_date.isoformat() if previous_license_date else None,
-                        "new_license_eop": target_license_date.isoformat(),
-                        "action": extend_action,
-                        "source_name": _data_path,
-                    })
-                load_data.clear()
-                st.session_state["_flash_success"] = (
-                    f"License EOP updated for {selected_project.project_name}: {target_license_date.strftime('%Y-%m-%d')}"
-                )
-                st.session_state["_flash_success_page"] = "🔐 Licenses"
+        if review_license and selected_project is not None:
+            st.session_state["_license_pending_confirm"] = {
+                "project_name": selected_project.project_name,
+                "country": selected_project.country,
+                "extend_action": extend_action,
+                "previous_license_date": current_license_date.isoformat() if current_license_date else None,
+                "target_license_date": preview_target_date.isoformat(),
+            }
+
+        pending_confirm = st.session_state.get("_license_pending_confirm")
+        if pending_confirm and not _license_confirmation_still_valid(
+            pending_confirm, selected_project_name, preview_target_date.isoformat()
+        ):
+            st.session_state.pop("_license_pending_confirm", None)
+            st.info("Your reviewed update no longer matches the current project/date selection — please review again.")
+            pending_confirm = None
+
+        if pending_confirm:
+            st.warning(
+                "**⚠️ Confirm license update**\n\n"
+                f"You are about to update the license for: **{pending_confirm['project_name']}**\n\n"
+                f"Current License EOP: **{pending_confirm['previous_license_date'] or 'not set'}**\n\n"
+                f"New License EOP: **{pending_confirm['target_license_date']}**"
+            )
+            confirm_col, cancel_col = st.columns(2)
+            confirm_clicked = confirm_col.button(
+                "✅ Confirm & Save", key="license_confirm_save", type="primary", use_container_width=True
+            )
+            cancel_clicked = cancel_col.button("Cancel", key="license_confirm_cancel", use_container_width=True)
+            if cancel_clicked:
+                st.session_state.pop("_license_pending_confirm", None)
                 st.rerun()
-            except Exception as exc:
-                st.error(f"Failed to save license update: {exc}")
+            if confirm_clicked:
+                confirmed_project = next((p for p in projects if p.project_name == pending_confirm["project_name"]), None)
+                if confirmed_project is None:
+                    st.error(f"Project {pending_confirm['project_name']} could not be found anymore; please review again.")
+                    st.session_state.pop("_license_pending_confirm", None)
+                else:
+                    previous_license_date_iso = pending_confirm["previous_license_date"]
+                    previous_license_date = (
+                        datetime.date.fromisoformat(previous_license_date_iso) if previous_license_date_iso else None
+                    )
+                    target_license_date = datetime.date.fromisoformat(pending_confirm["target_license_date"])
+                    target_license_datetime = datetime.datetime.combine(target_license_date, datetime.time.min)
+                    confirmed_project.license_eop = target_license_datetime
+                    try:
+                        with st.spinner("Saving license update..."):
+                            if _is_excel_source(_data_path):
+                                for project in projects:
+                                    if project.project_name == confirmed_project.project_name:
+                                        project.license_eop = target_license_datetime
+                                _save_projects(projects, _data_path)
+                            else:
+                                update_project_license_eop_supabase(confirmed_project.project_name, target_license_date)
+                                for project in projects:
+                                    if project.project_name == confirmed_project.project_name:
+                                        project.license_eop = target_license_datetime
+                            append_license_change_log({
+                                "project_name": confirmed_project.project_name,
+                                "country": confirmed_project.country,
+                                "old_license_eop": previous_license_date.isoformat() if previous_license_date else None,
+                                "new_license_eop": target_license_date.isoformat(),
+                                "action": pending_confirm["extend_action"],
+                                "source_name": _data_path,
+                            })
+                        load_data.clear()
+                        st.session_state.pop("_license_pending_confirm", None)
+                        st.session_state["_flash_success"] = (
+                            f"✅ License EOP updated for **{confirmed_project.project_name}**: "
+                            f"**{target_license_date.strftime('%Y-%m-%d')}**"
+                        )
+                        st.session_state["_flash_success_page"] = "🔐 Licenses"
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"Failed to save license update: {exc}")
 
     st.markdown("---")
     st.subheader("All Project Licenses")
