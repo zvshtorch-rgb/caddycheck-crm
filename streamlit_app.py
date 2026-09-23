@@ -35,6 +35,48 @@ def _is_streamlit_cloud() -> bool:
         return False
 
 
+def _deployment_diagnostics_snapshot() -> dict:
+    """
+    TEMPORARY diagnostic (2026-09-23): reports which git commit and which Supabase
+    project this running instance is actually using, plus a fresh (cache-bypassing)
+    raw read of one known project's license_eop -- used to debug a suspected
+    environment/data mismatch between local dev and the deployed Streamlit Cloud app.
+    Never exposes secret keys, only the Supabase project hostname. Safe to remove once
+    the environment mismatch (if any) is confirmed/resolved.
+    """
+    import subprocess
+    from urllib.parse import urlparse
+
+    commit_sha = "unknown"
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True, text=True, cwd=str(Path(__file__).parent), timeout=5,
+        )
+        commit_sha = result.stdout.strip() if result.returncode == 0 else f"git error: {result.stderr.strip()[:200]}"
+    except Exception as exc:
+        commit_sha = f"unavailable ({exc})"
+
+    supabase_host = "unknown"
+    try:
+        url = os.environ.get("SUPABASE_URL", "").strip()
+        if not url:
+            url = str(st.secrets.get("supabase", {}).get("url", "")).strip()
+        supabase_host = (urlparse(url).hostname or "unknown") if url else "not configured"
+    except Exception as exc:
+        supabase_host = f"unavailable ({exc})"
+
+    raw_eop = "unknown"
+    try:
+        fresh_projects = load_projects()  # bypasses load_data()'s st.cache_data(ttl=300)
+        match = next((p for p in fresh_projects if p.project_name == "AD Sint-Kruis Brugge"), None)
+        raw_eop = (match.license_eop.isoformat() if match.license_eop else "not set") if match else "project not found"
+    except Exception as exc:
+        raw_eop = f"unavailable ({exc})"
+
+    return {"commit_sha": commit_sha, "supabase_host": supabase_host, "ad_sint_kruis_brugge_license_eop": raw_eop}
+
+
 def _safe_int(v, default=0):
     """Convert v to int safely, returning default for None/NaN/empty."""
     try:
@@ -4734,6 +4776,15 @@ if page == "📊 Dashboard":
 # ══════════════════════════════════════════════════════════════════════════════
 elif page == "❓ Ask Data":
     st.title("❓ Ask Data")
+    if CAN_EDIT:
+        with st.expander("🔧 Deployment diagnostics (temporary)", expanded=False):
+            _diag = _deployment_diagnostics_snapshot()
+            st.code(
+                f"Deployed commit SHA:                {_diag['commit_sha']}\n"
+                f"Supabase project host:              {_diag['supabase_host']}\n"
+                f"AD Sint-Kruis Brugge license_eop:   {_diag['ad_sint_kruis_brugge_license_eop']}",
+                language=None,
+            )
     _ask_data_llm_on = bool(get_gemini_config().get("api_key", ""))
     if _ask_data_llm_on:
         st.caption("Ask naturally about projects, invoices, debt, payments, licenses, or camera statistics.")
