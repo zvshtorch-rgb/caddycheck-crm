@@ -14,12 +14,16 @@ import datetime as dt
 import logging
 import time
 
-from config.settings import get_email_config
+from config.settings import MONTH_ORDER, get_email_config
 from services.email_service import graph_email_available, send_graph_email, send_simple_email
-from services.excel_service import load_projects as load_projects_excel
+from services.excel_service import (
+    load_invoices as load_invoices_excel,
+    load_projects as load_projects_excel,
+)
 from services.supabase_service import (
     append_license_expiry_alert_log,
     has_license_expiry_alert_sent,
+    load_invoices as load_invoices_supabase,
     load_projects as load_projects_supabase,
 )
 
@@ -94,6 +98,35 @@ def _load_projects(source: str) -> tuple[list, str]:
         return load_projects_excel(), "Excel (local fallback)"
 
 
+def _load_invoices(source: str) -> list:
+    if source == "excel":
+        return load_invoices_excel()
+
+    def _load_supabase_with_retry() -> list:
+        last_exc: Exception | None = None
+        for attempt in range(1, 4):
+            try:
+                return load_invoices_supabase()
+            except RuntimeError:
+                raise
+            except Exception as exc:
+                last_exc = exc
+                logger.warning("Supabase invoice load attempt %d/3 failed: %s", attempt, exc)
+                if attempt < 3:
+                    time.sleep(2 * attempt)
+        raise last_exc  # type: ignore[misc]
+
+    if source == "supabase":
+        return _load_supabase_with_retry()
+
+    try:
+        return _load_supabase_with_retry()
+    except RuntimeError as exc:
+        if "Supabase credentials not configured" not in str(exc):
+            raise
+        return load_invoices_excel()
+
+
 def _project_license_date(project) -> dt.date | None:
     value = getattr(project, "license_eop", None)
     if isinstance(value, dt.datetime):
@@ -105,6 +138,43 @@ def _project_license_date(project) -> dt.date | None:
 
 def _is_cancelled(project) -> bool:
     return str(getattr(project, "status", "") or "").strip().lower() == "cancelled"
+
+
+def _annual_payment_month(project) -> str:
+    """Recurring annual billing month: project.payment_month, falling back to the
+    License EOP's month if blank (same rule as Ask Data's get_license_payment_status)."""
+    month = str(getattr(project, "payment_month", "") or "").strip()
+    if month in MONTH_ORDER:
+        return month
+    license_date = _project_license_date(project)
+    return MONTH_ORDER[license_date.month - 1] if license_date else ""
+
+
+def _annual_payment_status(project, invoices: list, today: dt.date) -> str:
+    """Whether THIS project's latest already-due annual invoice is paid — mirrors
+    streamlit_app.py's `_annual_license_payment_row` so both surfaces agree."""
+    annual_month = _annual_payment_month(project)
+    if annual_month not in MONTH_ORDER:
+        return "Unknown (no payment month)"
+    month_index = MONTH_ORDER.index(annual_month) + 1
+    target_year = today.year if today.month >= month_index else today.year - 1
+    installation_year = getattr(project, "installation_year", None)
+    if installation_year and target_year < installation_year:
+        return f"Not Yet Due ({annual_month})"
+
+    project_name = str(getattr(project, "project_name", "") or "").strip().lower()
+    period_rows = [
+        inv for inv in invoices
+        if str(getattr(inv, "project_name", "") or "").strip().lower() == project_name
+        and not inv.is_cancelled()
+        and inv.year == target_year
+    ]
+    if not period_rows:
+        return f"No Invoice Found (due {annual_month})"
+    outstanding = sum(float(inv.payment_amount) for inv in period_rows if inv.is_unpaid())
+    if outstanding == 0:
+        return "Paid"
+    return f"Unpaid – due {annual_month} (€{outstanding:,.0f})"
 
 
 def _candidate_projects(projects: list, target_date: dt.date) -> list:
@@ -138,26 +208,35 @@ def _filter_already_sent(projects: list, days_before: int, force: bool, source_n
     return unsent
 
 
-def _build_email(projects: list, target_date: dt.date, days_before: int) -> tuple[str, str, str]:
+def _build_email(projects: list, invoices: list, target_date: dt.date, days_before: int) -> tuple[str, str, str]:
     plural = "licenses" if len(projects) != 1 else "license"
     subject = f"CaddyCheck alert: {len(projects)} {plural} expire in {days_before} days"
     lines = [
         f"The following {plural} expire on {target_date.isoformat()} (in {days_before} days):",
         "",
     ]
+    today = dt.date.today()
     html_rows = []
     for project in projects:
         name = str(getattr(project, "project_name", "") or "").strip()
         country = str(getattr(project, "country", "") or "").strip()
         cameras = getattr(project, "num_cams", 0) or 0
         status = str(getattr(project, "status", "") or "").strip()
-        lines.append(f"- {name} | {country or 'n/a'} | {cameras} camera(s) | status: {status or 'n/a'}")
+        license_eop = _project_license_date(project)
+        license_eop_text = license_eop.isoformat() if license_eop else "n/a"
+        payment_status = _annual_payment_status(project, invoices, today)
+        lines.append(
+            f"- {name} | {country or 'n/a'} | {cameras} camera(s) | status: {status or 'n/a'} "
+            f"| License EOP: {license_eop_text} | Payment: {payment_status}"
+        )
         html_rows.append(
             "<tr>"
             f"<td>{name}</td>"
             f"<td>{country or 'n/a'}</td>"
             f"<td>{cameras}</td>"
             f"<td>{status or 'n/a'}</td>"
+            f"<td>{license_eop_text}</td>"
+            f"<td>{payment_status}</td>"
             "</tr>"
         )
     lines.extend(["", "Please update the License EOP in CaddyCheck CRM if the license was extended.", "", "CaddyCheck CRM"])
@@ -166,7 +245,8 @@ def _build_email(projects: list, target_date: dt.date, days_before: int) -> tupl
         f"<p>The following {plural} expire on <b>{target_date.isoformat()}</b> "
         f"(in {days_before} days):</p>"
         "<table border=\"1\" cellpadding=\"6\" cellspacing=\"0\">"
-        "<thead><tr><th>Project</th><th>Country</th><th>Cameras</th><th>Status</th></tr></thead>"
+        "<thead><tr><th>Project</th><th>Country</th><th>Cameras</th><th>Status</th>"
+        "<th>License EOP</th><th>Payment Status</th></tr></thead>"
         f"<tbody>{''.join(html_rows)}</tbody></table>"
         "<p>Please update the License EOP in CaddyCheck CRM if the license was extended.</p>"
         "<p>CaddyCheck CRM</p>"
@@ -215,7 +295,13 @@ def _run_for_days_before(
         logger.info("All matching license-expiry alerts for %d day(s) before were already sent.", days_before)
         return False
 
-    subject, body, html = _build_email(projects_to_alert, target_date, days_before)
+    try:
+        invoices = _load_invoices(args.source)
+    except Exception as exc:
+        logger.warning("Could not load invoices for payment status column; showing 'Unknown' instead: %s", exc)
+        invoices = []
+
+    subject, body, html = _build_email(projects_to_alert, invoices, target_date, days_before)
     if args.subject:
         subject = args.subject
 
