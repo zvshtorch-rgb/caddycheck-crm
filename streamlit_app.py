@@ -2008,7 +2008,11 @@ def _execute_ask_data_tool(
         outstanding_args = {k: v for k, v in args.items() if k != "paid_year"}
         outstanding_rows = _filter_invoices_for_debt_tools(invoices, projects, outstanding_args, lambda inv: inv.is_unpaid())
         outstanding_total = sum(float(inv.payment_amount) for inv in outstanding_rows)
-        if outstanding_total <= 0:
+        if not rows and not outstanding_rows:
+            # Zero paid AND zero unpaid rows means no matching invoices exist at all — never
+            # claim "fully paid" for a scope with no invoices to be paid in the first place.
+            status_txt = " No paid or unpaid invoices were found for this scope, so payment status cannot be determined."
+        elif outstanding_total <= 0:
             status_txt = " No outstanding balance remains — fully paid."
         else:
             status_txt = (
