@@ -400,7 +400,16 @@ from services.invoice_service import (
     get_invoice_preview_data,
 )
 from models.invoice import group_monthly_invoices
-from services.bank_payment_save import is_row_payable, persist_bank_payment, save_parsed_bank_payment
+from services.bank_payment_save import (
+    apply_credit_plan,
+    apply_partial_payment_plans,
+    filter_payable_rows,
+    is_row_payable,
+    persist_bank_payment,
+    plan_credit_application,
+    plan_partial_payments,
+    save_parsed_bank_payment,
+)
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -10431,7 +10440,7 @@ elif page == "🏦 Bank Payment":
             partial_inv = p1.number_input("Invoice #", min_value=0, step=1, key="partial_inv")
             partial_date = p2.date_input("Payment Date", value=datetime.date.today(), key="partial_date")
             if partial_inv > 0:
-                partial_rows = [r for r in get_invoices_by_number(int(partial_inv)) if _safe_str(r.get("paid", "No")).lower() != "yes"]
+                partial_rows = filter_payable_rows(get_invoices_by_number(int(partial_inv)))
                 if partial_rows:
                     partial_df = pd.DataFrame([
                         {
@@ -10454,39 +10463,17 @@ elif page == "🏦 Bank Payment":
                         key="partial_editor",
                     )
                     if st.button("Apply Partial Payment", type="primary", key="apply_partial_payment"):
-                        alloc_rows = []
-                        for _, row in edited_partial.iterrows():
-                            old_amt = _safe_float(row.get("Original (€)", 0.0))
-                            paid_now = max(0.0, _safe_float(row.get("Paid Now (€)", 0.0)))
-                            if old_amt <= 0 or paid_now <= 0:
-                                continue
-                            paid_now = min(old_amt, paid_now)
-                            remaining = old_amt - paid_now
-                            update_invoice_row(
-                                int(row["id"]),
-                                payment_amount=paid_now,
-                                paid="Yes",
-                                payment_date=partial_date,
-                                description=f"Partial settled: paid €{paid_now:,.2f} of €{old_amt:,.2f}",
-                            )
-                            if remaining > 0.005:
-                                insert_invoice_adjustment_row(
-                                    invoice_number=int(partial_inv),
-                                    project_name=_safe_str(row.get("Project")),
-                                    maintenance_year=_safe_str(row.get("Maint. Year")),
-                                    payment_amount=remaining,
-                                    year=datetime.date.today().year,
-                                    invoice_type="Complementary",
-                                    description=f"Remaining debt after partial payment INV#{int(partial_inv)}",
-                                )
-                            alloc_rows.append({
-                                "invoice_row_id": int(row["id"]),
-                                "invoice_number": int(partial_inv),
-                                "project_name": _safe_str(row.get("Project")),
-                                "maintenance_year": _safe_str(row.get("Maint. Year")),
-                                "year": datetime.date.today().year,
-                                "amount_applied": paid_now,
-                            })
+                        partial_plans = plan_partial_payments(
+                            edited_partial.to_dict("records"), {int(r["id"]) for r in partial_rows}
+                        )
+                        alloc_rows = apply_partial_payment_plans(
+                            partial_plans,
+                            invoice_number=int(partial_inv),
+                            payment_date=partial_date,
+                            year=datetime.date.today().year,
+                            update_row=update_invoice_row,
+                            insert_remainder_row=insert_invoice_adjustment_row,
+                        )
                         if alloc_rows:
                             append_bank_payment_with_allocations(
                                 {
@@ -10624,11 +10611,11 @@ elif page == "🏦 Bank Payment":
             apply_inv = a1.number_input("Target Invoice #", min_value=0, step=1, key="apply_inv")
             apply_date = a2.date_input("Apply Date", value=datetime.date.today(), key="apply_date")
             if apply_inv > 0:
-                target_rows = [r for r in get_invoices_by_number(int(apply_inv)) if _safe_str(r.get("paid", "No")).lower() != "yes" and _safe_float(r.get("payment_amount", 0.0)) > 0]
+                target_rows = filter_payable_rows(get_invoices_by_number(int(apply_inv)), positive_amount_only=True)
                 if target_rows:
                     target_projects = sorted({str(r.get("project_name", "")).strip() for r in target_rows if str(r.get("project_name", "")).strip()})
                     project_filter = st.selectbox("Credit Project Filter", ["All"] + target_projects, key="credit_filter_project")
-                    credit_rows = load_unpaid_credit_rows(None if project_filter == "All" else project_filter)
+                    credit_rows = filter_payable_rows(load_unpaid_credit_rows(None if project_filter == "All" else project_filter))
                     available_credit = abs(sum(_safe_float(r.get("payment_amount", 0.0)) for r in credit_rows))
                     target_unpaid_total = sum(_safe_float(r.get("payment_amount", 0.0)) for r in target_rows)
                     planned_apply = min(available_credit, target_unpaid_total)
@@ -10639,53 +10626,32 @@ elif page == "🏦 Bank Payment":
                     prev_c2.metric("Will Apply", f"€{planned_apply:,.2f}")
                     prev_c3.metric("Expected Remaining", f"€{expected_remaining:,.2f}")
                     with st.expander("Preview per row", expanded=False):
-                        running_credit = planned_apply
+                        funded_by_row_id = {
+                            int(item["row"]["id"]): item["use_amt"]
+                            for item in plan_credit_application(target_rows, available_credit)
+                        }
                         preview_rows = []
                         for row in target_rows:
                             row_amt = _safe_float(row.get("payment_amount", 0.0))
-                            row_apply = min(row_amt, max(0.0, running_credit))
-                            row_after = row_amt - row_apply
+                            row_apply = funded_by_row_id.get(int(row["id"]), 0.0)
                             preview_rows.append({
                                 "Project": _safe_str(row.get("project_name")),
                                 "Maint. Year": _safe_str(row.get("maintenance_year")),
                                 "Before (€)": row_amt,
                                 "Apply (€)": row_apply,
-                                "After (€)": row_after,
+                                "After (€)": row_amt - row_apply,
                             })
-                            running_credit -= row_apply
-                            if running_credit <= 0:
-                                running_credit = 0.0
                         st.dataframe(pd.DataFrame(preview_rows), use_container_width=True, hide_index=True)
                     if st.button("Apply Credit", type="primary", key="apply_credit"):
                         if available_credit <= 0:
                             st.error("No available credit rows found.")
                         else:
-                            remaining_credit = available_credit
-                            alloc_rows = []
-                            for row in target_rows:
-                                if remaining_credit <= 0:
-                                    break
-                                row_amt = _safe_float(row.get("payment_amount", 0.0))
-                                use_amt = min(row_amt, remaining_credit)
-                                new_amt = row_amt - use_amt
-                                update_invoice_row(
-                                    int(row["id"]),
-                                    payment_amount=new_amt,
-                                    paid="Yes" if new_amt <= 0.005 else "No",
-                                    payment_date=apply_date if new_amt <= 0.005 else None,
-                                    description=f"Credit applied €{use_amt:,.2f}",
-                                )
-                                alloc_rows.append({
-                                    "invoice_row_id": int(row["id"]),
-                                    "invoice_number": int(apply_inv),
-                                    "project_name": _safe_str(row.get("project_name")),
-                                    "maintenance_year": _safe_str(row.get("maintenance_year")),
-                                    "year": _safe_int(row.get("year"), default=0) or None,
-                                    "amount_applied": use_amt,
-                                })
-                                remaining_credit -= use_amt
-
-                            consumed = available_credit - remaining_credit
+                            alloc_rows, consumed = apply_credit_plan(
+                                plan_credit_application(target_rows, available_credit),
+                                invoice_number=int(apply_inv),
+                                apply_date=apply_date,
+                                update_row=update_invoice_row,
+                            )
                             if consumed > 0.005:
                                 insert_invoice_adjustment_row(
                                     invoice_number=int(apply_inv),

@@ -8,7 +8,16 @@ import datetime
 import unittest
 from pathlib import Path
 
-from services.bank_payment_save import is_row_payable, persist_bank_payment, save_parsed_bank_payment
+from services.bank_payment_save import (
+    apply_credit_plan,
+    apply_partial_payment_plans,
+    filter_payable_rows,
+    is_row_payable,
+    persist_bank_payment,
+    plan_credit_application,
+    plan_partial_payments,
+    save_parsed_bank_payment,
+)
 from services.supabase_service import _normalize_bank_payment_entry
 
 PAY_DATE = datetime.date(2026, 9, 28)
@@ -250,6 +259,168 @@ class TestCancelledRowsAreNeverPaid(unittest.TestCase):
         self.assertIn('"Payable":      is_row_payable(r)', source)
         self.assertIn('df["Project"].isin(selected) & df["Payable"]', source)
         self.assertNotIn('df[df["Paid"] != "Yes"]', source)
+
+
+class FakeInvoiceWriter:
+    """Records every write made through update_row / insert_remainder_row."""
+
+    def __init__(self):
+        self.updates = []
+        self.inserts = []
+
+    def update_row(self, db_id, **fields):
+        self.updates.append((db_id, fields))
+
+    def insert_remainder_row(self, **fields):
+        self.inserts.append(fields)
+
+
+# One invoice with a payable row, a cancelled row, an already-paid row, an unrecognised-status row and a
+# blank-status row -- every flow must treat these identically.
+def _mixed_invoice_rows():
+    return [
+        {"id": 1, "invoice_number": "8700", "project_name": "AD Payable", "payment_amount": 100.0, "paid": "No", "maintenance_year": "Y1", "year": 2026},
+        {"id": 2, "invoice_number": "8700", "project_name": "AD Cancelled", "payment_amount": 900.0, "paid": "Cancelled", "maintenance_year": "Y1", "year": 2026},
+        {"id": 3, "invoice_number": "8700", "project_name": "AD Paid", "payment_amount": 50.0, "paid": "Yes", "maintenance_year": "Y1", "year": 2026},
+        {"id": 4, "invoice_number": "8700", "project_name": "AD Weird", "payment_amount": 70.0, "paid": "Partial", "maintenance_year": "Y1", "year": 2026},
+        {"id": 5, "invoice_number": "8700", "project_name": "AD Blank", "payment_amount": 30.0, "paid": "", "maintenance_year": "Y2", "year": 2026},
+    ]
+
+
+class TestFilterPayableRows(unittest.TestCase):
+    def test_only_payable_rows_survive(self):
+        ids = [r["id"] for r in filter_payable_rows(_mixed_invoice_rows())]
+        self.assertEqual(ids, [1, 5])
+
+    def test_positive_amount_only(self):
+        rows = _mixed_invoice_rows() + [
+            {"id": 6, "project_name": "AD Zero", "payment_amount": 0.0, "paid": "No"},
+            {"id": 7, "project_name": "AD Credit", "payment_amount": -40.0, "paid": "No"},
+        ]
+        self.assertEqual([r["id"] for r in filter_payable_rows(rows, positive_amount_only=True)], [1, 5])
+        self.assertEqual([r["id"] for r in filter_payable_rows(rows)], [1, 5, 6, 7])
+
+
+class TestPartialTab(unittest.TestCase):
+    def _editor_records(self, rows):
+        # what st.data_editor(...).to_dict("records") returns: hidden id + editable columns
+        return [
+            {"id": r["id"], "Project": r["project_name"], "Maint. Year": r["maintenance_year"],
+             "Original (€)": r["payment_amount"], "Paid Now (€)": r["payment_amount"]}
+            for r in rows
+        ]
+
+    def test_listing_excludes_non_payable_rows(self):
+        payable = filter_payable_rows(_mixed_invoice_rows())
+        self.assertEqual({r["project_name"] for r in payable}, {"AD Payable", "AD Blank"})
+
+    def test_cancelled_row_is_never_planned_even_if_present_in_the_editor(self):
+        rows = _mixed_invoice_rows()
+        payable_ids = {r["id"] for r in filter_payable_rows(rows)}
+        # a tampered/stale editor state that still carries every row, including the cancelled one
+        plans = plan_partial_payments(self._editor_records(rows), payable_ids)
+        self.assertEqual({p["id"] for p in plans}, {1, 5})
+
+    def test_cancelled_row_stays_unchanged_and_is_not_allocated(self):
+        rows = _mixed_invoice_rows()
+        payable_ids = {r["id"] for r in filter_payable_rows(rows)}
+        records = self._editor_records(rows)
+        records[0]["Paid Now (€)"] = 40.0  # partial on row 1: 40 of 100
+        writer = FakeInvoiceWriter()
+        allocations = apply_partial_payment_plans(
+            plan_partial_payments(records, payable_ids),
+            invoice_number=8700, payment_date=PAY_DATE, year=2026,
+            update_row=writer.update_row, insert_remainder_row=writer.insert_remainder_row,
+        )
+        touched = {db_id for db_id, _ in writer.updates}
+        self.assertEqual(touched, {1, 5})
+        self.assertFalse(touched & {2, 3, 4}, "cancelled / paid / unrecognised rows must not be written")
+        self.assertEqual({a["invoice_row_id"] for a in allocations}, {1, 5})
+        self.assertEqual(sum(a["amount_applied"] for a in allocations), 70.0)  # 40 + 30, nothing from row 2
+        self.assertEqual(len(writer.inserts), 1)  # remainder (60) only for row 1
+        self.assertEqual(writer.inserts[0]["payment_amount"], 60.0)
+        self.assertEqual(writer.inserts[0]["project_name"], "AD Payable")
+
+    def test_paid_now_is_clamped_and_zero_is_skipped(self):
+        records = [
+            {"id": 1, "Project": "A", "Maint. Year": "Y1", "Original (€)": 100.0, "Paid Now (€)": 500.0},
+            {"id": 5, "Project": "B", "Maint. Year": "Y1", "Original (€)": 30.0, "Paid Now (€)": 0.0},
+        ]
+        plans = plan_partial_payments(records, {1, 5})
+        self.assertEqual(len(plans), 1)
+        self.assertEqual((plans[0]["paid_now"], plans[0]["remaining"]), (100.0, 0.0))
+
+
+class TestApplyCreditTab(unittest.TestCase):
+    def test_cancelled_target_rows_are_not_listed_or_funded(self):
+        rows = _mixed_invoice_rows()
+        targets = filter_payable_rows(rows, positive_amount_only=True)
+        self.assertEqual([r["id"] for r in targets], [1, 5])
+        plan = plan_credit_application(rows, 1000.0)  # even if the unfiltered rows are passed in
+        self.assertEqual([item["row"]["id"] for item in plan], [1, 5])
+
+    def test_credit_goes_only_to_payable_rows_and_cancelled_row_is_untouched(self):
+        rows = _mixed_invoice_rows()
+        writer = FakeInvoiceWriter()
+        allocations, consumed = apply_credit_plan(
+            plan_credit_application(rows, 1000.0),
+            invoice_number=8700, apply_date=PAY_DATE, update_row=writer.update_row,
+        )
+        self.assertEqual({db_id for db_id, _ in writer.updates}, {1, 5})
+        self.assertEqual(consumed, 130.0)  # 100 + 30; the 900 cancelled row never absorbs credit
+        self.assertEqual({a["invoice_row_id"] for a in allocations}, {1, 5})
+        self.assertEqual(sum(a["amount_applied"] for a in allocations), 130.0)
+        fields_by_id = dict(writer.updates)
+        self.assertEqual(fields_by_id[1]["paid"], "Yes")
+        self.assertEqual(fields_by_id[1]["payment_date"], PAY_DATE)
+
+    def test_partial_credit_leaves_row_unpaid_and_stops_when_credit_runs_out(self):
+        rows = _mixed_invoice_rows()
+        writer = FakeInvoiceWriter()
+        allocations, consumed = apply_credit_plan(
+            plan_credit_application(rows, 60.0),
+            invoice_number=8700, apply_date=PAY_DATE, update_row=writer.update_row,
+        )
+        self.assertEqual(consumed, 60.0)
+        self.assertEqual([db_id for db_id, _ in writer.updates], [1])
+        fields = writer.updates[0][1]
+        self.assertEqual((fields["payment_amount"], fields["paid"], fields["payment_date"]), (40.0, "No", None))
+
+    def test_cancelled_credit_rows_cannot_fund_a_credit(self):
+        credit_rows = [
+            {"id": 10, "project_name": "AD C", "payment_amount": -500.0, "paid": "No"},
+            {"id": 11, "project_name": "AD C", "payment_amount": -999.0, "paid": "Cancelled"},
+            {"id": 12, "project_name": "AD C", "payment_amount": -25.0, "paid": "Partial"},
+        ]
+        usable = filter_payable_rows(credit_rows)
+        self.assertEqual(abs(sum(r["payment_amount"] for r in usable)), 500.0)
+
+
+class TestOneEligibilityRuleEverywhere(unittest.TestCase):
+    """Source-level guards: no payment flow may grow its own status check again."""
+
+    SOURCE = (Path(__file__).resolve().parent.parent / "streamlit_app.py").read_text(encoding="utf-8")
+
+    def test_no_inline_yes_comparison_in_payment_flows(self):
+        import re
+        self.assertIsNone(re.search(r'lower\(\)\s*!=\s*"yes"', self.SOURCE))
+        self.assertNotIn('!= "Yes"', self.SOURCE)
+
+    def test_partial_and_apply_credit_tabs_use_the_shared_helpers(self):
+        self.assertIn("partial_rows = filter_payable_rows(get_invoices_by_number(int(partial_inv)))", self.SOURCE)
+        self.assertIn("plan_partial_payments(", self.SOURCE)
+        self.assertIn("apply_partial_payment_plans(", self.SOURCE)
+        self.assertIn("filter_payable_rows(get_invoices_by_number(int(apply_inv)), positive_amount_only=True)", self.SOURCE)
+        self.assertIn("filter_payable_rows(load_unpaid_credit_rows(", self.SOURCE)
+        self.assertIn("plan_credit_application(", self.SOURCE)
+        self.assertIn("apply_credit_plan(", self.SOURCE)
+
+    def test_every_flow_that_marks_rows_paid_is_gated_by_the_rule(self):
+        # mark_invoice_row_paid / update_invoice_row(paid="Yes") may only be reached with payable rows:
+        # Save All via save_parsed_bank_payment, Manual Lookup via the Payable column.
+        self.assertIn("is_row_payable(r)", self.SOURCE)
+        self.assertIn('df["Project"].isin(selected) & df["Payable"]', self.SOURCE)
+        self.assertIn("save_parsed_bank_payment(", self.SOURCE)
 
 
 if __name__ == "__main__":

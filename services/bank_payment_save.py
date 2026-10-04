@@ -37,6 +37,146 @@ def _status_of(row: dict) -> str:
     return str(row.get("paid") or "No").strip().lower()
 
 
+def _num(value: Any) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return 0.0 if number != number else number  # NaN -> 0.0
+
+
+def filter_payable_rows(rows: Iterable[dict], *, positive_amount_only: bool = False) -> list[dict]:
+    """Rows that pass is_row_payable (optionally also with a payment_amount > 0).
+
+    Every flow that lists, selects, credits or pays invoice rows must go through this so the
+    eligibility rule can never differ between the Save All, Manual Lookup, Partial and Apply Credit flows.
+    """
+    return [
+        r for r in rows
+        if is_row_payable(r) and (not positive_amount_only or _num(r.get("payment_amount")) > 0)
+    ]
+
+
+def plan_partial_payments(edited_rows: Iterable[dict], payable_ids: set[int]) -> list[dict]:
+    """Turn the Partial tab's editor records into payment plans.
+
+    ``payable_ids`` are the ids of rows that passed is_row_payable when the tab was rendered; any
+    editor record with another id (cancelled, already paid, unknown status, tampered) is ignored.
+    """
+    plans = []
+    for rec in edited_rows:
+        try:
+            row_id = int(rec["id"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if row_id not in payable_ids:
+            continue
+        original = _num(rec.get("Original (€)"))
+        paid_now = max(0.0, _num(rec.get("Paid Now (€)")))
+        if original <= 0 or paid_now <= 0:
+            continue
+        paid_now = min(original, paid_now)
+        plans.append({
+            "id": row_id,
+            "project": str(rec.get("Project") or ""),
+            "maintenance_year": str(rec.get("Maint. Year") or ""),
+            "original": original,
+            "paid_now": paid_now,
+            "remaining": original - paid_now,
+        })
+    return plans
+
+
+def apply_partial_payment_plans(
+    plans: list[dict],
+    *,
+    invoice_number: int,
+    payment_date: datetime.date,
+    year: int,
+    update_row: Callable[..., Any],
+    insert_remainder_row: Callable[..., Any],
+) -> list[dict]:
+    """Write the partial payments; returns the allocation rows. Only rows named in ``plans`` are touched."""
+    allocations = []
+    for plan in plans:
+        update_row(
+            plan["id"],
+            payment_amount=plan["paid_now"],
+            paid="Yes",
+            payment_date=payment_date,
+            description=f"Partial settled: paid €{plan['paid_now']:,.2f} of €{plan['original']:,.2f}",
+        )
+        if plan["remaining"] > 0.005:
+            insert_remainder_row(
+                invoice_number=int(invoice_number),
+                project_name=plan["project"],
+                maintenance_year=plan["maintenance_year"],
+                payment_amount=plan["remaining"],
+                year=year,
+                invoice_type="Complementary",
+                description=f"Remaining debt after partial payment INV#{int(invoice_number)}",
+            )
+        allocations.append({
+            "invoice_row_id": plan["id"],
+            "invoice_number": int(invoice_number),
+            "project_name": plan["project"],
+            "maintenance_year": plan["maintenance_year"],
+            "year": year,
+            "amount_applied": plan["paid_now"],
+        })
+    return allocations
+
+
+def plan_credit_application(target_rows: Iterable[dict], available_credit: float) -> list[dict]:
+    """Spread ``available_credit`` over payable, positive-amount rows in order.
+
+    Rows are re-checked with filter_payable_rows here, so a non-payable row can never be funded even if a
+    caller passes it in. Returns [{row, use_amt, new_amt, fully_paid}] for rows that actually get credit.
+    """
+    plan = []
+    remaining = _num(available_credit)
+    for row in filter_payable_rows(target_rows, positive_amount_only=True):
+        if remaining <= 0:
+            break
+        row_amount = _num(row.get("payment_amount"))
+        use_amount = min(row_amount, remaining)
+        new_amount = row_amount - use_amount
+        plan.append({"row": row, "use_amt": use_amount, "new_amt": new_amount, "fully_paid": new_amount <= 0.005})
+        remaining -= use_amount
+    return plan
+
+
+def apply_credit_plan(
+    plan: list[dict],
+    *,
+    invoice_number: int,
+    apply_date: datetime.date,
+    update_row: Callable[..., Any],
+) -> tuple[list[dict], float]:
+    """Write the credit application; returns (allocation rows, total credit consumed)."""
+    allocations = []
+    consumed = 0.0
+    for item in plan:
+        row = item["row"]
+        update_row(
+            int(row["id"]),
+            payment_amount=item["new_amt"],
+            paid="Yes" if item["fully_paid"] else "No",
+            payment_date=apply_date if item["fully_paid"] else None,
+            description=f"Credit applied €{item['use_amt']:,.2f}",
+        )
+        allocations.append({
+            "invoice_row_id": int(row["id"]),
+            "invoice_number": int(invoice_number),
+            "project_name": str(row.get("project_name") or ""),
+            "maintenance_year": str(row.get("maintenance_year") or ""),
+            "year": int(_num(row.get("year"))) or None,
+            "amount_applied": item["use_amt"],
+        })
+        consumed += item["use_amt"]
+    return allocations, consumed
+
+
 @dataclass
 class PaymentSaveOutcome:
     payment_saved: bool = False  # bank_payments record durably saved in Supabase
