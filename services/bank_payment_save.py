@@ -146,35 +146,187 @@ def plan_credit_application(target_rows: Iterable[dict], available_credit: float
     return plan
 
 
-def apply_credit_plan(
-    plan: list[dict],
+CREDIT_EPSILON = 0.005
+
+
+def _credit_amount(row: dict) -> float:
+    return abs(_num(row.get("payment_amount")))
+
+
+def _int_or_none(value: Any) -> Optional[int]:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def eligible_credit_rows(credit_rows: Iterable[dict]) -> list[dict]:
+    """Credit source rows that still hold available credit: payable (status "No"/blank) AND negative.
+
+    Sorted by id so credit is always consumed oldest-first.
+    """
+    rows = [r for r in filter_payable_rows(credit_rows) if _num(r.get("payment_amount")) < -CREDIT_EPSILON]
+    return sorted(rows, key=lambda r: int(r["id"]))
+
+
+def available_credit_total(credit_rows: Iterable[dict]) -> float:
+    return round(sum(_credit_amount(r) for r in eligible_credit_rows(credit_rows)), 2)
+
+
+def plan_credit_consumption(credit_rows: Iterable[dict], amount: float) -> list[dict]:
+    """Spread ``amount`` over the eligible credit rows, oldest first.
+
+    Returns [{row, use_amt, remaining_after}] -- the credit still left on each source row afterwards.
+    """
+    remaining = round(_num(amount), 2)
+    plan = []
+    for row in eligible_credit_rows(credit_rows):
+        if remaining <= CREDIT_EPSILON:
+            break
+        row_amount = round(_credit_amount(row), 2)
+        use_amount = round(min(row_amount, remaining), 2)
+        plan.append({"row": row, "use_amt": use_amount, "remaining_after": round(row_amount - use_amount, 2)})
+        remaining = round(remaining - use_amount, 2)
+    return plan
+
+
+@dataclass
+class CreditApplyResult:
+    allocations: list[dict] = field(default_factory=list)  # one per TARGET invoice row that received credit
+    credit_usage: list[dict] = field(default_factory=list)  # one per credit SOURCE row that was consumed
+    consumed: float = 0.0  # credit taken out of the source rows
+    applied: float = 0.0  # credit actually applied to target rows (== consumed unless an error occurred)
+    errors: list[str] = field(default_factory=list)
+
+
+def apply_credit(
     *,
+    target_rows: Iterable[dict],
+    credit_rows: Iterable[dict],
     invoice_number: int,
     apply_date: datetime.date,
+    year: int,
+    consume_credit_row: Callable[..., bool],
     update_row: Callable[..., Any],
-) -> tuple[list[dict], float]:
-    """Write the credit application; returns (allocation rows, total credit consumed)."""
-    allocations = []
-    consumed = 0.0
-    for item in plan:
-        row = item["row"]
-        update_row(
-            int(row["id"]),
-            payment_amount=item["new_amt"],
-            paid="Yes" if item["fully_paid"] else "No",
-            payment_date=apply_date if item["fully_paid"] else None,
-            description=f"Credit applied €{item['use_amt']:,.2f}",
-        )
-        allocations.append({
+    insert_row: Callable[..., Any],
+) -> CreditApplyResult:
+    """Apply available credit to unpaid invoice rows without ever creating new available credit.
+
+    Data model (all rows stay in the invoices table; ``paid`` decides what is still open):
+      * Credit SOURCE row (negative, paid "No" = available). Consuming credit reduces that same row's
+        magnitude in place (conditionally, so it can never be consumed twice). If the whole row is used it
+        is marked paid "Yes" and keeps its amount. For a partial use a separate USAGE row is inserted:
+        negative, paid "Yes", same credit-note invoice number -- so source remainder + usage rows always
+        add up to the original credit, and the usage row is never available credit (it is already paid).
+      * TARGET row (positive, unpaid). Fully funded -> marked paid, amount unchanged. Partly funded -> split
+        like a partial payment: the funded part stays on the row (paid) and a remainder row (unpaid) holds
+        the rest, so the invoice's gross amount is preserved.
+    Credit is consumed FIRST. If anything fails afterwards the credit is under- rather than over-stated,
+    and every problem is returned in ``errors`` instead of being swallowed.
+    """
+    result = CreditApplyResult()
+    targets = list(target_rows)
+    credits = list(credit_rows)
+    available = available_credit_total(credits)
+    need = round(sum(i["use_amt"] for i in plan_credit_application(targets, available)), 2)
+    if need <= CREDIT_EPSILON:
+        return result
+
+    # 1. Consume the credit source rows (conditional updates: a row that changed since loading is skipped).
+    for item in plan_credit_consumption(credits, need):
+        row, use, remaining = item["row"], item["use_amt"], item["remaining_after"]
+        old_description = str(row.get("description") or "").strip()
+        note = f"Credit applied €{use:,.2f} to INV#{int(invoice_number)} on {apply_date.isoformat()}"
+        description = f"{old_description} | {note}" if old_description else note
+        try:
+            consumed_ok = consume_credit_row(
+                int(row["id"]), _num(row.get("payment_amount")), use, apply_date, description
+            )
+        except Exception as exc:
+            logger.exception("Could not consume credit row id=%s", row.get("id"))
+            result.errors.append(f"Credit row id={row.get('id')} could not be consumed ({type(exc).__name__}: {exc}).")
+            continue
+        if not consumed_ok:
+            result.errors.append(
+                f"Credit row id={row.get('id')} changed since it was loaded, so it was NOT used. Please retry."
+            )
+            continue
+        result.consumed = round(result.consumed + use, 2)
+        usage = {"credit_row_id": int(row["id"]), "used": use, "remaining_after": remaining, "usage_row_created": False}
+        if remaining > CREDIT_EPSILON:
+            try:
+                insert_row(
+                    invoice_number=_int_or_none(row.get("invoice_number")),
+                    project_name=str(row.get("project_name") or ""),
+                    maintenance_year="Credit",
+                    payment_amount=-use,
+                    year=_int_or_none(row.get("year")) or year,
+                    invoice_type="Complementary",
+                    description=f"Credit used: €{use:,.2f} applied to INV#{int(invoice_number)} (source credit row id={row['id']})",
+                    paid="Yes",
+                    payment_date=apply_date,
+                )
+                usage["usage_row_created"] = True
+            except Exception as exc:
+                logger.exception("Could not insert credit usage row for credit row id=%s", row.get("id"))
+                result.errors.append(
+                    f"Credit row id={row.get('id')} was reduced by €{use:,.2f}, but its usage record could not be "
+                    f"saved ({type(exc).__name__}: {exc}). The payment record below still documents the usage."
+                )
+        result.credit_usage.append(usage)
+
+    # 2. Apply exactly the credit that was really consumed to the target rows.
+    for item in plan_credit_application(targets, result.consumed):
+        row, use = item["row"], item["use_amt"]
+        row_amount = _num(row.get("payment_amount"))
+        try:
+            if item["fully_paid"]:
+                update_row(
+                    int(row["id"]),
+                    paid="Yes",
+                    payment_date=apply_date,
+                    description=f"Paid with credit €{use:,.2f}",
+                )
+            else:
+                update_row(
+                    int(row["id"]),
+                    payment_amount=use,
+                    paid="Yes",
+                    payment_date=apply_date,
+                    description=f"Partially paid with credit: €{use:,.2f} of €{row_amount:,.2f}",
+                )
+                insert_row(
+                    invoice_number=int(invoice_number),
+                    project_name=str(row.get("project_name") or ""),
+                    maintenance_year=str(row.get("maintenance_year") or ""),
+                    payment_amount=round(item["new_amt"], 2),
+                    year=_int_or_none(row.get("year")) or year,
+                    invoice_type="Complementary",
+                    description=f"Remaining debt after credit applied INV#{int(invoice_number)}",
+                )
+        except Exception as exc:
+            logger.exception("Could not apply credit to invoice row id=%s", row.get("id"))
+            result.errors.append(
+                f"{row.get('project_name')} (row id={row.get('id')}): credit could not be applied "
+                f"({type(exc).__name__}: {exc})."
+            )
+            continue
+        result.allocations.append({
             "invoice_row_id": int(row["id"]),
             "invoice_number": int(invoice_number),
             "project_name": str(row.get("project_name") or ""),
             "maintenance_year": str(row.get("maintenance_year") or ""),
-            "year": int(_num(row.get("year"))) or None,
-            "amount_applied": item["use_amt"],
+            "year": _int_or_none(row.get("year")),
+            "amount_applied": use,
         })
-        consumed += item["use_amt"]
-    return allocations, consumed
+        result.applied = round(result.applied + use, 2)
+
+    if abs(result.consumed - result.applied) > CREDIT_EPSILON:
+        result.errors.append(
+            f"Credit consumed (€{result.consumed:,.2f}) does not match credit applied (€{result.applied:,.2f}). "
+            "Please review the credit rows and the target invoice rows."
+        )
+    return result
 
 
 @dataclass

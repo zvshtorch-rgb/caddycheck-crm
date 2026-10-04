@@ -401,8 +401,9 @@ from services.invoice_service import (
 )
 from models.invoice import group_monthly_invoices
 from services.bank_payment_save import (
-    apply_credit_plan,
+    apply_credit,
     apply_partial_payment_plans,
+    available_credit_total,
     filter_payable_rows,
     is_row_payable,
     persist_bank_payment,
@@ -9899,6 +9900,7 @@ elif page == "🏦 Bank Payment":
         get_subscription, upsert_subscription, create_renewal_link,
         append_bank_payment_with_allocations, load_bank_payments, load_bank_payment_allocations,
         update_invoice_row, insert_invoice_adjustment_row, load_unpaid_credit_rows,
+        consume_credit_row as consume_credit_row_supabase,
         upload_bank_payment_pdf as upload_bank_payment_pdf_supabase,
         create_bank_payment_pdf_signed_url as create_bank_payment_pdf_signed_url_supabase,
     )
@@ -10616,7 +10618,7 @@ elif page == "🏦 Bank Payment":
                     target_projects = sorted({str(r.get("project_name", "")).strip() for r in target_rows if str(r.get("project_name", "")).strip()})
                     project_filter = st.selectbox("Credit Project Filter", ["All"] + target_projects, key="credit_filter_project")
                     credit_rows = filter_payable_rows(load_unpaid_credit_rows(None if project_filter == "All" else project_filter))
-                    available_credit = abs(sum(_safe_float(r.get("payment_amount", 0.0)) for r in credit_rows))
+                    available_credit = available_credit_total(credit_rows)
                     target_unpaid_total = sum(_safe_float(r.get("payment_amount", 0.0)) for r in target_rows)
                     planned_apply = min(available_credit, target_unpaid_total)
                     expected_remaining = max(0.0, target_unpaid_total - planned_apply)
@@ -10646,40 +10648,57 @@ elif page == "🏦 Bank Payment":
                         if available_credit <= 0:
                             st.error("No available credit rows found.")
                         else:
-                            alloc_rows, consumed = apply_credit_plan(
-                                plan_credit_application(target_rows, available_credit),
+                            credit_result = apply_credit(
+                                target_rows=target_rows,
+                                credit_rows=credit_rows,
                                 invoice_number=int(apply_inv),
                                 apply_date=apply_date,
+                                year=datetime.date.today().year,
+                                consume_credit_row=consume_credit_row_supabase,
                                 update_row=update_invoice_row,
+                                insert_row=insert_invoice_adjustment_row,
                             )
-                            if consumed > 0.005:
-                                insert_invoice_adjustment_row(
-                                    invoice_number=int(apply_inv),
-                                    project_name=(project_filter if project_filter != "All" else _safe_str(target_rows[0].get("project_name"))),
-                                    maintenance_year="Credit",
-                                    payment_amount=-consumed,
-                                    year=datetime.date.today().year,
-                                    invoice_type="Complementary",
-                                    description=f"Credit consumed for INV#{int(apply_inv)}",
-                                )
-                                append_bank_payment_with_allocations(
+                            credit_alerts = list(credit_result.errors)
+                            if credit_result.applied > 0.005 or credit_result.consumed > 0.005:
+                                credit_fingerprint = hashlib.sha256(
+                                    (
+                                        f"credit|{int(apply_inv)}|{apply_date.isoformat()}|{credit_result.applied:.2f}|"
+                                        + ",".join(str(a["invoice_row_id"]) for a in credit_result.allocations)
+                                        + "|"
+                                        + ",".join(str(u["credit_row_id"]) for u in credit_result.credit_usage)
+                                    ).encode("utf-8")
+                                ).hexdigest()
+                                credit_payment_error = persist_bank_payment(
                                     {
                                         "payment_date": apply_date.isoformat(),
                                         "invoice_number": int(apply_inv),
                                         "source_name": f"credit-apply-{int(apply_inv)}",
                                         "source_kind": "credit-apply",
-                                        "payment_fingerprint": hashlib.sha256(
-                                            f"credit|{int(apply_inv)}|{apply_date.isoformat()}|{consumed:.2f}".encode("utf-8")
-                                        ).hexdigest(),
+                                        "payment_fingerprint": credit_fingerprint,
                                         "currency": "EUR",
-                                        "applied_amount": consumed,
-                                        "notes": "Credit applied to unpaid rows",
+                                        "applied_amount": credit_result.applied,
+                                        "parsed_payload": {"credit_sources": credit_result.credit_usage},
+                                        "notes": "Credit applied to unpaid rows (credit source rows consumed in place)",
                                     },
-                                    alloc_rows,
+                                    credit_result.allocations,
+                                    save_remote=append_bank_payment_with_allocations,
+                                    save_local_backup=append_bank_payment_log,
                                 )
-                                st.cache_data.clear()
-                                st.success(f"Applied €{consumed:,.2f} credit.")
-                                st.rerun()
+                                if credit_payment_error:
+                                    credit_alerts.append(
+                                        f"Credit was applied to invoice #{int(apply_inv)}, but its audit record was NOT saved. "
+                                        + credit_payment_error
+                                    )
+                            st.cache_data.clear()
+                            if credit_alerts:
+                                st.session_state["_bank_payment_save_errors"] = credit_alerts
+                            if credit_result.applied > 0.005:
+                                st.session_state["_flash_success"] = (
+                                    f"Applied €{credit_result.applied:,.2f} credit to invoice #{int(apply_inv)}. "
+                                    f"Remaining available credit: €{max(0.0, available_credit - credit_result.consumed):,.2f}."
+                                )
+                                st.session_state["_flash_success_page"] = "🏦 Bank Payment"
+                            st.rerun()
 
     st.markdown("---")
     st.subheader("Saved Bank Payments")

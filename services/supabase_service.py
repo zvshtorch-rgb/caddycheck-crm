@@ -701,6 +701,8 @@ def insert_invoice_adjustment_row(
     description: Optional[str] = None,
     invoice_type: Optional[str] = None,
     for_month: Optional[str] = None,
+    paid: str = "No",
+    payment_date: Optional[datetime.date] = None,
 ) -> dict:
     """Insert an adjustment row (positive/negative) into invoices."""
     client = _get_client()
@@ -710,8 +712,8 @@ def insert_invoice_adjustment_row(
         "maintenance_year": str(maintenance_year or "").strip() or None,
         "payment_amount": float(payment_amount),
         "cameras_number": int(cameras_number) if cameras_number not in (None, "") else None,
-        "payment_date": None,
-        "paid": "No",
+        "payment_date": payment_date.isoformat() if payment_date else None,
+        "paid": paid,
         "year": int(year) if year not in (None, "") else None,
         "invoice_type": str(invoice_type or "").strip() or None,
         "for_month": str(for_month or "").strip() or None,
@@ -728,6 +730,40 @@ def insert_invoice_adjustment_row(
 
 
 _PAYABLE_STATUS_REGEX = r"^\s*(no)?\s*$"  # same rule as bank_payment_save.is_row_payable: "No"/blank, any case
+_PAYABLE_STATUS_FILTER = f'paid.is.null,paid.imatch."{_PAYABLE_STATUS_REGEX}"'
+
+
+def consume_credit_row(
+    credit_row_id: int,
+    expected_amount: float,
+    use_amount: float,
+    apply_date: datetime.date,
+    description: str,
+) -> bool:
+    """Consume ``use_amount`` of one credit source row, once.
+
+    The update only matches while the row still has the amount it had when it was loaded AND is still
+    open (status No/blank), so two sessions -- or a double click -- can never spend the same credit twice.
+    A partly used row keeps the unused remainder as its (negative) amount; a fully used row is marked
+    paid "Yes" and keeps its amount. Returns False when no row matched (nothing was changed).
+    """
+    client = _get_client()
+    remaining = round(abs(float(expected_amount)) - float(use_amount), 2)
+    fields: Dict[str, Any] = {"description": description}
+    if remaining <= 0.005:
+        fields["paid"] = "Yes"
+        fields["payment_date"] = apply_date.isoformat()
+    else:
+        fields["payment_amount"] = -remaining
+    resp = (
+        client.table("invoices")
+        .update(fields)
+        .eq("id", int(credit_row_id))
+        .eq("payment_amount", float(expected_amount))
+        .or_(_PAYABLE_STATUS_FILTER)
+        .execute()
+    )
+    return bool(resp.data)
 
 
 def load_unpaid_credit_rows(project_name: Optional[str] = None) -> List[dict]:
@@ -742,7 +778,7 @@ def load_unpaid_credit_rows(project_name: Optional[str] = None) -> List[dict]:
     query = (
         client.table("invoices")
         .select("*")
-        .or_(f'paid.is.null,paid.imatch."{_PAYABLE_STATUS_REGEX}"')
+        .or_(_PAYABLE_STATUS_FILTER)
         .lt("payment_amount", 0)
         .order("id", desc=False)
     )
