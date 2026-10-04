@@ -119,7 +119,11 @@ def _normalize_bank_payment_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
     normalized["created_at"] = str(entry.get("created_at") or datetime.datetime.utcnow().isoformat())
     normalized["updated_at"] = datetime.datetime.utcnow().isoformat()
     normalized["payment_date"] = str(entry.get("payment_date") or "").strip() or None
-    normalized["invoice_number"] = int(entry["invoice_number"]) if entry.get("invoice_number") not in (None, "") else None
+    # invoice_number is a TEXT column (migrations/fix_bank_payments_invoice_number_type.sql) so it
+    # can hold a comma-joined list for multi-invoice payments (e.g. "8588,8598,8697") -- forcing
+    # int() here breaks every multi-invoice save with a silent ValueError, caught by the caller and
+    # falling back to the ephemeral local JSON log (never visible once Streamlit Cloud restarts).
+    normalized["invoice_number"] = str(entry["invoice_number"]).strip() if entry.get("invoice_number") not in (None, "") else None
     normalized["source_name"] = str(entry.get("source_name") or "").strip() or None
     normalized["source_kind"] = str(entry.get("source_kind") or "").strip() or None
     normalized["payment_fingerprint"] = str(entry.get("payment_fingerprint") or "").strip() or None
