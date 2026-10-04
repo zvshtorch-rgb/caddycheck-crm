@@ -11,7 +11,6 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from services.bank_payment_save import (
-    apply_credit,
     apply_partial_payment_plans,
     filter_payable_rows,
     is_row_payable,
@@ -20,6 +19,7 @@ from services.bank_payment_save import (
     plan_partial_payments,
     save_parsed_bank_payment,
 )
+from services.credit_application import execute_with_compensation, plan_credit_application_ops
 from services.supabase_service import (
     _PAYABLE_STATUS_REGEX,
     _normalize_bank_payment_entry,
@@ -378,12 +378,21 @@ class TestApplyCreditTab(unittest.TestCase):
 
 
 class FakeLedger:
-    """In-memory invoices table with the same semantics as the Supabase functions apply_credit() calls."""
+    """In-memory invoices + bank_payments tables with the contract of the Supabase functions that
+    execute_with_compensation() calls, plus failure injection (``fail_calls``)."""
 
     def __init__(self, rows):
         self.rows = {r["id"]: dict(r) for r in rows}
         self.next_id = 1000
-        self.consume_calls = 0
+        self.payments = {}  # payment id -> {"entry": ..., "allocations": [...]}
+        self.next_payment_id = 1
+        self.fail_calls = {}  # method name -> set of 1-based call numbers that must raise
+        self.calls = {}
+
+    def _hit(self, name):
+        self.calls[name] = self.calls.get(name, 0) + 1
+        if self.calls[name] in self.fail_calls.get(name, ()):
+            raise RuntimeError(f"injected failure in {name} call #{self.calls[name]}")
 
     # -- what the app loads (mirrors load_unpaid_credit_rows / the target-row query) ------------------
     def credit_rows(self):
@@ -397,7 +406,7 @@ class FakeLedger:
 
     # -- writes, same contract as the Supabase service functions ----------------------------------------
     def consume_credit_row(self, row_id, expected_amount, use_amount, apply_date, description):
-        self.consume_calls += 1
+        self._hit("consume_credit_row")
         row = self.rows.get(row_id)
         if row is None or row["payment_amount"] != expected_amount or not is_row_payable(row):
             return False  # conditional update matched nothing
@@ -409,12 +418,16 @@ class FakeLedger:
             row["payment_amount"] = -remaining
         return True
 
-    def update_row(self, row_id, **fields):
-        for key, value in fields.items():
-            if value is not None:
-                self.rows[row_id][key] = value
+    def update_target_row(self, row_id, expected_amount, fields):
+        self._hit("update_target_row")
+        row = self.rows.get(row_id)
+        if row is None or row["payment_amount"] != expected_amount or not is_row_payable(row):
+            return False
+        row.update(fields)
+        return True
 
     def insert_row(self, **kw):
+        self._hit("insert_row")
         self.next_id += 1
         self.rows[self.next_id] = {
             "id": self.next_id, "invoice_number": kw.get("invoice_number"), "project_name": kw["project_name"],
@@ -422,24 +435,55 @@ class FakeLedger:
             "paid": kw.get("paid", "No"), "payment_date": kw.get("payment_date"), "year": kw.get("year"),
             "description": kw.get("description"),
         }
-        return self.rows[self.next_id]
+        return dict(self.rows[self.next_id])
+
+    def save_payment(self, entry, allocations):
+        self._hit("save_payment")
+        payment_id = self.next_payment_id
+        self.next_payment_id += 1
+        self.payments[payment_id] = {"entry": dict(entry), "allocations": [dict(a) for a in allocations]}
+        return {"id": payment_id}
+
+    def restore_row(self, row_id, fields):
+        self._hit("restore_row")
+        self.rows[row_id].update(fields)  # exact values, None included
+
+    def delete_row(self, row_id):
+        self._hit("delete_row")
+        self.rows.pop(row_id, None)
+
+    def delete_payment(self, payment_id):
+        self._hit("delete_payment")
+        self.payments.pop(payment_id, None)
 
     # -- helpers ---------------------------------------------------------------------------------------
-    def apply(self, invoice_number, credit_rows=None, target_rows=None, **overrides):
-        kwargs = dict(
+    def executors(self):
+        return dict(
+            consume_credit_row=self.consume_credit_row, update_target_row=self.update_target_row,
+            insert_row=self.insert_row, save_payment=self.save_payment, restore_row=self.restore_row,
+            delete_row=self.delete_row, delete_payment=self.delete_payment,
+        )
+
+    def plan(self, invoice_number, credit_rows=None, target_rows=None):
+        return plan_credit_application_ops(
             target_rows=self.target_rows(invoice_number) if target_rows is None else target_rows,
             credit_rows=self.credit_rows() if credit_rows is None else credit_rows,
             invoice_number=invoice_number, apply_date=PAY_DATE, year=2026,
-            consume_credit_row=self.consume_credit_row, update_row=self.update_row, insert_row=self.insert_row,
         )
-        kwargs.update(overrides)
-        return apply_credit(**kwargs)
+
+    def apply(self, invoice_number, credit_rows=None, target_rows=None, **overrides):
+        executors = self.executors()
+        executors.update(overrides)
+        return execute_with_compensation(self.plan(invoice_number, credit_rows, target_rows), **executors)
 
     def available(self):
         return round(abs(sum(r["payment_amount"] for r in self.credit_rows())), 2)
 
     def snapshot(self, ids=None):
         return {i: dict(r) for i, r in self.rows.items() if ids is None or i in ids}
+
+    def state(self):
+        return {"rows": self.snapshot(), "payments": {i: dict(p) for i, p in self.payments.items()}}
 
     def total(self, predicate=lambda r: True):
         return round(sum(r["payment_amount"] for r in self.rows.values() if predicate(r)), 2)
@@ -505,7 +549,8 @@ class TestApplyCreditAccounting(unittest.TestCase):
         stale_targets = ledger.target_rows(8701)
         ledger.apply(8700)
         after_first = ledger.snapshot()
-        result = ledger.apply(8701, credit_rows=stale_credit_rows, target_rows=stale_targets)
+        with self.assertLogs("services.credit_application", level="ERROR"):
+            result = ledger.apply(8701, credit_rows=stale_credit_rows, target_rows=stale_targets)
         self.assertEqual((result.consumed, result.applied), (0.0, 0.0))
         self.assertTrue(any("changed since it was loaded" in e for e in result.errors))
         self.assertEqual(ledger.snapshot(), after_first)  # nothing was spent or written the second time
@@ -581,30 +626,6 @@ class TestApplyCreditAccounting(unittest.TestCase):
         self.assertEqual([(r["payment_amount"], r["paid"]) for r in remainder], [(30.0, "No")])
         self.assertEqual(ledger.total(), total_before)
         self.assertEqual(ledger.available(), 0.0)
-
-    def test_failures_are_reported_and_credit_is_never_applied_beyond_what_was_consumed(self):
-        ledger = FakeLedger([_credit(1, -1000.0), _target(2, 130.0)])
-
-        def exploding_consume(*args, **kwargs):
-            raise RuntimeError("db down")
-
-        with self.assertLogs("services.bank_payment_save", level="ERROR"):
-            result = ledger.apply(8700, consume_credit_row=exploding_consume)
-        self.assertEqual((result.consumed, result.applied), (0.0, 0.0))
-        self.assertTrue(any("could not be consumed" in e for e in result.errors))
-        self.assertEqual(ledger.rows[2]["paid"], "No")  # target untouched when no credit was obtained
-        self.assertEqual(ledger.available(), 1000.0)
-
-    def test_target_write_failure_is_reported_as_consumed_but_not_applied(self):
-        ledger = FakeLedger([_credit(1, -1000.0), _target(2, 130.0)])
-
-        def exploding_update(*args, **kwargs):
-            raise RuntimeError("update failed")
-
-        with self.assertLogs("services.bank_payment_save", level="ERROR"):
-            result = ledger.apply(8700, update_row=exploding_update)
-        self.assertEqual((result.consumed, result.applied), (130.0, 0.0))
-        self.assertTrue(any("does not match" in e for e in result.errors))
 
 
 class TestConsumeCreditRowQuery(unittest.TestCase):
@@ -729,7 +750,8 @@ class TestOneEligibilityRuleEverywhere(unittest.TestCase):
         self.assertIn("filter_payable_rows(get_invoices_by_number(int(apply_inv)), positive_amount_only=True)", self.SOURCE)
         self.assertIn("filter_payable_rows(load_unpaid_credit_rows(", self.SOURCE)
         self.assertIn("plan_credit_application(", self.SOURCE)
-        self.assertIn("apply_credit(", self.SOURCE)
+        self.assertIn("apply_credit_atomically(", self.SOURCE)
+        self.assertIn("plan_credit_application_ops(", self.SOURCE)
         self.assertNotIn("apply_credit_plan", self.SOURCE)
         self.assertNotIn('description=f"Credit consumed for INV#', self.SOURCE)  # the old row that re-created credit
 

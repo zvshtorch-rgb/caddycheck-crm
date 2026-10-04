@@ -766,6 +766,51 @@ def consume_credit_row(
     return bool(resp.data)
 
 
+def update_open_invoice_row(db_id: int, expected_amount: float, fields: Dict[str, Any]) -> bool:
+    """Update one invoice row only while it still has ``expected_amount`` and is still open (No/blank).
+
+    Used when applying credit to a target row, so a row that was changed or paid since it was loaded
+    is never overwritten. Returns False when no row matched (nothing was changed).
+    """
+    client = _get_client()
+    resp = (
+        client.table("invoices")
+        .update(fields)
+        .eq("id", int(db_id))
+        .eq("payment_amount", float(expected_amount))
+        .or_(_PAYABLE_STATUS_FILTER)
+        .execute()
+    )
+    return bool(resp.data)
+
+
+def restore_invoice_row(db_id: int, fields: Dict[str, Any]) -> None:
+    """Set exactly ``fields`` on an invoice row (None writes NULL). Used only to undo a failed operation."""
+    client = _get_client()
+    client.table("invoices").update(fields).eq("id", int(db_id)).execute()
+
+
+def delete_invoice_row(db_id: int) -> None:
+    """Delete one invoice row by id. Used only to undo a row that a failed operation had inserted."""
+    client = _get_client()
+    client.table("invoices").delete().eq("id", int(db_id)).execute()
+
+
+def delete_bank_payment(payment_id: int) -> None:
+    """Delete one bank_payments record and its allocations. Used only to undo a failed operation."""
+    client = _get_client()
+    client.table(BANK_PAYMENT_ALLOCATIONS_TABLE).delete().eq("payment_id", int(payment_id)).execute()
+    client.table(BANK_PAYMENTS_TABLE).delete().eq("id", int(payment_id)).execute()
+
+
+def apply_credit_atomic_rpc(payload: Dict[str, Any]) -> Any:
+    """Run the whole Apply Credit plan inside ONE database transaction (Postgres function
+    ``apply_credit_atomic``, see migrations/create_apply_credit_atomic.sql). Raises on any failure."""
+    client = _get_client()
+    resp = client.rpc("apply_credit_atomic", {"p_plan": payload}).execute()
+    return resp.data
+
+
 def load_unpaid_credit_rows(project_name: Optional[str] = None) -> List[dict]:
     """Return unpaid negative invoice rows that can be used as credit.
 
