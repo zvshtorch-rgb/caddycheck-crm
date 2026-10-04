@@ -7,6 +7,8 @@ The flow is exercised against an in-memory fake of the Supabase layer, with the 
 import datetime
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from services.bank_payment_save import (
     apply_credit_plan,
@@ -18,7 +20,7 @@ from services.bank_payment_save import (
     plan_partial_payments,
     save_parsed_bank_payment,
 )
-from services.supabase_service import _normalize_bank_payment_entry
+from services.supabase_service import _PAYABLE_STATUS_REGEX, _normalize_bank_payment_entry, load_unpaid_credit_rows
 
 PAY_DATE = datetime.date(2026, 9, 28)
 
@@ -207,7 +209,7 @@ class TestFailureHandling(unittest.TestCase):
 class TestCancelledRowsAreNeverPaid(unittest.TestCase):
     def test_is_row_payable_rule(self):
         for status, expected in [
-            ("No", True), ("no", True), (" NO ", True), ("", True), (None, True),
+            ("No", True), ("no", True), (" NO ", True), ("", True), ("   ", True), (None, True),
             ("Yes", False), ("yes", False), ("cancelled", False), ("Cancelled", False), ("Partial", False),
         ]:
             self.assertEqual(is_row_payable({"paid": status}), expected, repr(status))
@@ -394,6 +396,71 @@ class TestApplyCreditTab(unittest.TestCase):
         ]
         usable = filter_payable_rows(credit_rows)
         self.assertEqual(abs(sum(r["payment_amount"] for r in usable)), 500.0)
+
+
+class _FakeQuery:
+    """Chainable stand-in for a supabase query; ignores filters and returns canned rows (like a DB bug would)."""
+
+    def __init__(self, rows, log):
+        self._rows, self._log = rows, log
+
+    def __getattr__(self, name):
+        def record(*args, **kwargs):
+            self._log.append((name, args, kwargs))
+            return self
+        return record
+
+    def execute(self):
+        return SimpleNamespace(data=list(self._rows))
+
+
+class _FakeClient:
+    def __init__(self, rows):
+        self.rows, self.log = rows, []
+
+    def table(self, name):
+        self.log.append(("table", (name,), {}))
+        return _FakeQuery(self.rows, self.log)
+
+
+class TestLoadUnpaidCreditRows(unittest.TestCase):
+    CREDIT_ROWS = [
+        {"id": 10, "project_name": "AD C", "payment_amount": -500.0, "paid": "No"},
+        {"id": 11, "project_name": "AD C", "payment_amount": -999.0, "paid": "cancelled"},
+        {"id": 12, "project_name": "AD C", "payment_amount": -999.0, "paid": "Cancelled"},
+        {"id": 13, "project_name": "AD C", "payment_amount": -25.0, "paid": "Partial"},
+        {"id": 14, "project_name": "AD C", "payment_amount": -40.0, "paid": "Yes"},
+        {"id": 15, "project_name": "AD C", "payment_amount": -10.0, "paid": None},
+    ]
+
+    def _load(self, project=None):
+        client = _FakeClient(self.CREDIT_ROWS)
+        with patch("services.supabase_service._get_client", return_value=client):
+            return load_unpaid_credit_rows(project), client
+
+    def test_cancelled_credit_row_is_never_returned_even_if_the_database_returns_it(self):
+        rows, _ = self._load()
+        self.assertNotIn(11, {r["id"] for r in rows})
+        self.assertNotIn(12, {r["id"] for r in rows})
+        self.assertEqual({r["id"] for r in rows}, {10, 15})  # payable "No" and missing status only
+
+    def test_query_filters_in_the_database_and_no_longer_uses_neq_yes(self):
+        _, client = self._load("AD C")
+        names = [call[0] for call in client.log]
+        self.assertNotIn("neq", names)
+        or_calls = [call for call in client.log if call[0] == "or_"]
+        self.assertEqual(len(or_calls), 1)
+        self.assertIn("paid.is.null", or_calls[0][1][0])
+        self.assertIn("paid.imatch", or_calls[0][1][0])
+        self.assertIn(("eq", ("project_name", "AD C"), {}), client.log)
+
+    def test_database_regex_accepts_exactly_what_is_row_payable_accepts(self):
+        import re
+        pattern = re.compile(_PAYABLE_STATUS_REGEX, re.IGNORECASE)
+        for status in ["No", "no", "NO", " No ", "", "   ", "Yes", "yes", "cancelled", "Cancelled", "Partial", "None", "Nope", "not paid"]:
+            self.assertEqual(bool(pattern.match(status)), is_row_payable({"paid": status}), repr(status))
+        # NULL is covered by the separate `paid.is.null` branch of the query
+        self.assertTrue(is_row_payable({"paid": None}))
 
 
 class TestOneEligibilityRuleEverywhere(unittest.TestCase):

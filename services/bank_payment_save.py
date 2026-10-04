@@ -26,15 +26,15 @@ logger = logging.getLogger(__name__)
 def is_row_payable(row: dict) -> bool:
     """The single rule deciding whether an invoice row may be marked paid by a bank payment.
 
-    Only rows whose status is "No" (a missing/blank status counts as "No") are payable. "Yes" (already
-    paid), "cancelled" and any unrecognised status are NOT payable, so they are never marked paid and
-    never appear in allocations or applied_amount. Used by every payment-application flow.
+    Only rows whose status is "No" (a missing, blank or whitespace-only status counts as "No") are
+    payable. "Yes" (already paid), "cancelled" and any unrecognised status are NOT payable, so they are
+    never marked paid and never appear in allocations or applied_amount. Used by every payment flow.
     """
-    return str(row.get("paid") or "No").strip().lower() == "no"
+    return _status_of(row) in ("", "no")
 
 
 def _status_of(row: dict) -> str:
-    return str(row.get("paid") or "No").strip().lower()
+    return str(row.get("paid") or "").strip().lower()
 
 
 def _num(value: Any) -> float:

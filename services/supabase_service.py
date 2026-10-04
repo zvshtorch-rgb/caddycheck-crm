@@ -727,20 +727,29 @@ def insert_invoice_adjustment_row(
     return resp.data[0]
 
 
+_PAYABLE_STATUS_REGEX = r"^\s*(no)?\s*$"  # same rule as bank_payment_save.is_row_payable: "No"/blank, any case
+
+
 def load_unpaid_credit_rows(project_name: Optional[str] = None) -> List[dict]:
-    """Return unpaid negative invoice rows that can be used as credit."""
+    """Return unpaid negative invoice rows that can be used as credit.
+
+    Cancelled, already-paid and unrecognised-status rows are excluded in the database query AND again
+    in Python with is_row_payable(), so a cancelled credit row can never be returned to a caller.
+    """
+    from services.bank_payment_save import is_row_payable
+
     client = _get_client()
     query = (
         client.table("invoices")
         .select("*")
-        .neq("paid", "Yes")
+        .or_(f'paid.is.null,paid.imatch."{_PAYABLE_STATUS_REGEX}"')
         .lt("payment_amount", 0)
         .order("id", desc=False)
     )
     if project_name:
         query = query.eq("project_name", str(project_name).strip())
     resp = query.execute()
-    return resp.data or []
+    return [row for row in (resp.data or []) if is_row_payable(row)]
 
 
 def get_next_invoice_number() -> int:
