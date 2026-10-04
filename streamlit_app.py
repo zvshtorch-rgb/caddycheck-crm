@@ -400,7 +400,7 @@ from services.invoice_service import (
     get_invoice_preview_data,
 )
 from models.invoice import group_monthly_invoices
-from services.bank_payment_save import persist_bank_payment, save_parsed_bank_payment
+from services.bank_payment_save import is_row_payable, persist_bank_payment, save_parsed_bank_payment
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -10001,6 +10001,7 @@ elif page == "🏦 Bank Payment":
             "Amount (€)":   _safe_float(r.get("payment_amount")),
             "Cameras":      _safe_int(r.get("cameras_number")),
             "Paid":         r.get("paid", "No"),
+            "Payable":      is_row_payable(r),
             "Payment Date": (r["payment_date"] or "")[:10] if r.get("payment_date") else "",
         } for r in rows])
 
@@ -10010,9 +10011,16 @@ elif page == "🏦 Bank Payment":
             hide_index=True,
         )
 
-        unpaid_projects = list(df[df["Paid"] != "Yes"]["Project"])
+        payable_df = df[df["Payable"]]
+        cancelled_count = int((df["Paid"].astype(str).str.strip().str.lower() == "cancelled").sum())
+        if cancelled_count:
+            st.caption(f"{cancelled_count} cancelled row(s) are excluded and can never be marked paid here.")
+        unpaid_projects = list(payable_df["Project"])
         if not unpaid_projects:
-            st.success(f"All rows for invoice(s) {inv_nos_label} are already marked as paid.")
+            if cancelled_count:
+                st.success(f"No payable rows for invoice(s) {inv_nos_label}: every row is already paid or cancelled.")
+            else:
+                st.success(f"All rows for invoice(s) {inv_nos_label} are already marked as paid.")
             zip_bytes, zip_included = _build_confirmed_invoices_zip(inv_nos)
             if zip_included:
                 st.download_button(
@@ -10026,7 +10034,7 @@ elif page == "🏦 Bank Payment":
 
         selected = st.multiselect(
             "Select project row(s) to mark as paid",
-            options=list(df["Project"]),
+            options=list(payable_df["Project"]),
             default=unpaid_projects,
             key=f"{key_prefix}_sel",
         )
@@ -10040,7 +10048,8 @@ elif page == "🏦 Bank Payment":
             key=f"{key_prefix}_confirm_date",
         )
 
-        sel_df = df[df["Project"].isin(selected)][["Invoice #", "Project", "Amount (€)", "Cameras"]].copy()
+        selected_df = df[df["Project"].isin(selected) & df["Payable"]]
+        sel_df = selected_df[["Invoice #", "Project", "Amount (€)", "Cameras"]].copy()
         st.caption("The following rows will be marked paid. If subscription tables exist, renewal links will also be generated.")
         st.dataframe(sel_df, use_container_width=True, hide_index=True)
 
@@ -10051,7 +10060,7 @@ elif page == "🏦 Bank Payment":
             allocation_rows = []
             total_applied = 0.0
 
-            for _, row in df[df["Project"].isin(selected)].iterrows():
+            for _, row in selected_df.iterrows():
                 proj = row["Project"]
                 row_inv_no = int(row["Invoice #"])
                 try:

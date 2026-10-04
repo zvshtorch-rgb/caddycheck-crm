@@ -23,6 +23,20 @@ from typing import Any, Callable, Iterable, Optional
 logger = logging.getLogger(__name__)
 
 
+def is_row_payable(row: dict) -> bool:
+    """The single rule deciding whether an invoice row may be marked paid by a bank payment.
+
+    Only rows whose status is "No" (a missing/blank status counts as "No") are payable. "Yes" (already
+    paid), "cancelled" and any unrecognised status are NOT payable, so they are never marked paid and
+    never appear in allocations or applied_amount. Used by every payment-application flow.
+    """
+    return str(row.get("paid") or "No").strip().lower() == "no"
+
+
+def _status_of(row: dict) -> str:
+    return str(row.get("paid") or "No").strip().lower()
+
+
 @dataclass
 class PaymentSaveOutcome:
     payment_saved: bool = False  # bank_payments record durably saved in Supabase
@@ -117,10 +131,17 @@ def save_parsed_bank_payment(
             out.notes.append(f"{label}: no invoice rows found")
         return out
 
-    unpaid = [r for r in rows if str(r.get("paid", "No")).strip().lower() != "yes"]
+    unpaid = [r for r in rows if is_row_payable(r)]
+    cancelled_count = sum(1 for r in rows if _status_of(r) == "cancelled")
+    if cancelled_count:
+        out.notes.append(f"{label}: {cancelled_count} cancelled invoice row(s) were excluded from this payment")
     if not unpaid:
-        if save({**base, "applied_amount": None, "notes": "Auto-saved from batch upload; invoice rows were already paid."}, []):
-            out.notes.append(f"{label}: rows already paid")
+        if cancelled_count:
+            note, detail = "Auto-saved from batch upload; no payable rows (already paid or cancelled).", "no payable rows"
+        else:
+            note, detail = "Auto-saved from batch upload; invoice rows were already paid.", "rows already paid"
+        if save({**base, "applied_amount": None, "notes": note}, []):
+            out.notes.append(f"{label}: {detail}")
         return out
 
     def allocation_for(row: dict) -> dict:

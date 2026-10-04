@@ -6,8 +6,9 @@ The flow is exercised against an in-memory fake of the Supabase layer, with the 
 """
 import datetime
 import unittest
+from pathlib import Path
 
-from services.bank_payment_save import persist_bank_payment, save_parsed_bank_payment
+from services.bank_payment_save import is_row_payable, persist_bank_payment, save_parsed_bank_payment
 from services.supabase_service import _normalize_bank_payment_entry
 
 PAY_DATE = datetime.date(2026, 9, 28)
@@ -192,6 +193,63 @@ class TestFailureHandling(unittest.TestCase):
                 {"source_name": "a"}, [], save_remote=lambda e, a: (_ for _ in ()).throw(ValueError("x")),
             )
         self.assertIn("NOT saved to Supabase", message)
+
+
+class TestCancelledRowsAreNeverPaid(unittest.TestCase):
+    def test_is_row_payable_rule(self):
+        for status, expected in [
+            ("No", True), ("no", True), (" NO ", True), ("", True), (None, True),
+            ("Yes", False), ("yes", False), ("cancelled", False), ("Cancelled", False), ("Partial", False),
+        ]:
+            self.assertEqual(is_row_payable({"paid": status}), expected, repr(status))
+        self.assertTrue(is_row_payable({}))  # missing key == "No"
+
+    def test_mixed_cancelled_unpaid_and_paid_rows(self):
+        db = FakeDb([
+            _row(1, 8588, "AD Unpaid", 100.0, paid="No"),
+            _row(2, 8588, "AD Cancelled", 999.0, paid="cancelled"),
+            _row(3, 8598, "AD AlreadyPaid", 50.0, paid="Yes"),
+            _row(4, 8598, "AD Unpaid2", 25.0, paid="No"),
+            _row(5, 8697, "AD Cancelled2", 777.0, paid="Cancelled"),
+        ])
+        out = _run(db, [8588, 8598, 8697])
+        self.assertTrue(out.fully_successful, out.errors)
+        # only the two genuinely unpaid rows were marked paid
+        self.assertEqual({i for i, r in db.invoices.items() if r["paid"] == "Yes"}, {1, 3, 4})
+        self.assertEqual(db.invoices[2]["paid"], "cancelled")
+        self.assertEqual(db.invoices[5]["paid"], "Cancelled")
+        self.assertIsNone(db.invoices[2].get("payment_date"))
+        # allocations and applied_amount exclude cancelled AND already-paid rows
+        self.assertEqual({a["project_name"] for a in db.allocations["fp1"]}, {"AD Unpaid", "AD Unpaid2"})
+        self.assertEqual(db.payments["fp1"]["applied_amount"], 125.0)
+        self.assertEqual(out.marked_rows, 2)
+        self.assertEqual(out.confirmed_invoice_numbers, {8588, 8598})
+        self.assertTrue(any("2 cancelled invoice row(s) were excluded" in n for n in out.notes))
+
+    def test_cancelled_plus_already_paid_only_marks_nothing(self):
+        db = FakeDb([_row(1, 1, "AD Paid", 10.0, paid="Yes"), _row(2, 1, "AD Cancelled", 20.0, paid="cancelled")])
+        out = _run(db, [1])
+        self.assertTrue(out.fully_successful)
+        self.assertEqual(out.marked_rows, 0)
+        self.assertEqual(db.invoices[2]["paid"], "cancelled")
+        self.assertEqual(db.allocations["fp1"], [])
+        self.assertIsNone(db.payments["fp1"]["applied_amount"])
+        self.assertTrue(any("no payable rows" in n for n in out.notes))
+
+    def test_all_cancelled_marks_nothing(self):
+        db = FakeDb([_row(1, 1, "AD C1", 10.0, paid="cancelled"), _row(2, 1, "AD C2", 20.0, paid="cancelled")])
+        out = _run(db, [1])
+        self.assertEqual(out.marked_rows, 0)
+        self.assertTrue(all(r["paid"] == "cancelled" for r in db.invoices.values()))
+        self.assertEqual(db.allocations["fp1"], [])
+
+    def test_manual_lookup_flow_uses_the_same_rule(self):
+        # Source-level guard: the Manual Lookup flow must derive payable rows from is_row_payable and
+        # must not go back to the old `Paid != "Yes"` check that treated cancelled rows as unpaid.
+        source = (Path(__file__).resolve().parent.parent / "streamlit_app.py").read_text(encoding="utf-8")
+        self.assertIn('"Payable":      is_row_payable(r)', source)
+        self.assertIn('df["Project"].isin(selected) & df["Payable"]', source)
+        self.assertNotIn('df[df["Paid"] != "Yes"]', source)
 
 
 if __name__ == "__main__":
