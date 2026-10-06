@@ -415,6 +415,11 @@ from services.credit_application import (
     execute_with_compensation,
     plan_credit_application_ops,
 )
+from services.license_reconciliation import (
+    PUBLIC_COLUMNS as LICENSE_RECONCILIATION_COLUMNS,
+    build_license_reconciliation,
+    filter_reconciliation,
+)
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -1698,6 +1703,13 @@ _ASK_DATA_TOOL_SPECS: dict[str, dict[str, tuple[str, bool]]] = {
         "eop_month": ("month", False),
         "eop_date": ("date", False),
     },
+    "get_license_eop_reconciliation": {
+        "project": ("project", False),
+        "country": ("country", False),
+        "project_status": ("status", False),
+        "paid_year": ("int", False),
+        "needs_update": ("enum:yes,no", False),
+    },
 }
 
 # Per-tool description shown to the LLM alongside its argument list. This is the primary
@@ -1773,7 +1785,20 @@ _ASK_DATA_TOOL_DESCRIPTIONS: dict[str, str] = {
         "distinction -- see get_licenses), PLUS the authoritative paid/unpaid status of each "
         "project's latest already-due annual invoice, joined from the invoices table. Use this "
         "instead of get_licenses when a license question also asks about invoices, payments, "
-        "debt, outstanding balance, or whether projects are paid/fully paid."
+        "debt, outstanding balance, or whether projects are paid/fully paid. It looks ONLY at the "
+        "latest annual invoice -- for 'was the License EOP updated for the paid years' questions "
+        "use get_license_eop_reconciliation instead."
+    ),
+    "get_license_eop_reconciliation": (
+        "READ-ONLY reconciliation of every project's CURRENT License EOP against the EOP its full "
+        "invoice/payment history justifies (Year 1, Year 2, ... all maintenance years from the invoices "
+        "table, not just the latest invoice). Returns per project: license start date, current EOP, Y1/Y2 "
+        "invoice numbers + paid status + payment dates, highest consecutively paid maintenance year, "
+        "expected EOP (start date + that many years), 'Needs EOP Update?' and a confidence flag. Use it "
+        "for: 'Year 1 paid but License EOP not updated', 'Year 2 paid but EOP not updated', 'paid licenses "
+        "whose EOP is earlier than the payments justify', 'which licenses need their EOP updated', "
+        "'expected license EOP'. Set paid_year=1 or 2 (etc.) for 'Year N paid but EOP not updated'; set "
+        "needs_update='yes' for 'EOP earlier than justified by payments'. It never changes any date."
     ),
 }
 
@@ -2294,6 +2319,30 @@ def _execute_ask_data_tool(
         summary = ", ".join(f"{count} {status}" for status, count in status_counts.items())
         return f"Found {len(rows)} project(s) with latest annual payment status ({summary}).", df
 
+    if tool_name == "get_license_eop_reconciliation":
+        all_rows = build_license_reconciliation(projects, invoices, _normalize_project_status)
+        rows = filter_reconciliation(
+            all_rows,
+            project=args.get("project"),
+            country=args.get("country"),
+            project_status=args.get("project_status"),
+            paid_year=args.get("paid_year"),
+            needs_update=args.get("needs_update"),
+        )
+        if not rows:
+            return "No projects match that License EOP reconciliation question. (Read-only: no License EOP was changed.)", None
+        need_rows = [r for r in rows if r["Needs EOP Update?"] == "Yes"]
+        low_count = sum(1 for r in need_rows if r["Confidence"] == "Low")
+        year_txt = f" with Year {args['paid_year']} paid" if args.get("paid_year") is not None else ""
+        summary = (
+            f"Found {len(rows)} project(s){year_txt}; {len(need_rows)} need a License EOP update"
+            f" ({len(need_rows) - low_count} high confidence, {low_count} low confidence"
+            f" - verify manually). Expected EOP = license start date + the highest consecutively paid "
+            "maintenance year (Y1, Y2, ...) from the full invoice history. Read-only: no License EOP was changed."
+        )
+        df = pd.DataFrame([{col: r.get(col) for col in LICENSE_RECONCILIATION_COLUMNS} for r in rows])
+        return summary, df
+
     if tool_name == "get_camera_statistics":
         rows = list(projects)
         status_arg = args.get("status")
@@ -2465,7 +2514,16 @@ def _llm_parse_data_question(question: str) -> Optional[dict]:
             "LATEST already-due annual license/maintenance invoice (based on the project's recurring "
             "Annual Payment Month, not merely its most recent or highest-numbered invoice) and whether "
             "THAT specific invoice is paid: Paid, Unpaid, Not Yet Due, or No Annual Invoice Found. "
-            "All-time historical totals are included for reference only.\n\n"
+            "All-time historical totals are included for reference only.\n"
+            "- License EOP reconciliation: if the question asks whether a paid year (Year 1 / Year 2 / "
+            "Y1 / Y2 ...) was reflected in the License EOP — e.g. 'projects with Year 1 paid but License "
+            "EOP not updated', 'Year 2 paid but EOP not updated', 'paid licenses where the current "
+            "License EOP is earlier than the EOP justified by payments', 'expected license EOP', 'which "
+            "licenses need their EOP updated' — use get_license_eop_reconciliation (NOT "
+            "get_license_payment_status, which only sees the latest annual invoice). Year 'N' paid but "
+            "EOP not updated -> paid_year=N. 'EOP earlier than justified by payments' / 'needs EOP "
+            "update' with no specific year -> needs_update='yes'. Add project/country/project_status "
+            "only if the question names them. This tool is read-only.\n\n"
             f"Tool catalog:\n{_ask_data_tool_catalog_text()}\n\n"
             f"Question: {question}"
         )
