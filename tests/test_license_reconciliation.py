@@ -49,17 +49,23 @@ class TestExpectedEop(unittest.TestCase):
         self.assertEqual(r["Confidence"], "High")
 
     def test_eop_already_updated_is_not_flagged(self):
-        r = reconcile_project(project(eop=D(2027, 3, 1)), [inv("Y1"), inv("Y2")])
+        r = reconcile_project(project(eop=D(2027, 3, 12)), [inv("Y1"), inv("Y2")])
         self.assertEqual(r["Needs EOP Update?"], "No")
+        self.assertEqual(r["EOP vs Expected"], "Matches (exact)")
 
     def test_later_eop_is_never_flagged(self):
         r = reconcile_project(project(eop=D(2029, 1, 1)), [inv("Y1"), inv("Y2")])
         self.assertEqual(r["Needs EOP Update?"], "No")
         self.assertIn("Later", r["EOP vs Expected"])
 
-    def test_first_of_month_style_eop_counts_as_updated(self):
+    def test_first_of_month_eop_before_anniversary_is_flagged(self):
         r = reconcile_project(project(activation=D(2025, 3, 12), eop=D(2027, 3, 1)), [inv("Y1"), inv("Y2")])
-        self.assertEqual(r["Needs EOP Update?"], "No")
+        self.assertEqual(r["Needs EOP Update?"], "Yes")
+        self.assertEqual(r["Days Behind"], 11)
+
+    def test_paid_invoice_numbers_listed_per_year(self):
+        r = reconcile_project(project(), [inv("Y1", number=10), inv("Y2", number=20), inv("Y3", paid="No", number=30)])
+        self.assertEqual(r["Paid Invoice Numbers"], "Y1: 10, Y2: 20")
 
     def test_year2_paid_without_year1_does_not_count(self):
         r = reconcile_project(project(), [inv("Y1", paid="No"), inv("Y2")])
@@ -100,6 +106,7 @@ class TestExpectedEop(unittest.TestCase):
         p.installation_year = 2025
         r = reconcile_project(p, [inv("Y1")])
         self.assertTrue(r["License Start Date"].endswith("(est.)"))
+        self.assertEqual(r["Confidence"], "Low")
 
     def test_cancelled_project_is_noted(self):
         r = reconcile_project(project(eop=D(2025, 1, 1), status="cancelled"), [inv("Y1")], lambda s: s.title())

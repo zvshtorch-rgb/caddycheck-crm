@@ -7,7 +7,7 @@ Business rule (agreed wording: "if Year 1 is paid the license runs through the e
 also paid, through the end of Year 2 ..."):
 
   * License start date  = the project's activation date (fallback: 1 January of its installation year,
-    flagged as estimated in the Notes column).
+    flagged as estimated and always Low confidence = manual review).
   * "Year k" invoices   = invoice rows labelled Yk in the `invoices` table (maintenance_year), excluding
     cancelled rows, credit rows, trial rows and `Complementary` adjustment invoices (extra-camera top-ups
     must not block or fake a license year).
@@ -17,9 +17,8 @@ also paid, through the end of Year 2 ..."):
     Y1 unpaid, Y2 paid) stops the chain; the later paid years are listed in Notes instead of being trusted.
   * Expected License EOP = license start date + N whole years (end of license year N, same day-of-month as
     the start date). No paid year -> no expected EOP.
-  * Needs EOP update    = the current EOP is missing or earlier than the 1st day of the Expected EOP's month
-    (the CRM routinely sets EOPs to the 1st of a month, so "1 Nov" covers an expected "19 Nov"). A current
-    EOP that is LATER than expected (extension / grace period) is never flagged or proposed for lowering.
+  * Needs EOP update    = the current EOP is missing or earlier than the exact Expected EOP (anniversary).
+    A current EOP that is LATER than expected (extension / grace period) is never flagged or lowered.
   * Confidence          = "High" when the billing years of the Y1..YN invoices fit the start date (each Yk
     billed within +/-1 year of start year + k - 1). "Low" means the invoice history does not line up with the
     activation date (legacy history, re-installation, batch invoices with reused labels): the suggested
@@ -44,8 +43,8 @@ def add_years(base: datetime.date, years: int) -> datetime.date:
 
 
 def _covers(current: Optional[datetime.date], expected: datetime.date) -> bool:
-    """True when ``current`` reaches the first day of the expected EOP's month."""
-    return current is not None and current >= expected.replace(day=1)
+    """True when ``current`` reaches the exact expected EOP date."""
+    return current is not None and current >= expected
 
 
 def _as_date(value: Any) -> Optional[datetime.date]:
@@ -110,7 +109,7 @@ def reconcile_project(project, invoices: list, normalize_status: Callable[[str],
     start_estimated = False
     if start is None and getattr(project, "installation_year", None):
         start, start_estimated = datetime.date(int(project.installation_year), 1, 1), True
-        notes.append("License start date estimated from installation year (no activation date)")
+        notes.append("No activation date (start estimated from installation year) - manual review")
 
     by_year = {k: _license_year_rows(invoices, k) for k in range(1, MAX_YEAR + 1)}
     statuses = {k: year_status(rows) for k, rows in by_year.items()}
@@ -137,7 +136,7 @@ def reconcile_project(project, invoices: list, normalize_status: Callable[[str],
                 billed = getattr(row, "year", None)
                 if billed and abs(int(billed) - (start.year + k - 1)) > 1:
                     inconsistent.append(f"Y{k} billed {int(billed)}")
-    confidence = "High" if not inconsistent and start else "Low"
+    confidence = "High" if not inconsistent and start and not start_estimated else "Low"
     if inconsistent:
         shown = ", ".join(sorted(set(inconsistent))[:4])
         notes.append(f"Invoice history does not fit start date {start.isoformat()} ({shown}) - verify manually")
@@ -150,8 +149,8 @@ def reconcile_project(project, invoices: list, normalize_status: Callable[[str],
         needs_update, relation, gap_days = "Yes", "Missing EOP", None
     elif not _covers(current, expected):
         needs_update, relation, gap_days = "Yes", "Earlier than payments justify", (expected - current).days
-    elif current <= expected.replace(day=calendar.monthrange(expected.year, expected.month)[1]):
-        needs_update, relation, gap_days = "No", "Matches (same month)", max(0, (expected - current).days)
+    elif current <= expected:
+        needs_update, relation, gap_days = "No", "Matches (exact)", 0
     else:
         needs_update, relation, gap_days = "No", "Later than payments justify (no action)", -(current - expected).days
 
@@ -175,6 +174,9 @@ def reconcile_project(project, invoices: list, normalize_status: Callable[[str],
         "Y2 Paid?": statuses[2],
         "Y2 Payment Date": _last_payment_date(by_year[2]),
         "Highest Paid Maintenance Year": f"Y{highest}" if highest else "None",
+        "Paid Invoice Numbers": ", ".join(
+            f"Y{k}: {_numbers(by_year[k])}" for k in range(1, highest + 1) if by_year[k]
+        ),
         "Expected License EOP": iso(expected),
         "Needs EOP Update?": needs_update,
         "EOP vs Expected": relation,
@@ -216,7 +218,7 @@ def filter_reconciliation(
     """Apply the Ask Data filters.
 
     ``paid_year=k``: Year k is paid (part of the consecutive paid chain Y1..Yk) AND the current EOP does not
-    yet reach the month of start date + k years, i.e. the EOP was not updated for that paid year.
+    yet reach start date + k years, i.e. the EOP was not updated for that paid year.
     """
     out = []
     for r in rows:
@@ -241,6 +243,6 @@ def filter_reconciliation(
 PUBLIC_COLUMNS = [
     "Project", "Project Status", "Country", "License Start Date", "Current License EOP",
     "Y1 Invoice Number", "Y1 Paid?", "Y1 Payment Date", "Y2 Invoice Number", "Y2 Paid?", "Y2 Payment Date",
-    "Highest Paid Maintenance Year", "Expected License EOP", "Needs EOP Update?", "EOP vs Expected",
+    "Highest Paid Maintenance Year", "Paid Invoice Numbers", "Expected License EOP", "Needs EOP Update?", "EOP vs Expected",
     "Days Behind", "Confidence", "Later Years (Y3+)", "Notes",
 ]
