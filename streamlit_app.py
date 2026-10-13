@@ -996,8 +996,9 @@ def _get_next_invoice_number(invoices, source_name: str) -> int:
     return _supa_next_inv_no()
 
 
-def _suggest_month_invoice_number(month_projects, invoices, year: int, source_name: str) -> int:
-    """Prefer an existing invoice number for the selected month/year when possible."""
+def _suggest_month_invoice_number(month_projects, invoices, year: int, source_name: str, month: str = "") -> int:
+    """Reuse the number of an already-generated invoice for this month/year, else the next free number."""
+    month_marker = f"maintenance monthly-{month}-{year}".lower()
     month_project_keys = {
         _safe_str(project.project_name).strip().lower()
         for project in month_projects
@@ -1006,6 +1007,8 @@ def _suggest_month_invoice_number(month_projects, invoices, year: int, source_na
     candidates: dict[int, int] = {}
     for inv in invoices:
         if inv.year != year:
+            continue
+        if month_marker not in _safe_str(inv.description).strip().lower():
             continue
         project_key = _safe_str(inv.project_name).strip().lower()
         if project_key not in month_project_keys:
@@ -9063,7 +9066,7 @@ elif page == "📅 Monthly Invoice":
 
     col3, _invoice_spacer = st.columns([2, 3])
     with col3:
-        suggested_inv_no = _suggest_month_invoice_number(month_projects, invoices, int(sel_year), _data_path)
+        suggested_inv_no = _suggest_month_invoice_number(month_projects, invoices, int(sel_year), _data_path, sel_month)
         invoice_number = st.number_input("Invoice Number",
                                          min_value=1, value=suggested_inv_no, step=1)
     inv_no = int(invoice_number)
