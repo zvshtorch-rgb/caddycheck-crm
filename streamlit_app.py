@@ -7404,14 +7404,6 @@ elif page == "🔐 Licenses":
         preset_options = ["All", "Previous month only"]
         selected_preset = st.selectbox("History preset", preset_options, key="license_history_preset")
 
-        history_dates = [row["Changed At Date"] for row in history_rows if row["Changed At Date"]]
-        min_history_date = min(history_dates) if history_dates else today
-        max_history_date = max(history_dates) if history_dates else today
-
-        new_eop_dates = [row["New License EOP Date"] for row in history_rows if row["New License EOP Date"]]
-        min_new_eop_date = min(new_eop_dates) if new_eop_dates else today
-        max_new_eop_date = max(new_eop_dates) if new_eop_dates else today
-
         hf1, hf2, hf3 = st.columns(3)
         history_project_search = hf1.text_input("Search project", key="license_history_project_search")
         history_old_eop_search = hf2.text_input(
@@ -7425,26 +7417,18 @@ elif page == "🔐 Licenses":
 
         hf4, hf5 = st.columns(2)
         history_from_date = hf4.date_input(
-            "Changed from date", value=min_history_date,
-            min_value=min_history_date, max_value=max_history_date,
-            key="license_history_from_date",
+            "Changed from date", value=None, key="license_history_from_date_v2",
         )
         history_to_date = hf5.date_input(
-            "Changed to date", value=max_history_date,
-            min_value=min_history_date, max_value=max_history_date,
-            key="license_history_to_date",
+            "Changed to date", value=None, key="license_history_to_date_v2",
         )
 
         hf6, hf7 = st.columns(2)
         new_eop_from_date = hf6.date_input(
-            "New License EOP from date", value=min_new_eop_date,
-            min_value=min_new_eop_date, max_value=max_new_eop_date,
-            key="license_history_new_eop_from_date",
+            "New License EOP from date", value=None, key="license_history_new_eop_from_date_v2",
         )
         new_eop_to_date = hf7.date_input(
-            "New License EOP to date", value=max_new_eop_date,
-            min_value=min_new_eop_date, max_value=max_new_eop_date,
-            key="license_history_new_eop_to_date",
+            "New License EOP to date", value=None, key="license_history_new_eop_to_date_v2",
         )
 
         if selected_preset == "Previous month only":
@@ -7465,22 +7449,28 @@ elif page == "🔐 Licenses":
             history_df = history_df[
                 history_df["New License EOP"].str.contains(history_new_eop_search.strip(), case=False, na=False)
             ]
-        if history_from_date > history_to_date:
+        if history_from_date and history_to_date and history_from_date > history_to_date:
             st.error("'Changed from date' must be on or before 'Changed to date'.")
         else:
-            history_df = history_df[
-                history_df["Changed At Date"].apply(
-                    lambda d: d is not None and history_from_date <= d <= history_to_date
-                )
-            ]
-        if new_eop_from_date > new_eop_to_date:
+            if history_from_date:
+                history_df = history_df[
+                    history_df["Changed At Date"].apply(lambda d: d is not None and d >= history_from_date)
+                ]
+            if history_to_date:
+                history_df = history_df[
+                    history_df["Changed At Date"].apply(lambda d: d is not None and d <= history_to_date)
+                ]
+        if new_eop_from_date and new_eop_to_date and new_eop_from_date > new_eop_to_date:
             st.error("'New License EOP from date' must be on or before 'New License EOP to date'.")
         else:
-            history_df = history_df[
-                history_df["New License EOP Date"].apply(
-                    lambda d: d is not None and new_eop_from_date <= d <= new_eop_to_date
-                )
-            ]
+            if new_eop_from_date:
+                history_df = history_df[
+                    history_df["New License EOP Date"].apply(lambda d: d is not None and d >= new_eop_from_date)
+                ]
+            if new_eop_to_date:
+                history_df = history_df[
+                    history_df["New License EOP Date"].apply(lambda d: d is not None and d <= new_eop_to_date)
+                ]
 
         visible_history_df = history_df[["Changed At", "Project", "Country", "Old License EOP", "New License EOP", "Action", "Source"]]
         st.download_button(
