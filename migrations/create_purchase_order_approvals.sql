@@ -199,3 +199,4 @@ REVOKE ALL ON incoming_order_emails, purchase_orders, order_approvals, crm_notif
 
 -- Reload PostgREST schema cache so the new tables are immediately queryable.
 NOTIFY pgrst, 'reload schema';
+ 
