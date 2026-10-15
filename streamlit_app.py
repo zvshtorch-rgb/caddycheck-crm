@@ -9428,6 +9428,25 @@ elif page == "✅ Order Approvals":
                 if _pdf_url:
                     st.markdown(f"📄 [Open PDF]({_pdf_url})")
 
+                if _o.get("status") == "pending_approval":
+                    _delivery = _oas.get_order_delivery_state(_o)
+                    if _delivery and _delivery.get("intake_status") == "error":
+                        _tries = _delivery.get("attempt_count", 0)
+                        _gave_up = _tries >= _oas.MAX_INTAKE_ATTEMPTS
+                        st.warning(
+                            f"⚠️ The approval email has not been delivered ({_tries} failed attempt(s))"
+                            + (" — automatic retries are exhausted." if _gave_up else " — it will be retried automatically.")
+                            + f"  \nLast error: {_delivery.get('error_message') or _delivery.get('email_last_error') or '—'}"
+                        )
+                        if CAN_EDIT and st.button("🔁 Retry approval email", key=f"retry_intake_{_o['id']}"):
+                            _retry_ok = _oas.retry_order_intake(_o["id"])
+                            st.session_state["_flash_success"] = (
+                                "Retry queued: the poller will resend the approval email on its next run (within 15 minutes)."
+                                if _retry_ok else "Nothing to retry for this order."
+                            )
+                            st.session_state["_flash_success_page"] = "✅ Order Approvals"
+                            st.rerun()
+
                 if CAN_EDIT and _o.get("status") == "pending_approval":
                     st.markdown("**Manual decision (admin):**")
                     _ac1, _ac2, _ac3 = st.columns(3)

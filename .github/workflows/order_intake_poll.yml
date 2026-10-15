@@ -1,13 +1,36 @@
 name: Order intake poller
 
-# Runs the standalone purchase-order email poller on a schedule.
-# This does NOT use the Streamlit runtime — it is a plain Python process.
+# Plain Python process (no Streamlit runtime) that scans the shared order mailbox
+# through Microsoft Graph. Scheduled runs are LIVE only when the repository
+# variable ORDER_INTAKE_LIVE is "true"; otherwise they are read-only dry-runs.
+# Manual runs pick their mode explicitly.
 
 on:
   schedule:
-    # Every day at 08:00 UTC, Sunday–Friday (skips Saturday).
-    - cron: "0 8 * * 0-5"
-  workflow_dispatch: {}  # allow manual runs from the Actions tab
+    # Every 15 minutes, 24/7. GitHub may start scheduled runs a few minutes late.
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "check = connectivity/schema only, dry-run = list only, live = process"
+        type: choice
+        options: [check, dry-run, live]
+        default: check
+      since:
+        description: "Targeted backfill start (ISO-8601). Live mode also needs only_from or subject_contains."
+        required: false
+        default: ""
+      only_from:
+        description: "Only messages whose sender contains this text"
+        required: false
+        default: ""
+      subject_contains:
+        description: "Only messages whose subject contains this text"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
 
 # Prevent overlapping runs if a poll takes longer than the interval.
 concurrency:
@@ -41,25 +64,42 @@ jobs:
           # Approval links / recipients
           APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
           ORDER_APPROVAL_CEO_EMAIL: ${{ secrets.ORDER_APPROVAL_CEO_EMAIL }}
-          # Mailbox (IMAP provider shown; switch to graph vars if needed)
-          ORDER_INTAKE_PROVIDER: ${{ secrets.ORDER_INTAKE_PROVIDER }}
-          ORDER_INTAKE_IMAP_HOST: ${{ secrets.ORDER_INTAKE_IMAP_HOST }}
-          ORDER_INTAKE_IMAP_PORT: ${{ secrets.ORDER_INTAKE_IMAP_PORT }}
-          ORDER_INTAKE_IMAP_USERNAME: ${{ secrets.ORDER_INTAKE_IMAP_USERNAME }}
-          ORDER_INTAKE_IMAP_PASSWORD: ${{ secrets.ORDER_INTAKE_IMAP_PASSWORD }}
-          ORDER_INTAKE_IMAP_FOLDER: ${{ secrets.ORDER_INTAKE_IMAP_FOLDER }}
-          # Microsoft Graph provider (only needed if ORDER_INTAKE_PROVIDER=graph)
+          # Mailbox access: Microsoft Graph application authentication
+          ORDER_INTAKE_PROVIDER: graph
           ORDER_INTAKE_GRAPH_TENANT_ID: ${{ secrets.ORDER_INTAKE_GRAPH_TENANT_ID }}
           ORDER_INTAKE_GRAPH_CLIENT_ID: ${{ secrets.ORDER_INTAKE_GRAPH_CLIENT_ID }}
           ORDER_INTAKE_GRAPH_CLIENT_SECRET: ${{ secrets.ORDER_INTAKE_GRAPH_CLIENT_SECRET }}
           ORDER_INTAKE_GRAPH_MAILBOX: ${{ secrets.ORDER_INTAKE_GRAPH_MAILBOX }}
           ORDER_INTAKE_GRAPH_FOLDER: ${{ secrets.ORDER_INTAKE_GRAPH_FOLDER }}
-          # SMTP (for the CEO approval email)
-          SMTP_HOST: ${{ secrets.SMTP_HOST }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT }}
-          SMTP_USE_TLS: ${{ secrets.SMTP_USE_TLS }}
-          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
-          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-          SMTP_SENDER_EMAIL: ${{ secrets.SMTP_SENDER_EMAIL }}
-          SMTP_SENDER_NAME: ${{ secrets.SMTP_SENDER_NAME }}
-        run: python order_intake_poll.py
+          # Window / safety settings (repository variables, not secrets)
+          ORDER_INTAKE_MIN_RECEIVED: ${{ vars.ORDER_INTAKE_MIN_RECEIVED }}
+          ORDER_INTAKE_LOOKBACK_HOURS: ${{ vars.ORDER_INTAKE_LOOKBACK_HOURS }}
+          ORDER_INTAKE_MAX_NEW_PER_RUN: ${{ vars.ORDER_INTAKE_MAX_NEW_PER_RUN }}
+          # Run selection
+          LIVE_ENABLED: ${{ vars.ORDER_INTAKE_LIVE }}
+          IN_MODE: ${{ inputs.mode }}
+          IN_SINCE: ${{ inputs.since }}
+          IN_ONLY_FROM: ${{ inputs.only_from }}
+          IN_SUBJECT: ${{ inputs.subject_contains }}
+        run: |
+          set -euo pipefail
+          mode="${IN_MODE:-}"
+          if [ -z "$mode" ]; then
+            if [ "${LIVE_ENABLED:-}" = "true" ]; then mode=live; else mode=dry-run; fi
+          fi
+          args=()
+          case "$mode" in
+            check) args+=(--check) ;;
+            dry-run) args+=(--dry-run) ;;
+            live) ;;
+            *) echo "::error::Unknown mode: $mode"; exit 1 ;;
+          esac
+          if [ "$mode" = "live" ] && [ -z "${IN_SINCE:-}" ] && [ "${LIVE_ENABLED:-}" != "true" ]; then
+            echo "::error::Rolling live processing is disabled (repository variable ORDER_INTAKE_LIVE is not 'true'). For a one-off import use 'since' with 'only_from' or 'subject_contains'."
+            exit 1
+          fi
+          if [ -n "${IN_SINCE:-}" ]; then args+=(--since "$IN_SINCE"); fi
+          if [ -n "${IN_ONLY_FROM:-}" ]; then args+=(--only-from "$IN_ONLY_FROM"); fi
+          if [ -n "${IN_SUBJECT:-}" ]; then args+=(--subject-contains "$IN_SUBJECT"); fi
+          echo "Order intake mode: $mode"
+          python order_intake_poll.py "${args[@]}"

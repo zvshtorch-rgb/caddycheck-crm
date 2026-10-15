@@ -303,7 +303,8 @@ ingested and routed to the CEO for approval via a secure email link.
 
 ### How it works
 
-1. `order_intake_poll.py` reads the configured mailbox for unread emails with a PDF.
+1. `order_intake_poll.py` scans the order mailbox through Microsoft Graph for emails with a PDF
+   received in a rolling 7-day window, **whatever their read/unread state** (read state is never changed).
 2. Each PDF is stored privately in Supabase; a `purchase_orders` row is created.
 3. A secure, single-use approval token (valid 7 days) is generated — **only its
    SHA-256 hash is stored** — and the CEO is emailed a link
@@ -315,9 +316,36 @@ ingested and routed to the CEO for approval via a secure email link.
 ### Running the poller
 
 ```bash
-py order_intake_poll.py            # process new emails
-py order_intake_poll.py --dry-run  # inspect without writing anything
+py order_intake_poll.py --check    # token + mailbox + database-schema checks only
+py order_intake_poll.py --dry-run  # list what would be processed, write nothing
+py order_intake_poll.py            # live processing
 ```
+
+Exit codes: `0` ok, `1` fatal (configuration, authentication, mailbox access, database not
+migrated), `2` some messages failed. Any non-zero exit fails the GitHub Actions run.
+
+Targeted backfill of one missed email (does not import anything else). In live mode `--since`
+must be combined with a specific `--only-from` (full address or domain) and/or
+`--subject-contains` (at least 6 characters), may not be older than 30 days, and is limited by
+`--max-new`:
+
+```bash
+py order_intake_poll.py --since 2026-10-15T08:00:00Z --only-from buyer@customer.example
+```
+
+**Reliability model.** Each email is keyed by its RFC message id and its immutable Graph id
+(both unique in the database). A processing lease prevents overlapping runs from working on the
+same email, and every step (store PDF, create purchase order, create approval token, send
+approval email) is resumable: retries continue from the last completed step and never delete
+intake rows. PDF SHA-256 hashes only *flag* possible duplicates (CRM notification); they never
+reject an email. The one-order-per-email rule, customer order-reference revision handling,
+CEO approval link, and automatic invoice creation are unchanged.
+
+**Remaining duplicate-email risk.** If the approval email is sent but the database update that
+records it fails (or the process dies in that instant), the next attempt after the 20-minute
+lease sends the email again, marked `[Resent]`, with a rotated token (the earlier link stops
+working). No second purchase order or approval row is ever created. After 5 failed attempts an
+email is abandoned, a CRM error notification is raised, and the run summary reports it.
 
 `order_intake_poll.py` is a **standalone Python process** — it does *not* need the
 Streamlit runtime. The Streamlit Cloud app cannot run the poller reliably (it only
@@ -365,21 +393,34 @@ Recommended trigger: *Daily*, repeat task every *5 or 10 minutes* for a duration
 
 A ready-made workflow lives at
 [.github/workflows/order_intake_poll.yml](.github/workflows/order_intake_poll.yml).
-It runs every 10 minutes (change the `cron` to `*/5 * * * *` for every 5 minutes),
-installs `requirements.txt`, and runs `python order_intake_poll.py`.
+It runs every 15 minutes (24/7), installs `requirements.txt`, and runs
+`python order_intake_poll.py`. Scheduled runs are **live only when the repository variable
+`ORDER_INTAKE_LIVE` is `true`**; otherwise they are read-only dry-runs. Manual runs choose
+`check`, `dry-run` or `live`; a manual *rolling* live run is also refused unless
+`ORDER_INTAKE_LIVE` is `true`, while a manual live **backfill** (`since` + `only_from` or
+`subject_contains`) is allowed at any time. Each run writes a summary (scanned, eligible,
+skipped, created, emailed, failed) to the Actions run page.
+
+Logs and the run summary are public-safe: they contain counts, short message references,
+receive times and exception types only — never credentials, subjects, sender addresses, project
+names, PDF contents or exception messages (those are stored privately in the database and shown
+to admins on the Order Approvals page).
+
+If the approval email keeps failing, the order stays listed as *Pending approval* with a warning
+and a **Retry approval email** button (admins); the poller resends it on its next run.
 
 Add the configuration as **GitHub repository secrets**
 (*Settings → Secrets and variables → Actions → New repository secret*):
 
 - Supabase: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`
 - Approval links / recipients: `APP_BASE_URL`, `ORDER_APPROVAL_CEO_EMAIL`
-- Mailbox (IMAP): `ORDER_INTAKE_PROVIDER`, `ORDER_INTAKE_IMAP_HOST`,
-  `ORDER_INTAKE_IMAP_PORT`, `ORDER_INTAKE_IMAP_USERNAME`,
-  `ORDER_INTAKE_IMAP_PASSWORD`, `ORDER_INTAKE_IMAP_FOLDER`
-- Mailbox (Graph, only if `ORDER_INTAKE_PROVIDER=graph`):
-  `ORDER_INTAKE_GRAPH_TENANT_ID`, `ORDER_INTAKE_GRAPH_CLIENT_ID`,
-  `ORDER_INTAKE_GRAPH_CLIENT_SECRET`, `ORDER_INTAKE_GRAPH_MAILBOX`,
-  `ORDER_INTAKE_GRAPH_FOLDER`
+- Mailbox (Microsoft Graph application authentication): `ORDER_INTAKE_GRAPH_TENANT_ID`,
+  `ORDER_INTAKE_GRAPH_CLIENT_ID`, `ORDER_INTAKE_GRAPH_CLIENT_SECRET`,
+  `ORDER_INTAKE_GRAPH_MAILBOX`, `ORDER_INTAKE_GRAPH_FOLDER`
+- Repository **variables** (Settings → Secrets and variables → Actions → Variables):
+  `ORDER_INTAKE_MIN_RECEIVED` (go-live timestamp; required for live runs),
+  `ORDER_INTAKE_LIVE` (`true` enables live scheduled runs), optional
+  `ORDER_INTAKE_LOOKBACK_HOURS` (default 168) and `ORDER_INTAKE_MAX_NEW_PER_RUN` (default 10)
 - SMTP: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USE_TLS`, `SMTP_USERNAME`,
   `SMTP_PASSWORD`, `SMTP_SENDER_EMAIL`, `SMTP_SENDER_NAME`
 
@@ -395,30 +436,29 @@ Shared:
 | `SUPABASE_SERVICE_ROLE_KEY` | Service role key (poller only). |
 | `APP_BASE_URL` | Public base URL of the Streamlit app, e.g. `https://your-app.streamlit.app`. |
 | `ORDER_APPROVAL_CEO_EMAIL` | CEO recipient(s), comma-separated. |
-| `ORDER_INTAKE_PROVIDER` | `imap` (default, also Gmail/O365 IMAP) or `graph`. |
+| `ORDER_INTAKE_PROVIDER` | `graph` (default and only supported poller provider; a shared mailbox cannot use IMAP password login). |
 
-IMAP provider (`ORDER_INTAKE_PROVIDER=imap`):
-
-| Setting | Description |
-| --- | --- |
-| `ORDER_INTAKE_IMAP_HOST` | e.g. `imap.gmail.com` or `outlook.office365.com`. |
-| `ORDER_INTAKE_IMAP_PORT` | Default `993`. |
-| `ORDER_INTAKE_IMAP_USERNAME` | Mailbox username. |
-| `ORDER_INTAKE_IMAP_PASSWORD` | Mailbox password / app password. |
-| `ORDER_INTAKE_IMAP_FOLDER` | Default `INBOX`. |
-
-Microsoft Graph provider (`ORDER_INTAKE_PROVIDER=graph`, preferred for Office 365):
+Microsoft Graph application authentication (client credentials; works with shared mailboxes,
+no licence or mailbox password needed):
 
 | Setting | Description |
 | --- | --- |
 | `ORDER_INTAKE_GRAPH_TENANT_ID` | Azure AD tenant id. |
 | `ORDER_INTAKE_GRAPH_CLIENT_ID` | App registration client id. |
-| `ORDER_INTAKE_GRAPH_CLIENT_SECRET` | App registration secret. |
-| `ORDER_INTAKE_GRAPH_MAILBOX` | Mailbox UPN/object id to read. |
+| `ORDER_INTAKE_GRAPH_CLIENT_SECRET` | App registration secret (expires; rotate before the expiry date). |
+| `ORDER_INTAKE_GRAPH_MAILBOX` | Shared mailbox address, e.g. `orders@your-domain.example`. |
 | `ORDER_INTAKE_GRAPH_FOLDER` | Default `Inbox`. |
 
-Email sending reuses the existing SMTP settings. When the poller runs standalone
-(Task Scheduler / GitHub Actions) it has no Streamlit secrets, so configure SMTP
+The app registration needs the **application** permissions `Mail.Read` (read the mailbox; the
+poller never modifies mail) and `Mail.Send` (CEO approval email, sent from the same mailbox),
+with admin consent. If an Application Access Policy or RBAC for Applications scope restricts the
+app, the shared mailbox must be included.
+
+CEO approval emails are sent through the same Graph credentials (no SMTP needed by the poller).
+SMTP settings below apply only to the other CRM email features.
+
+Email sending for the rest of the CRM reuses the existing SMTP settings. When running standalone
+(Task Scheduler / GitHub Actions) there are no Streamlit secrets, so configure SMTP
 via these environment variables (they override the app config only when set):
 
 | Setting | Description |

@@ -21,12 +21,42 @@ import email
 import imaplib
 import logging
 import os
+import re
+import time
 from dataclasses import dataclass, field
 from email.header import decode_header, make_header
 from email.utils import parsedate_to_datetime
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
+
+_sleep = time.sleep
+
+
+class IntakeError(Exception):
+    """A mailbox/Graph failure that must fail the run.
+
+    ``kind`` is one of: ``config`` | ``auth`` | ``mailbox`` | ``transient``.
+    """
+
+    def __init__(self, kind: str, message: str, status: Optional[int] = None, code: str = "") -> None:
+        super().__init__(message)
+        self.kind = kind
+        self.status = status
+        self.code = code
+
+
+@dataclass
+class MessageHeader:
+    """Metadata of a mailbox message that has attachments (no attachment bytes)."""
+
+    message_id: str  # RFC internetMessageId; deduplication key shared with legacy rows
+    graph_id: str  # immutable Graph id (stable across folder moves)
+    from_address: str
+    subject: str
+    received_at: Optional[datetime.datetime]
+    body_preview: str = ""
 
 
 @dataclass
@@ -73,7 +103,7 @@ def extract_pdf_text(pdf_bytes: bytes) -> str:
                 text_parts.append(page.extract_text() or "")
         return "\n".join(part for part in text_parts if part).strip()
     except Exception as exc:
-        logger.info("PDF text extraction skipped: %s", exc)
+        logger.info("PDF text extraction skipped (%s)", type(exc).__name__)
         return ""
 
 
@@ -224,21 +254,86 @@ class GraphEmailProvider(EmailProvider):
         self.client_secret = _get_setting("ORDER_INTAKE_GRAPH_CLIENT_SECRET")
         self.mailbox = _get_setting("ORDER_INTAKE_GRAPH_MAILBOX")  # user UPN/objectId
         self.folder = _get_setting("ORDER_INTAKE_GRAPH_FOLDER", "Inbox") or "Inbox"
-        self._processed_ids: List[str] = []
+        self._access_token = ""
+        self._token_expiry = 0.0
 
     def is_configured(self) -> bool:
         return bool(self.tenant_id and self.client_id and self.client_secret and self.mailbox)
 
-    def _token(self) -> str:
+    def missing_settings(self) -> List[str]:
+        """Names (never values) of required settings that are not set."""
+        required = {
+            "ORDER_INTAKE_GRAPH_TENANT_ID": self.tenant_id,
+            "ORDER_INTAKE_GRAPH_CLIENT_ID": self.client_id,
+            "ORDER_INTAKE_GRAPH_CLIENT_SECRET": self.client_secret,
+            "ORDER_INTAKE_GRAPH_MAILBOX": self.mailbox,
+        }
+        return [name for name, value in required.items() if not value]
+
+    # -- HTTP helpers ----------------------------------------------------------
+    _RETRY_STATUSES = (429, 500, 502, 503, 504)
+    _MAX_ATTEMPTS = 3
+
+    @staticmethod
+    def _retry_delay(resp: Any, attempt: int) -> float:
+        try:
+            return max(0.0, min(float(resp.headers.get("Retry-After", 2 * attempt)), 30.0))
+        except (TypeError, ValueError):
+            return float(2 * attempt)
+
+    def _http(self, method: str, url: str, **kwargs: Any) -> Any:
         import requests
 
-        if not all([self.tenant_id, self.client_id, self.client_secret, self.mailbox]):
-            raise RuntimeError(
-                "Graph settings missing. Set ORDER_INTAKE_GRAPH_TENANT_ID/"
-                "CLIENT_ID/CLIENT_SECRET/MAILBOX."
-            )
-        url = f"https://login.microsoftonline.com/{self.tenant_id}/oauth2/v2.0/token"
-        resp = requests.post(
+        for attempt in range(1, self._MAX_ATTEMPTS + 1):
+            try:
+                resp = requests.request(method, url, timeout=30, **kwargs)
+            except requests.RequestException as exc:
+                if attempt == self._MAX_ATTEMPTS:
+                    raise IntakeError("transient", f"network error: {type(exc).__name__}") from None
+                _sleep(2 * attempt)
+                continue
+            if resp.status_code in self._RETRY_STATUSES and attempt < self._MAX_ATTEMPTS:
+                _sleep(self._retry_delay(resp, attempt))
+                continue
+            return resp
+        raise IntakeError("transient", "request retries exhausted")  # pragma: no cover
+
+    @staticmethod
+    def _error_from_response(resp: Any, what: str, token_endpoint: bool = False) -> IntakeError:
+        code, detail = "", ""
+        try:
+            body = resp.json()
+            err = body.get("error")
+            if isinstance(err, dict):
+                code = str(err.get("code") or "")
+                detail = str(err.get("message") or "")
+            else:
+                code = str(err or "")
+                detail = str(body.get("error_description") or "")
+        except Exception:
+            pass
+        # Free-text descriptions can echo tenant/client ids or mailbox addresses; keep only the codes.
+        aad_code = re.search(r"AADSTS\d+", detail)
+        detail = aad_code.group(0) if aad_code else ""
+        status = resp.status_code
+        if (token_endpoint and status < 500) or status in (401, 403):
+            kind = "auth"
+        elif status == 404:
+            kind = "mailbox"
+        else:
+            kind = "transient"
+        message = f"{what} failed: HTTP {status} {code} {detail}".strip()
+        return IntakeError(kind, message, status=status, code=code)
+
+    def _token(self) -> str:
+        if self._access_token and time.time() < self._token_expiry - 60:
+            return self._access_token
+        missing = self.missing_settings()
+        if missing:
+            raise IntakeError("config", "Graph settings missing: " + ", ".join(missing))
+        url = f"https://login.microsoftonline.com/{quote(self.tenant_id, safe='')}/oauth2/v2.0/token"
+        resp = self._http(
+            "POST",
             url,
             data={
                 "client_id": self.client_id,
@@ -246,108 +341,147 @@ class GraphEmailProvider(EmailProvider):
                 "scope": "https://graph.microsoft.com/.default",
                 "grant_type": "client_credentials",
             },
-            timeout=30,
         )
-        resp.raise_for_status()
-        return resp.json()["access_token"]
+        if not resp.ok:
+            raise self._error_from_response(resp, "Token request", token_endpoint=True)
+        try:
+            payload = resp.json()
+            self._access_token = payload["access_token"]
+            self._token_expiry = time.time() + int(payload.get("expires_in", 3600))
+        except (ValueError, KeyError, TypeError):
+            raise IntakeError("auth", "Token request returned no access token") from None
+        return self._access_token
 
-    def fetch_unread_with_pdf(self) -> List[IncomingMessage]:
-        import requests
+    def _headers(self) -> Dict[str, str]:
+        # ImmutableId keeps message ids stable if a message is moved between folders.
+        return {"Authorization": f"Bearer {self._token()}", "Prefer": 'IdType="ImmutableId"'}
 
-        token = self._token()
-        headers = {"Authorization": f"Bearer {token}"}
-        messages: List[IncomingMessage] = []
-        self._processed_ids = []
+    def _mailbox_url(self, suffix: str) -> str:
+        return f"{self.GRAPH_ROOT}/users/{quote(self.mailbox, safe='@')}{suffix}"
 
-        list_url = (
-            f"{self.GRAPH_ROOT}/users/{self.mailbox}/mailFolders/"
-            f"{self.folder}/messages"
-            "?$filter=isRead eq false and hasAttachments eq true"
-            "&$select=id,subject,from,receivedDateTime,bodyPreview,internetMessageId"
-            "&$top=25"
+    def _folder_path(self) -> str:
+        return f"/mailFolders/{quote(self.folder, safe='')}"
+
+    # -- Read-only mailbox operations -----------------------------------------
+    def preflight(self) -> Dict[str, Any]:
+        """Verify token acquisition and read access to the configured folder."""
+        missing = self.missing_settings()
+        if missing:
+            raise IntakeError("config", "Graph settings missing: " + ", ".join(missing))
+        resp = self._http(
+            "GET",
+            self._mailbox_url(self._folder_path()),
+            headers=self._headers(),
+            params={"$select": "id,displayName,totalItemCount,unreadItemCount"},
         )
-        resp = requests.get(list_url, headers=headers, timeout=30)
-        resp.raise_for_status()
-        for item in resp.json().get("value", []):
-            msg = self._parse_message(item, headers)
-            if msg is not None:
-                messages.append(msg)
-        return messages
+        if not resp.ok:
+            raise self._error_from_response(resp, "Mailbox folder check")
+        data = resp.json()
+        return {
+            "folder": data.get("displayName") or self.folder,
+            "total_items": data.get("totalItemCount"),
+            "unread_items": data.get("unreadItemCount"),
+        }
 
-    def _parse_message(self, item: Dict[str, Any], headers: Dict[str, str]) -> Optional[IncomingMessage]:
-        import requests
+    def list_message_headers(self, since: datetime.datetime, max_pages: int = 20) -> List[MessageHeader]:
+        """List messages with attachments received at/after ``since``, any read state."""
+        since_utc = since.astimezone(datetime.timezone.utc)
+        params: Optional[Dict[str, str]] = {
+            "$filter": f"receivedDateTime ge {since_utc:%Y-%m-%dT%H:%M:%SZ} and hasAttachments eq true",
+            "$orderby": "receivedDateTime asc",
+            "$select": "id,internetMessageId,subject,from,receivedDateTime,bodyPreview",
+            "$top": "50",
+        }
+        url: Optional[str] = self._mailbox_url(self._folder_path() + "/messages")
+        headers: List[MessageHeader] = []
+        pages = 0
+        while url:
+            pages += 1
+            if pages > max_pages:
+                raise IntakeError(
+                    "mailbox", f"Message listing exceeded {max_pages} pages; narrow the lookback window"
+                )
+            resp = self._http("GET", url, headers=self._headers(), params=params)
+            if not resp.ok:
+                raise self._error_from_response(resp, "Message listing")
+            payload = resp.json()
+            for item in payload.get("value", []):
+                headers.append(self._to_header(item))
+            url = payload.get("@odata.nextLink")
+            params = None  # nextLink already carries the query
+        return headers
 
-        msg_id = item.get("id", "")
-        att_url = (
-            f"{self.GRAPH_ROOT}/users/{self.mailbox}/messages/{msg_id}/attachments"
-        )
-        att_resp = requests.get(att_url, headers=headers, timeout=30)
-        att_resp.raise_for_status()
-
-        pdf_filename = ""
-        pdf_bytes = b""
-        for att in att_resp.json().get("value", []):
-            name = att.get("name", "")
-            ctype = att.get("contentType", "")
-            if name.lower().endswith(".pdf") or ctype == "application/pdf":
-                content_b64 = att.get("contentBytes")
-                if content_b64:
-                    import base64
-
-                    pdf_filename = name or "purchase_order.pdf"
-                    pdf_bytes = base64.b64decode(content_b64)
-                    break
-
-        if not pdf_bytes:
-            return None
-
+    @staticmethod
+    def _to_header(item: Dict[str, Any]) -> MessageHeader:
+        graph_id = str(item.get("id") or "")
         received_at: Optional[datetime.datetime] = None
         try:
             received_at = datetime.datetime.fromisoformat(
                 str(item.get("receivedDateTime", "")).replace("Z", "+00:00")
             )
-        except Exception:
+        except ValueError:
             received_at = None
-
-        from_address = ""
         try:
-            from_address = item["from"]["emailAddress"]["address"]
-        except Exception:
+            from_address = item["from"]["emailAddress"]["address"] or ""
+        except (KeyError, TypeError):
             from_address = ""
-
-        return IncomingMessage(
-            message_id=item.get("internetMessageId") or msg_id,
-            provider=self.name,
+        return MessageHeader(
+            message_id=str(item.get("internetMessageId") or graph_id),
+            graph_id=graph_id,
             from_address=from_address,
-            subject=item.get("subject", ""),
+            subject=str(item.get("subject") or ""),
             received_at=received_at,
-            body_text=item.get("bodyPreview", ""),
-            pdf_filename=pdf_filename,
-            pdf_bytes=pdf_bytes,
-            raw_id=msg_id,
+            body_preview=str(item.get("bodyPreview") or ""),
         )
 
-    def mark_processed(self, message: IncomingMessage) -> None:
-        import requests
+    def fetch_pdf_message(self, header: MessageHeader) -> Optional[IncomingMessage]:
+        """Download the first PDF attachment of a message, or None when it has none."""
+        base = self._mailbox_url(f"/messages/{quote(header.graph_id, safe='')}/attachments")
+        resp = self._http(
+            "GET",
+            base,
+            headers=self._headers(),
+            params={"$select": "id,name,contentType,size,isInline"},
+        )
+        if not resp.ok:
+            raise self._error_from_response(resp, "Attachment listing")
+        pdfs = [
+            att
+            for att in resp.json().get("value", [])
+            if str(att.get("name", "")).lower().endswith(".pdf")
+            or str(att.get("contentType", "")).lower() == "application/pdf"
+        ]
+        if not pdfs:
+            return None
+        att = pdfs[0]
+        raw = self._http(
+            "GET",
+            f"{base}/{quote(str(att.get('id', '')), safe='')}/$value",
+            headers=self._headers(),
+        )
+        if not raw.ok:
+            raise self._error_from_response(raw, "Attachment download")
+        if not raw.content:
+            return None
+        return IncomingMessage(
+            message_id=header.message_id,
+            provider=self.name,
+            from_address=header.from_address,
+            subject=header.subject,
+            received_at=header.received_at,
+            body_text=header.body_preview,
+            pdf_filename=str(att.get("name") or "purchase_order.pdf"),
+            pdf_bytes=raw.content,
+            raw_id=header.graph_id,
+            extra={"pdf_count": len(pdfs)},
+        )
 
-        if not message.raw_id:
-            return
-        try:
-            token = self._token()
-            url = f"{self.GRAPH_ROOT}/users/{self.mailbox}/messages/{message.raw_id}"
-            requests.patch(
-                url,
-                headers={"Authorization": f"Bearer {token}"},
-                json={"isRead": True},
-                timeout=30,
-            )
-        except Exception as exc:
-            logger.warning("Could not mark Graph message as read: %s", exc)
+    # Intentionally no mark_processed(): the Graph provider never changes read state.
 
 
 # ── Factory ───────────────────────────────────────────────────────────────────
 def get_email_provider() -> EmailProvider:
-    provider = (_get_setting("ORDER_INTAKE_PROVIDER", "imap") or "imap").lower()
+    provider = (_get_setting("ORDER_INTAKE_PROVIDER", "graph") or "graph").lower()
     if provider == "graph":
         return GraphEmailProvider()
     if provider in ("imap", "gmail"):

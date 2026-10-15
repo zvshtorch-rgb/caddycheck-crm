@@ -326,7 +326,7 @@ def send_graph_email(
     send_url = f"https://graph.microsoft.com/v1.0/users/{mailbox}/sendMail"
     resp = requests.post(send_url, json=payload, headers=headers, timeout=30)
     resp.raise_for_status()
-    logger.info("Graph email '%s' sent to %s", subject, recipients)
+    logger.info("Graph email sent to %d recipient(s)", len(recipients))
 
 
 def test_smtp_connection(config: dict) -> tuple:

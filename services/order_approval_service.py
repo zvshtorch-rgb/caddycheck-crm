@@ -30,6 +30,11 @@ logger = logging.getLogger(__name__)
 PURCHASE_ORDER_BUCKET = "purchase-order-pdfs"
 TOKEN_EXPIRY_DAYS = 7
 
+# Order-intake reliability settings (see migrations/harden_order_intake_reliability.sql).
+MAX_INTAKE_ATTEMPTS = 5
+INTAKE_LEASE_MINUTES = 20
+REQUIRED_INTAKE_SCHEMA_VERSION = 20261015
+
 _client = None
 
 
@@ -708,28 +713,31 @@ def mark_all_notifications_read() -> None:
 
 
 # ── Revisions (customer re-sends a revised PDF) ───────────────────────────────
-def find_current_open_order_by_reference(order_reference: str) -> Optional[dict]:
+def find_current_open_order_by_reference(
+    order_reference: str, exclude_id: Optional[str] = None
+) -> Optional[dict]:
     """
     Return the current (non-superseded) purchase order for a given customer
     reference that has NOT yet been decided, or None.
 
     A reference is required — without one we cannot reliably correlate emails,
-    so each email is treated as a distinct order.
+    so each email is treated as a distinct order. ``exclude_id`` skips one order
+    (used when resuming, so a new revision is not matched against itself).
     """
     ref = (order_reference or "").strip()
     if not ref:
         return None
     client = _get_client()
-    resp = (
+    query = (
         client.table("purchase_orders")
         .select("*")
         .eq("order_reference", ref)
         .eq("is_current", True)
         .eq("status", "pending_approval")
-        .order("revision", desc=True)
-        .limit(1)
-        .execute()
     )
+    if exclude_id:
+        query = query.neq("id", exclude_id)
+    resp = query.order("revision", desc=True).limit(1).execute()
     return resp.data[0] if resp.data else None
 
 
@@ -750,3 +758,411 @@ def supersede_purchase_order(old_order_id: str, new_order_id: str) -> None:
     client.table("order_approvals").update({"status": "expired"}).eq(
         "purchase_order_id", old_order_id
     ).eq("status", "pending").execute()
+
+
+# ── Order intake: idempotent claims and resumable steps ──────────────────────
+# Requires migrations/harden_order_intake_reliability.sql. Every step below is
+# safe to repeat: rows are keyed by message id, a lease (claimed_by/claimed_at)
+# gives one worker exclusive processing, and progress is derived from the data
+# (PO exists? approval email sent?) rather than from in-memory state.
+def _utcnow() -> datetime.datetime:
+    return datetime.datetime.now(datetime.timezone.utc)
+
+
+def _parse_dt(value: Any) -> Optional[datetime.datetime]:
+    if not value:
+        return None
+    try:
+        parsed = datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+    return parsed
+
+
+def _is_duplicate_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return "23505" in text or "duplicate key" in text
+
+
+def schema_ready() -> tuple[bool, str]:
+    """True when the intake-hardening migration is applied (checked via an RPC marker)."""
+    try:
+        resp = _get_client().rpc("order_intake_schema_version").execute()
+    except Exception as exc:
+        return False, f"order_intake_schema_version() not available ({type(exc).__name__})"
+    data = resp.data
+    if isinstance(data, list):
+        data = data[0] if data else None
+    if isinstance(data, dict):
+        data = next(iter(data.values()), None)
+    try:
+        version = int(data)
+    except (TypeError, ValueError):
+        return False, "order_intake_schema_version() returned no version"
+    if version < REQUIRED_INTAKE_SCHEMA_VERSION:
+        return False, f"schema version {version} is older than {REQUIRED_INTAKE_SCHEMA_VERSION}"
+    return True, f"schema version {version}"
+
+
+def deterministic_pdf_storage_path(
+    filename: str, sha256: str, received_at: Optional[datetime.datetime] = None
+) -> str:
+    """Storage path derived from the content hash, so retries overwrite instead of orphaning files."""
+    base = Path(filename).name or "purchase_order.pdf"
+    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", base).strip("_") or "purchase_order.pdf"
+    stamp = (received_at or _utcnow()).strftime("%Y/%m")
+    return f"{stamp}/{sha256[:16]}-{safe_name}"
+
+
+def find_incoming_email(message_id: str, graph_message_id: str = "") -> Optional[dict]:
+    """Return the intake row for a message, matched by RFC message id or immutable Graph id."""
+    client = _get_client()
+    if message_id:
+        resp = (
+            client.table("incoming_order_emails")
+            .select("*")
+            .eq("message_id", message_id)
+            .limit(1)
+            .execute()
+        )
+        if resp.data:
+            return resp.data[0]
+    if graph_message_id:
+        resp = (
+            client.table("incoming_order_emails")
+            .select("*")
+            .eq("graph_message_id", graph_message_id)
+            .limit(1)
+            .execute()
+        )
+        if resp.data:
+            return resp.data[0]
+    return None
+
+
+def find_incoming_by_pdf_sha256(sha256: str, exclude_message_id: str = "") -> Optional[dict]:
+    """Earlier intake row carrying an identical PDF (used only to flag possible duplicates)."""
+    if not sha256:
+        return None
+    client = _get_client()
+    query = client.table("incoming_order_emails").select("id,message_id,subject,created_at").eq(
+        "pdf_sha256", sha256
+    )
+    if exclude_message_id:
+        query = query.neq("message_id", exclude_message_id)
+    resp = query.order("created_at").limit(1).execute()
+    return resp.data[0] if resp.data else None
+
+
+def insert_incoming_email_claimed(fields: dict, run_id: str) -> Optional[dict]:
+    """Insert a new intake row already leased to ``run_id``; None if the message already exists."""
+    row = {
+        **fields,
+        "processing_status": "received",
+        "claimed_by": run_id,
+        "claimed_at": _utcnow().isoformat(),
+    }
+    try:
+        resp = _get_client().table("incoming_order_emails").insert(row).execute()
+    except Exception as exc:
+        if _is_duplicate_error(exc):
+            return None
+        raise
+    return resp.data[0] if resp.data else None
+
+
+def list_unfinished_incoming(
+    created_after: datetime.datetime,
+    max_attempts: int = MAX_INTAKE_ATTEMPTS,
+    limit: int = 100,
+) -> List[dict]:
+    """Intake rows that still need work, newer than ``created_after`` (go-live floor)."""
+    resp = (
+        _get_client()
+        .table("incoming_order_emails")
+        .select("*")
+        .in_("processing_status", ["received", "error"])
+        .lt("attempt_count", max_attempts)
+        .gte("created_at", created_after.isoformat())
+        .order("created_at")
+        .limit(limit)
+        .execute()
+    )
+    return resp.data or []
+
+
+def list_abandoned_incoming(
+    created_after: datetime.datetime, max_attempts: int = MAX_INTAKE_ATTEMPTS
+) -> List[dict]:
+    resp = (
+        _get_client()
+        .table("incoming_order_emails")
+        .select("id,message_id,subject,error_message,attempt_count")
+        .eq("processing_status", "error")
+        .gte("attempt_count", max_attempts)
+        .gte("created_at", created_after.isoformat())
+        .execute()
+    )
+    return resp.data or []
+
+
+def claim_incoming_email(
+    email_id: str, run_id: str, lease_minutes: int = INTAKE_LEASE_MINUTES
+) -> Optional[dict]:
+    """Atomically lease an unfinished row. Returns the row, or None if someone else holds it."""
+    client = _get_client()
+    now = _utcnow()
+    claim = {"claimed_by": run_id, "claimed_at": now.isoformat()}
+
+    def _update(extra_filter):
+        query = (
+            client.table("incoming_order_emails")
+            .update(claim)
+            .eq("id", email_id)
+            .in_("processing_status", ["received", "error"])
+        )
+        return extra_filter(query).execute()
+
+    resp = _update(lambda q: q.is_("claimed_at", "null"))
+    if not resp.data:
+        stale = (now - datetime.timedelta(minutes=lease_minutes)).isoformat()
+        resp = _update(lambda q: q.lt("claimed_at", stale))
+    return resp.data[0] if resp.data else None
+
+
+def finish_incoming_email(email_id: str, run_id: str) -> None:
+    (
+        _get_client()
+        .table("incoming_order_emails")
+        .update(
+            {
+                "processing_status": "processed",
+                "error_message": None,
+                "claimed_by": None,
+                "claimed_at": None,
+            }
+        )
+        .eq("id", email_id)
+        .eq("claimed_by", run_id)
+        .execute()
+    )
+
+
+def fail_incoming_email(email_id: str, run_id: str, error: str, attempt_count: int) -> None:
+    """Record a failed attempt and release the lease. Never deletes the row."""
+    (
+        _get_client()
+        .table("incoming_order_emails")
+        .update(
+            {
+                "processing_status": "error",
+                "error_message": (error or "")[:500],
+                "attempt_count": attempt_count,
+                "claimed_by": None,
+                "claimed_at": None,
+            }
+        )
+        .eq("id", email_id)
+        .eq("claimed_by", run_id)
+        .execute()
+    )
+    if attempt_count >= MAX_INTAKE_ATTEMPTS:
+        create_notification(
+            title="Order intake gave up on an email",
+            message=(
+                f"An incoming purchase-order email failed {attempt_count} times and will not be "
+                "retried automatically. See the Order Approvals page and the workflow log."
+            ),
+            severity="error",
+        )
+
+
+def get_purchase_order_for_incoming(email_id: str) -> Optional[dict]:
+    if not email_id:
+        return None
+    resp = (
+        _get_client()
+        .table("purchase_orders")
+        .select("*")
+        .eq("incoming_email_id", email_id)
+        .limit(1)
+        .execute()
+    )
+    return resp.data[0] if resp.data else None
+
+
+def get_or_create_purchase_order_for_incoming(email_id: str, fields: dict) -> tuple[dict, bool]:
+    """Return (order, created). At most one order per intake row, enforced by a unique index."""
+    existing = get_purchase_order_for_incoming(email_id)
+    if existing:
+        return existing, False
+    try:
+        return create_purchase_order(incoming_email_id=email_id, **fields), True
+    except Exception as exc:
+        if _is_duplicate_error(exc):
+            existing = get_purchase_order_for_incoming(email_id)
+            if existing:
+                return existing, False
+        raise
+
+
+def prepare_approval_email(
+    purchase_order_id: str, lease_minutes: int = INTAKE_LEASE_MINUTES
+) -> dict:
+    """
+    Decide whether the approval email must be (re)sent and hand out a token.
+
+    Returns ``{"state": ...}`` where state is:
+    - ``send``: caller owns the send; ``token`` (raw), ``approval`` and ``attempt`` are included.
+    - ``already_sent`` / ``not_needed`` / ``in_progress``: nothing to do.
+
+    One approval row exists per purchase order. When a resend is needed the same row's
+    token is rotated in place (the raw token is never stored), so a resend never creates a
+    second active token and the previous link stops working.
+    """
+    client = _get_client()
+    order = get_purchase_order(purchase_order_id)
+    if not order or order.get("status") != "pending_approval" or order.get("is_current") is False:
+        return {"state": "not_needed"}
+
+    resp = (
+        client.table("order_approvals")
+        .select("*")
+        .eq("purchase_order_id", purchase_order_id)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    approval = resp.data[0] if resp.data else None
+
+    now = _utcnow()
+    token = generate_token()
+    token_fields = {
+        "token_hash": hash_token(token),
+        "expires_at": (now + datetime.timedelta(days=TOKEN_EXPIRY_DAYS)).isoformat(),
+        "email_status": "sending",
+        "email_claimed_at": now.isoformat(),
+    }
+
+    if approval is None:
+        try:
+            ins = (
+                client.table("order_approvals")
+                .insert(
+                    {
+                        "purchase_order_id": purchase_order_id,
+                        "status": "pending",
+                        "email_attempts": 1,
+                        **token_fields,
+                    }
+                )
+                .execute()
+            )
+        except Exception as exc:
+            if _is_duplicate_error(exc):
+                return {"state": "in_progress"}
+            raise
+        return {"state": "send", "token": token, "approval": ins.data[0], "attempt": 1}
+
+    if approval.get("status") != "pending":
+        return {"state": "not_needed"}
+    email_status = approval.get("email_status") or "pending"
+    if email_status == "sent":
+        return {"state": "already_sent", "approval": approval}
+    if email_status == "sending":
+        claimed = _parse_dt(approval.get("email_claimed_at"))
+        if claimed and now - claimed < datetime.timedelta(minutes=lease_minutes):
+            return {"state": "in_progress"}
+
+    attempts = int(approval.get("email_attempts") or 0)
+    upd = (
+        client.table("order_approvals")
+        .update({**token_fields, "email_attempts": attempts + 1})
+        .eq("id", approval["id"])
+        .eq("email_status", email_status)
+        .eq("email_attempts", attempts)
+        .execute()
+    )
+    if not upd.data:
+        return {"state": "in_progress"}
+    return {"state": "send", "token": token, "approval": upd.data[0], "attempt": attempts + 1}
+
+
+def mark_approval_email_sent(approval_id: str) -> None:
+    (
+        _get_client()
+        .table("order_approvals")
+        .update(
+            {
+                "email_status": "sent",
+                "email_sent_at": _utcnow().isoformat(),
+                "email_last_error": None,
+            }
+        )
+        .eq("id", approval_id)
+        .execute()
+    )
+
+
+def mark_approval_email_failed(approval_id: str, error: str) -> None:
+    (
+        _get_client()
+        .table("order_approvals")
+        .update({"email_status": "failed", "email_last_error": (error or "")[:500]})
+        .eq("id", approval_id)
+        .execute()
+    )
+
+
+def get_order_delivery_state(order: dict) -> Optional[dict]:
+    """Intake/approval-email state for the Order Approvals page; None if unavailable."""
+    try:
+        client = _get_client()
+        state: Dict[str, Any] = {}
+        if order.get("incoming_email_id"):
+            row = get_incoming_email(order["incoming_email_id"]) or {}
+            state.update(
+                intake_status=row.get("processing_status"),
+                attempt_count=int(row.get("attempt_count") or 0),
+                error_message=row.get("error_message"),
+            )
+        resp = (
+            client.table("order_approvals")
+            .select("email_status,email_attempts,email_last_error")
+            .eq("purchase_order_id", order["id"])
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if resp.data:
+            state.update(
+                email_status=resp.data[0].get("email_status"),
+                email_attempts=resp.data[0].get("email_attempts"),
+                email_last_error=resp.data[0].get("email_last_error"),
+            )
+        return state
+    except Exception as exc:
+        logger.warning("Could not load delivery state: %s", type(exc).__name__)
+        return None
+
+
+def retry_order_intake(purchase_order_id: str) -> bool:
+    """Give a failed intake row a fresh set of attempts; the poller resumes it on its next run."""
+    try:
+        order = get_purchase_order(purchase_order_id)
+        if not order or not order.get("incoming_email_id"):
+            return False
+        resp = (
+            _get_client()
+            .table("incoming_order_emails")
+            .update({"attempt_count": 0})
+            .eq("id", order["incoming_email_id"])
+            .eq("processing_status", "error")
+            .execute()
+        )
+        return bool(resp.data)
+    except Exception as exc:
+        logger.warning("Could not reset intake attempts: %s", type(exc).__name__)
+        return False
