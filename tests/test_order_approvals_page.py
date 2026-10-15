@@ -75,6 +75,30 @@ class TestOrderApprovalsRetryButton(unittest.TestCase):
         self.assertEqual(self.retry_buttons(app), [])
         retry.assert_not_called()
 
+    def test_page_survives_a_stale_service_module_without_the_new_function(self):
+        saved = oas.get_order_delivery_state
+        del oas.get_order_delivery_state
+        self.addCleanup(setattr, oas, "get_order_delivery_state", saved)
+        from streamlit.testing.v1 import AppTest
+
+        patches = [
+            patch("services.supabase_service.load_projects", return_value=[]),
+            patch("services.supabase_service.load_invoices", return_value=[]),
+            patch.object(oas, "list_purchase_orders", return_value=[ORDER]),
+            patch.object(oas, "create_purchase_order_signed_url", return_value=None),
+            patch.object(oas, "count_unread_notifications", return_value=0),
+            patch.object(oas, "list_notifications", return_value=[]),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        app = AppTest.from_file(APP_PATH, default_timeout=90)
+        app.session_state["role"] = "admin"
+        app.run()
+        app.sidebar.radio[0].set_value("✅ Order Approvals").run()
+        self.assertFalse(app.exception, [e.value for e in app.exception])
+        self.assertTrue(any("Pending approval" in e.label for e in app.expander))
+
     def test_healthy_order_shows_no_warning_or_retry(self):
         app, _ = self.open_page("admin", HEALTHY)
         self.assertFalse(any("has not been delivered" in w.value for w in app.warning))

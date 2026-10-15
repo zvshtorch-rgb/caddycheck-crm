@@ -9428,7 +9428,7 @@ elif page == "✅ Order Approvals":
                 if _pdf_url:
                     st.markdown(f"📄 [Open PDF]({_pdf_url})")
 
-                if _o.get("status") == "pending_approval":
+                if _o.get("status") == "pending_approval" and hasattr(_oas, "get_order_delivery_state"):  # a running Cloud process can hold a stale module until rebooted
                     _delivery = _oas.get_order_delivery_state(_o)
                     if _delivery and _delivery.get("intake_status") == "error":
                         _tries = _delivery.get("attempt_count", 0)
