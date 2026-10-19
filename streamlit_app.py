@@ -346,6 +346,11 @@ from services.supabase_service import (
     create_sent_invoice_pdf_signed_url as create_sent_invoice_pdf_signed_url_supabase,
 )
 
+from services.invoice_save_guard import (
+    find_invoice_number_changes,
+    describe_changes as describe_invoice_number_changes,
+)
+
 ORDER_STATUS_OPTIONS = [
     "New",
     "Ordered",
@@ -8115,6 +8120,7 @@ elif page == "🧾 Invoice Details":
                     min_value=0,
                     step=1,
                     format="%d",
+                    disabled=True,  # renumbering is not an inline edit; see services/invoice_save_guard.py
                 ),
                 "Project": st.column_config.SelectboxColumn(
                     "Project",
@@ -8185,6 +8191,15 @@ elif page == "🧾 Invoice Details":
             # after we drop deleted rows (filtering would otherwise shift indices
             # and make invoices[existing_invoice_index] resolve to the wrong row).
             original_invoices = list(invoices)
+            # Abort the WHOLE save, before any object is mutated or any batch written, if an existing invoice's
+            # number differs from what was loaded (the column is read-only; this catches manipulated/stale clients).
+            _number_changes = find_invoice_number_changes(edited_inv.to_dict("records"), original_invoices)
+            if _number_changes:
+                st.error(
+                    "Save blocked: invoice numbers cannot be changed in this table. Nothing was saved. "
+                    f"Changed: {describe_invoice_number_changes(_number_changes)}. Reload the page to discard the change."
+                )
+                st.stop()
             deleted_invoice_ids = [
                 inv.db_id
                 for idx, inv in enumerate(original_invoices)

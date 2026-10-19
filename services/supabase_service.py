@@ -549,6 +549,10 @@ def upsert_invoices(invoices: list) -> None:
             to_insert.append(row)
 
     metadata_columns_supported = True
+    # Never let a save change an existing invoice's number, and decide that BEFORE the first batch is written so a
+    # violation cannot leave a partial save behind (stale / manipulated clients are caught by comparing with the DB).
+    from services.invoice_save_guard import assert_no_invoice_number_changes
+    assert_no_invoice_number_changes(client, to_update)
     if to_update:
         batch_size = 50
         for i in range(0, len(to_update), batch_size):
