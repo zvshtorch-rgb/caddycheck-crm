@@ -17,6 +17,8 @@ from services.bank_payment_save import (
     persist_bank_payment,
     plan_credit_application,
     plan_partial_payments,
+    resolve_bank_payment_pdf_storage,
+    attach_missing_bank_payment_pdf,
     save_parsed_bank_payment,
 )
 from services.credit_application import execute_with_compensation, plan_credit_application_ops
@@ -761,6 +763,233 @@ class TestOneEligibilityRuleEverywhere(unittest.TestCase):
         self.assertIn("is_row_payable(r)", self.SOURCE)
         self.assertIn('df["Project"].isin(selected) & df["Payable"]', self.SOURCE)
         self.assertIn("save_parsed_bank_payment(", self.SOURCE)
+
+
+class TestResolveBankPaymentPdfStorage(unittest.TestCase):
+    """The single-payment Confirm workflow must store the uploaded PDF so the
+    Saved Bank Payments table can offer a working Download link -- exactly like
+    the batch 'Save All Parsed Payments' flow already does."""
+
+    def _ok_upload(self):
+        calls = []
+
+        def upload(file_bytes, filename):
+            calls.append((file_bytes, filename))
+            return {"pdf_storage_bucket": "bank-payments", "pdf_storage_path": f"2026/10/{filename}"}
+
+        return upload, calls
+
+    def test_single_pdf_payment_uploads_and_returns_storage_meta(self):
+        upload, calls = self._ok_upload()
+        ctx = {
+            "source_kind": "pdf",
+            "source_name": "swift-8687.pdf",
+            "pdf_file_bytes": b"%PDF-1.7 fake",
+            "pdf_source_filename": "swift-8687.pdf",
+        }
+        meta, warning = resolve_bank_payment_pdf_storage(ctx, upload, label="Invoice #8687")
+        self.assertIsNone(warning)
+        self.assertEqual(meta["pdf_storage_bucket"], "bank-payments")
+        self.assertEqual(meta["pdf_storage_path"], "2026/10/swift-8687.pdf")
+        self.assertEqual(calls, [(b"%PDF-1.7 fake", "swift-8687.pdf")])
+
+    def test_batch_pdf_payment_meta_shape_matches_single(self):
+        # The batch flow calls the same upload helper; the resolver must accept
+        # the identical {bucket, path} dict and surface it unchanged.
+        upload, _ = self._ok_upload()
+        ctx = {"pdf_file_bytes": b"x", "pdf_source_filename": "batch.pdf"}
+        meta, warning = resolve_bank_payment_pdf_storage(ctx, upload)
+        self.assertIsNone(warning)
+        self.assertEqual(set(meta), {"pdf_storage_bucket", "pdf_storage_path"})
+
+    def test_manual_payment_without_pdf_is_a_no_op(self):
+        upload, calls = self._ok_upload()
+        for ctx in (None, {}, {"source_kind": "manual", "source_name": "manual-invoice-8674"}):
+            meta, warning = resolve_bank_payment_pdf_storage(ctx, upload)
+            self.assertEqual(meta, {})
+            self.assertIsNone(warning)
+        self.assertEqual(calls, [], "manual entries must never upload a PDF")
+
+    def test_upload_raising_returns_warning_and_no_storage_meta(self):
+        def upload(_bytes, _name):
+            raise RuntimeError("storage offline")
+
+        ctx = {"pdf_file_bytes": b"x", "pdf_source_filename": "swift.pdf"}
+        meta, warning = resolve_bank_payment_pdf_storage(ctx, upload, label="Invoice #8687")
+        self.assertEqual(meta, {})
+        self.assertIsNotNone(warning)
+        self.assertIn("Invoice #8687", warning)
+        self.assertIn("could NOT be uploaded", warning)
+
+    def test_upload_returning_incomplete_meta_warns_and_does_not_claim_success(self):
+        def upload(_bytes, _name):
+            return {"pdf_storage_bucket": "bank-payments"}  # missing path -> unusable
+
+        ctx = {"pdf_file_bytes": b"x", "pdf_source_filename": "swift.pdf"}
+        meta, warning = resolve_bank_payment_pdf_storage(ctx, upload)
+        self.assertEqual(meta, {})
+        self.assertIsNotNone(warning)
+
+    def test_filename_falls_back_to_source_name(self):
+        captured = {}
+
+        def upload(_bytes, filename):
+            captured["filename"] = filename
+            return {"pdf_storage_bucket": "b", "pdf_storage_path": "p"}
+
+        ctx = {"pdf_file_bytes": b"x", "source_name": "fallback.pdf"}
+        resolve_bank_payment_pdf_storage(ctx, upload)
+        self.assertEqual(captured["filename"], "fallback.pdf")
+
+
+class TestAttachMissingBankPaymentPdf(unittest.TestCase):
+    """Attach an original PDF to an EXISTING payment that has none, without ever
+    touching amounts, allocations, fingerprints, dates or reconciliation status,
+    and with safe cleanup if the DB update does not take effect."""
+
+    OK_META = {"pdf_storage_bucket": "bank-payments", "pdf_storage_path": "2026/10/swift-8687.pdf"}
+
+    def _upload_ok(self, calls):
+        def upload(file_bytes, filename):
+            calls.append((file_bytes, filename))
+            return dict(self.OK_META)
+        return upload
+
+    def test_successful_attachment_updates_only_storage_fields(self):
+        upload_calls, attach_calls, remove_calls = [], [], []
+
+        def attach(payment_id, bucket, path):
+            attach_calls.append((payment_id, bucket, path))
+            return True  # conditional update matched a still-PDF-less row
+
+        def remove(bucket, path):
+            remove_calls.append((bucket, path))
+
+        outcome = attach_missing_bank_payment_pdf(
+            8687, b"%PDF data", "swift-8687.pdf",
+            upload_pdf=self._upload_ok(upload_calls),
+            attach_pdf=attach, remove_pdf=remove,
+            label="Payment id 8687",
+        )
+        self.assertTrue(outcome.attached)
+        self.assertIsNone(outcome.error)
+        self.assertEqual(outcome.storage_meta, self.OK_META)
+        # Updated by immutable id, only the two storage fields, nothing deleted.
+        self.assertEqual(attach_calls, [(8687, "bank-payments", "2026/10/swift-8687.pdf")])
+        self.assertEqual(remove_calls, [], "a successful attach must never delete the file")
+
+    def test_upload_failure_makes_no_db_change(self):
+        attach_calls, remove_calls = [], []
+
+        def upload(_b, _n):
+            raise RuntimeError("storage offline")
+
+        def attach(*_a):
+            attach_calls.append(_a)
+            return True
+
+        outcome = attach_missing_bank_payment_pdf(
+            8687, b"x", "swift.pdf",
+            upload_pdf=upload, attach_pdf=attach,
+            remove_pdf=lambda *_a: remove_calls.append(_a),
+            label="Payment id 8687",
+        )
+        self.assertFalse(outcome.attached)
+        self.assertIn("could NOT be uploaded", outcome.error)
+        self.assertEqual(attach_calls, [], "no DB update may happen when the upload failed")
+        self.assertEqual(remove_calls, [], "nothing was uploaded, so nothing to clean up")
+
+    def test_db_update_failure_cleans_up_uploaded_file(self):
+        remove_calls = []
+
+        def attach(*_a):
+            raise RuntimeError("db exploded")
+
+        outcome = attach_missing_bank_payment_pdf(
+            8687, b"x", "swift.pdf",
+            upload_pdf=self._upload_ok([]),
+            attach_pdf=attach,
+            remove_pdf=lambda bucket, path: remove_calls.append((bucket, path)),
+            label="Payment id 8687",
+        )
+        self.assertFalse(outcome.attached)
+        self.assertIn("database update FAILED", outcome.error)
+        self.assertTrue(outcome.uploaded_orphan_cleaned)
+        self.assertEqual(remove_calls, [("bank-payments", "2026/10/swift-8687.pdf")])
+
+    def test_duplicate_attachment_is_rejected_and_file_removed(self):
+        remove_calls = []
+
+        def attach(*_a):
+            return False  # row already has a PDF, or was changed concurrently
+
+        outcome = attach_missing_bank_payment_pdf(
+            8687, b"x", "swift.pdf",
+            upload_pdf=self._upload_ok([]),
+            attach_pdf=attach,
+            remove_pdf=lambda bucket, path: remove_calls.append((bucket, path)),
+            label="Payment id 8687",
+        )
+        self.assertFalse(outcome.attached)
+        self.assertIn("already has a PDF", outcome.error)
+        self.assertTrue(outcome.uploaded_orphan_cleaned)
+        self.assertEqual(remove_calls, [("bank-payments", "2026/10/swift-8687.pdf")])
+
+    def test_cleanup_failure_is_reported_not_raised(self):
+        def attach(*_a):
+            return False
+
+        def remove(*_a):
+            raise RuntimeError("cannot delete")
+
+        outcome = attach_missing_bank_payment_pdf(
+            8687, b"x", "swift.pdf",
+            upload_pdf=self._upload_ok([]),
+            attach_pdf=attach, remove_pdf=remove,
+        )
+        self.assertFalse(outcome.attached)
+        self.assertFalse(outcome.uploaded_orphan_cleaned)
+        self.assertIn("left in storage for manual cleanup", outcome.error)
+
+    def test_empty_file_is_rejected_before_any_upload(self):
+        upload_calls = []
+        outcome = attach_missing_bank_payment_pdf(
+            8687, b"", "swift.pdf",
+            upload_pdf=self._upload_ok(upload_calls),
+            attach_pdf=lambda *_a: True,
+        )
+        self.assertFalse(outcome.attached)
+        self.assertEqual(upload_calls, [])
+        self.assertIn("no PDF file", outcome.error)
+
+    def test_attach_update_targets_primary_key_and_null_path_guard(self):
+        # The real service function must update by id AND guard on a null path so a
+        # concurrent attach can never be overwritten.
+        from services import supabase_service
+
+        class _Resp:
+            data = [{"id": 8687}]
+
+        log = []
+
+        class _Q:
+            def update(self, fields): log.append(("update", fields)); return self
+            def eq(self, col, val): log.append(("eq", col, val)); return self
+            def is_(self, col, val): log.append(("is_", col, val)); return self
+            def execute(self): return _Resp()
+
+        class _Client:
+            def table(self, name): log.append(("table", name)); return _Q()
+
+        with patch.object(supabase_service, "_get_client", return_value=_Client()):
+            ok = supabase_service.attach_bank_payment_pdf(8687, "bank-payments", "p.pdf")
+        self.assertTrue(ok)
+        self.assertIn(("update", {"pdf_storage_bucket": "bank-payments", "pdf_storage_path": "p.pdf"}), log)
+        self.assertIn(("eq", "id", 8687), log)
+        self.assertIn(("is_", "pdf_storage_path", "null"), log)
+        # Must not touch any financial / reconciliation column.
+        updated_fields = next(f for tag, f in [(t[0], t[1]) for t in log] if tag == "update")
+        self.assertEqual(set(updated_fields), {"pdf_storage_bucket", "pdf_storage_path"})
 
 
 if __name__ == "__main__":

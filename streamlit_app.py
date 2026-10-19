@@ -408,6 +408,8 @@ from services.bank_payment_save import (
     persist_bank_payment,
     plan_credit_application,
     plan_partial_payments,
+    resolve_bank_payment_pdf_storage,
+    attach_missing_bank_payment_pdf,
     save_parsed_bank_payment,
 )
 from services.credit_application import (
@@ -9979,6 +9981,8 @@ elif page == "🏦 Bank Payment":
         apply_credit_atomic_rpc,
         upload_bank_payment_pdf as upload_bank_payment_pdf_supabase,
         create_bank_payment_pdf_signed_url as create_bank_payment_pdf_signed_url_supabase,
+        attach_bank_payment_pdf as attach_bank_payment_pdf_supabase,
+        remove_bank_payment_pdf as remove_bank_payment_pdf_supabase,
     )
     from config.settings import append_bank_payment_log, load_bank_payments_log
 
@@ -10026,6 +10030,8 @@ elif page == "🏦 Bank Payment":
     # ── Show result from previous "Save All Parsed Payments" ──────────────────
     for _save_error in st.session_state.pop("_bank_payment_save_errors", []):
         st.error(_save_error)
+    for _save_warning in st.session_state.pop("_bank_payment_save_warnings", []):
+        st.warning(_save_warning)
     if "_batch_bank_result" in st.session_state:
         _br = st.session_state.pop("_batch_bank_result")
         if _br.get("errors"):
@@ -10246,6 +10252,20 @@ elif page == "🏦 Bank Payment":
                     "notes": payment_context.get("notes") if payment_context else None,
                 }
 
+                # When this confirmation originates from an uploaded bank-transfer
+                # PDF, persist the original document to Supabase Storage so the
+                # Saved Bank Payments table can offer a working Download link
+                # (mirrors the batch "Save All Parsed Payments" workflow). Manual
+                # entries carry no bytes and therefore skip this step entirely.
+                storage_meta, pdf_upload_warning = resolve_bank_payment_pdf_storage(
+                    payment_context,
+                    upload_bank_payment_pdf_supabase,
+                    label=f"Invoice {inv_nos_label}",
+                )
+                if storage_meta:
+                    payment_entry["pdf_storage_bucket"] = storage_meta["pdf_storage_bucket"]
+                    payment_entry["pdf_storage_path"] = storage_meta["pdf_storage_path"]
+
                 payment_save_error = persist_bank_payment(
                     payment_entry,
                     allocation_rows,
@@ -10257,6 +10277,8 @@ elif page == "🏦 Bank Payment":
                         f"Invoice {inv_nos_label} was marked as paid, but the bank payment record was NOT saved, "
                         f"so it will not appear under Saved Bank Payments. {payment_save_error}"
                     ]
+                elif pdf_upload_warning:
+                    st.session_state["_bank_payment_save_warnings"] = [pdf_upload_warning]
 
                 st.cache_data.clear()
                 st.session_state["_renewal_result"] = {
@@ -10333,6 +10355,8 @@ elif page == "🏦 Bank Payment":
                         "source_name": uploaded.name,
                         "source_kind": "pdf",
                         "payment_fingerprint": uploaded_hash,
+                        "pdf_file_bytes": file_bytes,
+                        "pdf_source_filename": uploaded.name,
                         "instructed_amount": parsed.get("instructed_amount"),
                         "received_amount": parsed.get("received_amount"),
                         "fee_amount": (
@@ -10867,6 +10891,60 @@ elif page == "🏦 Bank Payment":
                 ),
             },
         )
+
+        # ── Attach a missing source PDF to an existing payment ────────────────
+        rows_missing_pdf = [
+            r for r in bank_payment_rows
+            if r.get("id") is not None and not _safe_str(r.get("pdf_storage_path")).strip()
+        ]
+        if rows_missing_pdf:
+            with st.expander(f"📎 Attach Missing Source PDF ({len(rows_missing_pdf)})", expanded=False):
+                st.caption(
+                    "Attach the original bank-transfer PDF to a saved payment that has none. "
+                    "The payment is matched by its internal id, and only the stored-file "
+                    "reference is updated — amounts, allocations, invoice reconciliation, "
+                    "fingerprints and payment dates are never changed."
+                )
+                attach_labels = {
+                    (
+                        f"#{_safe_int(r.get('invoice_number'), default=0)} | "
+                        f"{_safe_str(r.get('payment_date'))} | "
+                        f"{_safe_str(r.get('source_name')) or _safe_str(r.get('source_kind')) or 'payment'} "
+                        f"(id {r.get('id')})"
+                    ): r
+                    for r in rows_missing_pdf
+                }
+                chosen_label = st.selectbox(
+                    "Payment without a PDF", list(attach_labels.keys()), key="attach_pdf_payment"
+                )
+                chosen_row = attach_labels[chosen_label]
+                chosen_id = chosen_row.get("id")
+                attach_file = st.file_uploader(
+                    "Original bank transfer PDF", type=["pdf"], key=f"attach_pdf_file_{chosen_id}"
+                )
+                if st.button("📎 Attach PDF", key=f"attach_pdf_btn_{chosen_id}", disabled=attach_file is None):
+                    if attach_file is None:
+                        st.warning("Select a PDF file first.")
+                    else:
+                        inv_lbl = _safe_int(chosen_row.get("invoice_number"), default=0)
+                        attach_outcome = attach_missing_bank_payment_pdf(
+                            chosen_id,
+                            attach_file.read(),
+                            attach_file.name,
+                            upload_pdf=upload_bank_payment_pdf_supabase,
+                            attach_pdf=attach_bank_payment_pdf_supabase,
+                            remove_pdf=remove_bank_payment_pdf_supabase,
+                            label=f"Payment id {chosen_id} (invoice #{inv_lbl})",
+                        )
+                        if attach_outcome.attached:
+                            st.success(
+                                f"✅ PDF attached to payment id {chosen_id} (invoice #{inv_lbl}). "
+                                "The Download link will now appear in the table above."
+                            )
+                            st.cache_data.clear()
+                            st.rerun()
+                        else:
+                            st.error(attach_outcome.error or "The PDF could not be attached.")
 
         payment_labels = [
             f"#{_safe_int(row.get('invoice_number'), default=0)} | {_safe_str(row.get('payment_date'))} | {_safe_str(row.get('source_name'))}"

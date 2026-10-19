@@ -230,6 +230,140 @@ def persist_bank_payment(
         return f"{label}: the bank payment record was NOT saved to Supabase ({type(exc).__name__}: {exc}).{backup_note}"
 
 
+def resolve_bank_payment_pdf_storage(
+    payment_context: Optional[dict],
+    upload_pdf: Callable[[bytes, str], Any],
+    *,
+    label: str = "payment",
+) -> tuple[dict, Optional[str]]:
+    """Upload an uploaded bank-transfer PDF (if present) and return its storage metadata.
+
+    Used by the single-payment Confirm workflow so it stores the original PDF in
+    Supabase Storage exactly like the batch "Save All Parsed Payments" flow, which
+    is what makes the Saved Bank Payments "Download" link work.
+
+    Returns ``(storage_meta, warning)`` where:
+      * ``storage_meta`` is ``{"pdf_storage_bucket": ..., "pdf_storage_path": ...}``
+        on success, otherwise an empty dict (manual entries, or an upload failure).
+      * ``warning`` is ``None`` when nothing needed uploading or the upload
+        succeeded, otherwise a user-presentable message explaining that the
+        payment was recorded but the PDF could not be stored.
+    """
+    if not payment_context or not payment_context.get("pdf_file_bytes"):
+        return {}, None
+
+    filename = payment_context.get("pdf_source_filename") or payment_context.get("source_name") or "bank_payment.pdf"
+    try:
+        meta = upload_pdf(payment_context["pdf_file_bytes"], filename) or {}
+    except Exception as exc:
+        logger.warning("Could not upload bank payment PDF to Supabase Storage: %s", exc)
+        meta = {}
+
+    if meta.get("pdf_storage_bucket") and meta.get("pdf_storage_path"):
+        return {
+            "pdf_storage_bucket": meta["pdf_storage_bucket"],
+            "pdf_storage_path": meta["pdf_storage_path"],
+        }, None
+
+    warning = (
+        f"{label}: the payment was recorded, but the source PDF could NOT be uploaded "
+        "to storage, so no Download link will be available for it. You can re-save it "
+        "via \u201cSave All Parsed Payments\u201d to retry."
+    )
+    return {}, warning
+
+
+@dataclass
+class AttachPdfOutcome:
+    """Result of attaching a PDF to an already-saved bank payment."""
+    attached: bool = False  # True only after the DB row was durably updated
+    storage_meta: dict = field(default_factory=dict)  # {bucket, path} when attached
+    error: Optional[str] = None  # user-presentable problem; None on success
+    uploaded_orphan_cleaned: bool = False  # a just-uploaded file was removed again
+
+
+def attach_missing_bank_payment_pdf(
+    payment_id: Any,
+    file_bytes: bytes,
+    filename: str,
+    *,
+    upload_pdf: Callable[[bytes, str], Any],
+    attach_pdf: Callable[[int, str, str], bool],
+    remove_pdf: Optional[Callable[[str, str], Any]] = None,
+    label: str = "payment",
+) -> AttachPdfOutcome:
+    """Attach an uploaded PDF to an EXISTING bank payment that has none yet.
+
+    Order of operations (so a failure never claims success and never leaves an
+    orphaned file):
+      1. Upload the PDF to storage. On failure, stop -- nothing was written to the
+         database, report the upload error.
+      2. Conditionally update ONLY ``pdf_storage_bucket``/``pdf_storage_path`` on
+         the row identified by its immutable primary key, and only while it still
+         has no PDF (``attach_pdf`` returns False if another user attached one in
+         the meantime, or the id is gone). Amounts, allocations, fingerprint,
+         dates and reconciliation status are never touched.
+      3. If the update did not apply (returns False) or raised, delete the
+         just-uploaded file via ``remove_pdf`` so no orphan is left behind, and
+         report the problem. Success is reported ONLY after step 2 confirms the
+         row was updated.
+    """
+    if not file_bytes:
+        return AttachPdfOutcome(error=f"{label}: no PDF file was provided.")
+
+    try:
+        meta = upload_pdf(file_bytes, filename) or {}
+    except Exception as exc:
+        logger.warning("Could not upload bank payment PDF to Supabase Storage: %s", exc)
+        return AttachPdfOutcome(
+            error=f"{label}: the PDF could NOT be uploaded to storage ({type(exc).__name__}: {exc}); "
+            "nothing was changed."
+        )
+
+    bucket = meta.get("pdf_storage_bucket")
+    path = meta.get("pdf_storage_path")
+    if not (bucket and path):
+        return AttachPdfOutcome(
+            error=f"{label}: the storage upload did not return a usable location; nothing was changed."
+        )
+
+    def _cleanup() -> bool:
+        if remove_pdf is None:
+            return False
+        try:
+            remove_pdf(bucket, path)
+            return True
+        except Exception:
+            logger.exception("Could not remove orphaned bank payment PDF %r/%r", bucket, path)
+            return False
+
+    try:
+        updated = attach_pdf(int(payment_id), bucket, path)
+    except Exception as exc:
+        logger.exception("Could not attach PDF to bank payment %r", payment_id)
+        cleaned = _cleanup()
+        return AttachPdfOutcome(
+            error=f"{label}: the PDF was uploaded but the database update FAILED "
+            f"({type(exc).__name__}: {exc}); the uploaded file was "
+            f"{'removed again' if cleaned else 'left in storage for manual cleanup'}.",
+            uploaded_orphan_cleaned=cleaned,
+        )
+
+    if not updated:
+        cleaned = _cleanup()
+        return AttachPdfOutcome(
+            error=f"{label}: this payment already has a PDF attached (or was changed by "
+            "someone else), so nothing was changed. The uploaded file was "
+            f"{'removed again' if cleaned else 'left in storage for manual cleanup'}.",
+            uploaded_orphan_cleaned=cleaned,
+        )
+
+    return AttachPdfOutcome(
+        attached=True,
+        storage_meta={"pdf_storage_bucket": bucket, "pdf_storage_path": path},
+    )
+
+
 def save_parsed_bank_payment(
     *,
     payment_entry: dict,

@@ -1286,6 +1286,34 @@ def download_bank_payment_pdf(bucket_name: str, storage_path: str) -> bytes:
     return client.storage.from_(bucket_name).download(storage_path)
 
 
+def remove_bank_payment_pdf(bucket_name: str, storage_path: str) -> None:
+    """Delete one stored bank-payment PDF. Used only to clean up an orphaned
+    upload when a follow-up database update did not take effect."""
+    client = _get_client()
+    client.storage.from_(bucket_name).remove([storage_path])
+
+
+def attach_bank_payment_pdf(payment_id: int, bucket_name: str, storage_path: str) -> bool:
+    """Attach a stored PDF to an existing bank_payments row, but ONLY while the
+    row still has no PDF of its own.
+
+    The update matches by immutable primary key AND ``pdf_storage_path is null``,
+    so it can never overwrite a PDF that another user attached in the meantime and
+    it never touches amounts, allocations, fingerprint, dates or reconciliation
+    status. Returns True when the row was updated, False when no matching row was
+    found (wrong id, or it already had a PDF) -- in which case nothing changed.
+    """
+    client = _get_client()
+    resp = (
+        client.table(BANK_PAYMENTS_TABLE)
+        .update({"pdf_storage_bucket": bucket_name, "pdf_storage_path": storage_path})
+        .eq("id", int(payment_id))
+        .is_("pdf_storage_path", "null")
+        .execute()
+    )
+    return bool(resp.data)
+
+
 def create_bank_payment_pdf_signed_url(bucket_name: str, storage_path: str, expires_in: int = 3600) -> Optional[str]:
     client = _get_client()
     try:
