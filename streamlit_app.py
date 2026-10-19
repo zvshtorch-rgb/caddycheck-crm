@@ -408,10 +408,16 @@ from services.bank_payment_save import (
     persist_bank_payment,
     plan_credit_application,
     plan_partial_payments,
-    resolve_bank_payment_pdf_storage,
-    attach_missing_bank_payment_pdf,
     save_parsed_bank_payment,
 )
+try:  # new PDF helpers; a running Cloud process can hold a stale module until rebooted
+    from services.bank_payment_save import (
+        resolve_bank_payment_pdf_storage,
+        attach_missing_bank_payment_pdf,
+    )
+except ImportError:  # pragma: no cover - only hit mid-redeploy before a full reboot
+    resolve_bank_payment_pdf_storage = None
+    attach_missing_bank_payment_pdf = None
 from services.credit_application import (
     apply_credit_atomically,
     execute_with_compensation,
@@ -9981,9 +9987,15 @@ elif page == "🏦 Bank Payment":
         apply_credit_atomic_rpc,
         upload_bank_payment_pdf as upload_bank_payment_pdf_supabase,
         create_bank_payment_pdf_signed_url as create_bank_payment_pdf_signed_url_supabase,
-        attach_bank_payment_pdf as attach_bank_payment_pdf_supabase,
-        remove_bank_payment_pdf as remove_bank_payment_pdf_supabase,
     )
+    try:  # new attach/cleanup helpers; a running Cloud process can hold a stale module until rebooted
+        from services.supabase_service import (
+            attach_bank_payment_pdf as attach_bank_payment_pdf_supabase,
+            remove_bank_payment_pdf as remove_bank_payment_pdf_supabase,
+        )
+    except ImportError:  # pragma: no cover - only hit mid-redeploy before a full reboot
+        attach_bank_payment_pdf_supabase = None
+        remove_bank_payment_pdf_supabase = None
     from config.settings import append_bank_payment_log, load_bank_payments_log
 
     st.title("🏦 Bank Payment Import")
@@ -10257,11 +10269,14 @@ elif page == "🏦 Bank Payment":
                 # Saved Bank Payments table can offer a working Download link
                 # (mirrors the batch "Save All Parsed Payments" workflow). Manual
                 # entries carry no bytes and therefore skip this step entirely.
-                storage_meta, pdf_upload_warning = resolve_bank_payment_pdf_storage(
-                    payment_context,
-                    upload_bank_payment_pdf_supabase,
-                    label=f"Invoice {inv_nos_label}",
-                )
+                storage_meta: dict = {}
+                pdf_upload_warning = None
+                if resolve_bank_payment_pdf_storage is not None:
+                    storage_meta, pdf_upload_warning = resolve_bank_payment_pdf_storage(
+                        payment_context,
+                        upload_bank_payment_pdf_supabase,
+                        label=f"Invoice {inv_nos_label}",
+                    )
                 if storage_meta:
                     payment_entry["pdf_storage_bucket"] = storage_meta["pdf_storage_bucket"]
                     payment_entry["pdf_storage_path"] = storage_meta["pdf_storage_path"]
@@ -10897,7 +10912,12 @@ elif page == "🏦 Bank Payment":
             r for r in bank_payment_rows
             if r.get("id") is not None and not _safe_str(r.get("pdf_storage_path")).strip()
         ]
-        if rows_missing_pdf:
+        _attach_available = (
+            attach_missing_bank_payment_pdf is not None
+            and attach_bank_payment_pdf_supabase is not None
+            and remove_bank_payment_pdf_supabase is not None
+        )
+        if rows_missing_pdf and _attach_available:
             with st.expander(f"📎 Attach Missing Source PDF ({len(rows_missing_pdf)})", expanded=False):
                 st.caption(
                     "Attach the original bank-transfer PDF to a saved payment that has none. "

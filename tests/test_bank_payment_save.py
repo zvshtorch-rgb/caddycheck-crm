@@ -991,6 +991,25 @@ class TestAttachMissingBankPaymentPdf(unittest.TestCase):
         updated_fields = next(f for tag, f in [(t[0], t[1]) for t in log] if tag == "update")
         self.assertEqual(set(updated_fields), {"pdf_storage_bucket", "pdf_storage_path"})
 
+    def test_app_imports_new_pdf_helpers_tolerantly(self):
+        # Streamlit Cloud can keep an OLD cached services module in sys.modules while
+        # it reloads the new streamlit_app.py on redeploy. A hard top-level import of a
+        # brand-new function name would then crash the whole app with ImportError until
+        # a full reboot, so the new helpers must be imported inside try/except ImportError
+        # and their usage guarded by a None check.
+        source = (Path(__file__).resolve().parent.parent / "streamlit_app.py").read_text(encoding="utf-8")
+        for name in ("resolve_bank_payment_pdf_storage", "attach_missing_bank_payment_pdf",
+                     "attach_bank_payment_pdf", "remove_bank_payment_pdf"):
+            self.assertIn(name, source)
+        self.assertIn("resolve_bank_payment_pdf_storage = None", source)
+        self.assertIn("attach_missing_bank_payment_pdf = None", source)
+        self.assertIn("attach_bank_payment_pdf_supabase = None", source)
+        self.assertIn("remove_bank_payment_pdf_supabase = None", source)
+        self.assertIn("if resolve_bank_payment_pdf_storage is not None:", source)
+        self.assertIn("_attach_available", source)
+        # The new helpers must be imported inside a try/except ImportError block.
+        self.assertIn("except ImportError:", source)
+
 
 if __name__ == "__main__":
     unittest.main()
