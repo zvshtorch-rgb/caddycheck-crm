@@ -17,6 +17,7 @@ PROJECT_CHANGE_LOG_TABLE = "project_change_log"
 BANK_PAYMENTS_TABLE = "bank_payments"
 BANK_PAYMENT_ALLOCATIONS_TABLE = "bank_payment_allocations"
 TICKET_ATTACHMENTS_TABLE = "ticket_attachments"
+ASK_DATA_SHADOW_LOG_TABLE = "ask_data_shadow_log"
 SUPABASE_PAGE_SIZE = 1000
 
 
@@ -1658,6 +1659,46 @@ def save_project_change_log(entries: List[Dict[str, Any]]) -> None:
         if existing_id is None or int(existing_id) in keep_ids:
             continue
         client.table(PROJECT_CHANGE_LOG_TABLE).delete().eq("id", int(existing_id)).execute()
+
+
+# ── Ask Data v2/v3 shadow log (read-only diagnostics; see services/ask_data/shadow.py) ──────────
+
+def _normalize_ask_data_shadow_log_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
+    normalized: Dict[str, Any] = {
+        "created_at": str(entry.get("timestamp") or datetime.datetime.utcnow().isoformat()),
+        "question": str(entry.get("question") or "").strip() or None,
+        "editor": str(entry.get("editor") or "").strip() or None,
+        "primary_mode": str(entry.get("primary_mode") or "").strip() or None,
+        "has_mismatch": bool(entry.get("has_mismatch")),
+        "mismatch_flags": list(entry.get("mismatch_flags") or []),
+    }
+    for prefix in ("v2", "v3"):
+        normalized[f"{prefix}_outcome_kind"] = entry.get(f"{prefix}_outcome_kind")
+        normalized[f"{prefix}_tool"] = entry.get(f"{prefix}_tool")
+        normalized[f"{prefix}_filters"] = entry.get(f"{prefix}_filters") or {}
+        normalized[f"{prefix}_project_present"] = bool(entry.get(f"{prefix}_project_present"))
+        normalized[f"{prefix}_project_hash"] = entry.get(f"{prefix}_project_hash")
+        normalized[f"{prefix}_financial"] = bool(entry.get(f"{prefix}_financial"))
+        normalized[f"{prefix}_value_display"] = entry.get(f"{prefix}_value_display")
+        normalized[f"{prefix}_row_count"] = entry.get(f"{prefix}_row_count")
+        normalized[f"{prefix}_row_set_hash"] = entry.get(f"{prefix}_row_set_hash")
+        normalized[f"{prefix}_clarification_asked"] = bool(entry.get(f"{prefix}_clarification_asked"))
+    return normalized
+
+
+def load_ask_data_shadow_log(limit: int = 500) -> List[dict]:
+    client = _get_client()
+    resp = (
+        client.table(ASK_DATA_SHADOW_LOG_TABLE).select("*").order("created_at", desc=True).limit(limit).execute()
+    )
+    return resp.data or []
+
+
+def append_ask_data_shadow_log(entry: Dict[str, Any]) -> dict:
+    client = _get_client()
+    row = _normalize_ask_data_shadow_log_entry(entry)
+    resp = client.table(ASK_DATA_SHADOW_LOG_TABLE).insert(row).execute()
+    return resp.data[0] if resp.data else {}
 
 
 # ── Subscriptions ──────────────────────────────────────────────────────────────

@@ -1460,6 +1460,7 @@ def _answer_data_question_smart(question: str, projects, invoices, debt_summarie
 
 from services.ask_data.context import ConversationContext  # noqa: E402
 from services.ask_data.conversation import answer_turn  # noqa: E402
+from services.ask_data.tool_result import ResultStore  # noqa: E402
 
 
 def _answer_data_turn_v3(question: str, context: ConversationContext, projects, invoices, debt_summaries):
@@ -1470,6 +1471,69 @@ def _answer_data_turn_v3(question: str, context: ConversationContext, projects, 
         legacy_answer=_answer_data_question,
         next_invoice_number=lambda: _get_next_invoice_number(invoices, _data_path),
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Ask Data v2/v3 shadow comparison: editor-only diagnostics (read-only), see services/ask_data/shadow.py.
+#
+# While an approved editor (CAN_EDIT) has the ask_data_v3 flag on, the Ask Data page shows a v2/v3 mode
+# switcher (defaulting to v2 every session). Whichever pipeline is NOT shown to the editor is still run in
+# the background on the same question ("shadow run") so the two can be compared; the comparison is logged
+# (append_ask_data_shadow_log) and never shown as part of the answer. Any failure in the shadow path is
+# swallowed -- it must never affect the real, user-visible answer.
+# ══════════════════════════════════════════════════════════════════════════════
+
+from services.ask_data.shadow import ShadowSummary, build_comparison  # noqa: E402
+from config.settings import append_ask_data_shadow_log, load_ask_data_shadow_log  # noqa: E402
+
+
+def _ask_data_shadow_v3_summary(question: str, projects, invoices, debt_summaries) -> ShadowSummary:
+    """Shadow-run v3 for a question actually asked via v2. Uses its own persistent context/result store (not
+    the editor's "real" v3 session, if any) so sequential follow-ups accumulate independently."""
+    try:
+        shadow_context = st.session_state.setdefault("_ask_data_shadow_v3_context", ConversationContext())
+        shadow_store = st.session_state.setdefault("_ask_data_shadow_v3_store", ResultStore())
+        outcome = answer_turn(
+            question, projects, invoices, debt_summaries, shadow_context,
+            legacy_normalize_question=_llm_normalize_question,
+            legacy_answer=_answer_data_question,
+            next_invoice_number=lambda: _get_next_invoice_number(invoices, _data_path),
+            result_store=shadow_store,
+        )
+        if outcome.kind == "clarification":
+            return ShadowSummary.from_clarification()
+        if outcome.kind in ("tool", "drilldown"):
+            return ShadowSummary.from_tool_result(outcome.result, outcome_kind=outcome.kind)
+        if outcome.kind == "legacy":
+            return ShadowSummary.from_legacy(outcome.dataframe)
+        return ShadowSummary.from_error()
+    except Exception:
+        return ShadowSummary.from_error()
+
+
+def _ask_data_shadow_v2_summary(question: str, projects, invoices, debt_summaries) -> ShadowSummary:
+    """Shadow-run v2 for a question actually asked via v3. v2 has no conversation context, so this is exactly
+    what a real v2 user typing that same text alone (no history) would get."""
+    try:
+        st.session_state.pop("_ask_data_clarification", None)
+        st.session_state.pop("_ask_data_last_result", None)
+        _text, df = _answer_data_question_smart(question, projects, invoices, debt_summaries)
+        if st.session_state.get("_ask_data_clarification") is not None:
+            return ShadowSummary.from_clarification()
+        result = st.session_state.get("_ask_data_last_result")
+        if result is not None:
+            return ShadowSummary.from_tool_result(result)
+        return ShadowSummary.from_legacy(df)
+    except Exception:
+        return ShadowSummary.from_error()
+
+
+def _log_ask_data_shadow(question: str, primary_mode: str, v2_summary: ShadowSummary, v3_summary: ShadowSummary) -> None:
+    try:
+        comparison = build_comparison(question, primary_mode, v2_summary, v3_summary, editor=_current_user)
+        append_ask_data_shadow_log(comparison.to_log_entry())
+    except Exception:
+        pass   # shadow logging is best-effort diagnostics; it must never affect the real answer
 
 
 def _find_invoice_header_row(worksheet) -> Optional[tuple[int, dict[str, int]]]:
@@ -3686,7 +3750,56 @@ elif page == "❓ Ask Data":
                 language=None,
             )
 
-    if not get_ask_data_v3_enabled():
+    # Ask Data v3 is only ever offered to approved editors (CAN_EDIT), and only while the ask_data_v3 flag
+    # is on in secrets/env (the global kill switch -- flipping it off instantly hides v3 and the switcher for
+    # everyone, no redeploy needed). Even then, every session defaults back to v2; editors must opt in each
+    # time (goal 1 + 2 + 4). Viewers never see the switcher and are completely unaffected (goal 3).
+    _ask_data_v3_master_enabled = get_ask_data_v3_enabled()
+    _ask_data_editor_pilot = CAN_EDIT and _ask_data_v3_master_enabled
+    _ask_data_use_v3 = False
+
+    if _ask_data_editor_pilot:
+        st.session_state.setdefault("_ask_data_mode_choice", "Ask Data v2")
+        _ask_data_mode_choice = st.radio(
+            "Mode (editor-only preview)",
+            ["Ask Data v2", "Ask Data v3 (preview)"],
+            key="_ask_data_mode_choice",
+            horizontal=True,
+            help=(
+                "v3 adds conversation follow-ups and drill-down and is only shown to editors while it is "
+                "being piloted. Every question asked here is also compared against the other version in the "
+                "background (read-only shadow log) so we can catch differences before a wider rollout."
+            ),
+        )
+        _ask_data_use_v3 = _ask_data_mode_choice == "Ask Data v3 (preview)"
+
+        _ask_data_shadow_entries = []
+        try:
+            _ask_data_shadow_entries = load_ask_data_shadow_log()
+        except Exception:
+            pass
+        if _ask_data_shadow_entries:
+            _ask_data_shadow_mismatches = [e for e in _ask_data_shadow_entries if e.get("has_mismatch")]
+            with st.expander(
+                f"🔬 Shadow diagnostics — {len(_ask_data_shadow_entries)} compared, "
+                f"{len(_ask_data_shadow_mismatches)} with a flagged difference",
+                expanded=False,
+            ):
+                st.caption("Read-only v2 vs v3 comparison log. Never shows ledger rows, amounts, or bank data — see services/ask_data/shadow.py.")
+                st.dataframe(
+                    pd.DataFrame([
+                        {
+                            "When": e.get("timestamp") or e.get("created_at"), "Editor": e.get("editor"),
+                            "Question": e.get("question"), "Primary": e.get("primary_mode"),
+                            "v2 outcome": e.get("v2_outcome_kind"), "v3 outcome": e.get("v3_outcome_kind"),
+                            "Mismatch flags": ", ".join(e.get("mismatch_flags") or []),
+                        }
+                        for e in _ask_data_shadow_entries[:50]
+                    ]),
+                    use_container_width=True, hide_index=True, height=300,
+                )
+
+    if not _ask_data_use_v3:
         _ask_data_llm_on = bool(get_gemini_config().get("api_key", ""))
         if _ask_data_llm_on:
             st.caption("Ask naturally about projects, invoices, debt, payments, licenses, or camera statistics.")
@@ -3695,8 +3808,23 @@ elif page == "❓ Ask Data":
 
         def _ask_data_answer(raw_question: str) -> tuple[str, Optional[pd.DataFrame]]:
             if _ask_data_llm_on:
-                return _answer_data_question_smart(raw_question, projects, invoices, debt_summaries)
-            return _answer_data_question(raw_question, projects, invoices, debt_summaries)
+                text, df = _answer_data_question_smart(raw_question, projects, invoices, debt_summaries)
+            else:
+                # the legacy keyword matcher never touches these keys; clear any stale value from a
+                # previous smart-path call so the shadow classification below can't misread it.
+                st.session_state.pop("_ask_data_last_result", None)
+                st.session_state.pop("_ask_data_clarification", None)
+                text, df = _answer_data_question(raw_question, projects, invoices, debt_summaries)
+            if _ask_data_editor_pilot:
+                v2_result = st.session_state.get("_ask_data_last_result")
+                v2_summary = (
+                    ShadowSummary.from_clarification() if st.session_state.get("_ask_data_clarification") is not None
+                    else ShadowSummary.from_tool_result(v2_result) if v2_result is not None
+                    else ShadowSummary.from_legacy(df)
+                )
+                v3_summary = _ask_data_shadow_v3_summary(raw_question, projects, invoices, debt_summaries)
+                _log_ask_data_shadow(raw_question, "v2", v2_summary, v3_summary)
+            return text, df
 
         def _remember_ask_data_question(raw_question: str) -> None:
             text = _safe_str(raw_question).strip()
@@ -3797,13 +3925,13 @@ elif page == "❓ Ask Data":
                 if show_drilldown_buttons and msg.get("kind") == "tool":
                     _col_rows, _col_breakdown = st.columns(2)
                     if _col_rows.button("📄 Show invoices", key="ask_data_v3_drill_rows", use_container_width=True):
-                        _run_v3_turn("Show invoices")
+                        _run_v3_turn("Show invoices", shadow=False)
                         st.rerun()
                     if _col_breakdown.button("📊 Show breakdown", key="ask_data_v3_drill_breakdown", use_container_width=True):
-                        _run_v3_turn("Show breakdown")
+                        _run_v3_turn("Show breakdown", shadow=False)
                         st.rerun()
 
-        def _run_v3_turn(raw_question: str) -> None:
+        def _run_v3_turn(raw_question: str, *, shadow: bool = True) -> None:
             text = _safe_str(raw_question).strip()
             if not text:
                 return
@@ -3812,6 +3940,17 @@ elif page == "❓ Ask Data":
             _v3_messages.append({
                 "role": "assistant", "content": outcome.text, "dataframe": outcome.dataframe, "kind": outcome.kind,
             })
+            if shadow and _ask_data_editor_pilot:
+                if outcome.kind == "clarification":
+                    v3_summary = ShadowSummary.from_clarification()
+                elif outcome.kind in ("tool", "drilldown"):
+                    v3_summary = ShadowSummary.from_tool_result(outcome.result, outcome_kind=outcome.kind)
+                elif outcome.kind == "legacy":
+                    v3_summary = ShadowSummary.from_legacy(outcome.dataframe)
+                else:
+                    v3_summary = ShadowSummary.from_error()
+                v2_summary = _ask_data_shadow_v2_summary(text, projects, invoices, debt_summaries)
+                _log_ask_data_shadow(text, "v3", v2_summary, v3_summary)
 
         for _msg_idx, _msg in enumerate(_v3_messages):
             _is_last_assistant = _msg["role"] == "assistant" and _msg_idx == len(_v3_messages) - 1

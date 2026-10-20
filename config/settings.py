@@ -43,6 +43,8 @@ PROJECT_CHANGE_LOG_FILE = CONFIG_DIR / "project_change_log.json"
 BANK_PAYMENTS_LOG_FILE = CONFIG_DIR / "bank_payments_log.json"
 ORDERS_FILE = CONFIG_DIR / "orders.json"
 EXCHANGE_RATES_FILE = CONFIG_DIR / "exchange_rates.json"
+ASK_DATA_SHADOW_LOG_FILE = CONFIG_DIR / "ask_data_shadow_log.json"
+ASK_DATA_SHADOW_LOG_LOCAL_MAX_ENTRIES = 500   # bounds local-fallback growth; Supabase keeps the full history
 
 DEFAULT_EUR_TO_ILS_RATES = {
     2018: 4.22,
@@ -468,6 +470,30 @@ def _save_local_project_change_log(entries: list) -> None:
         json.dump(entries, f, indent=2, default=_json_default)
 
 
+def _load_local_ask_data_shadow_log() -> list:
+    if ASK_DATA_SHADOW_LOG_FILE.exists():
+        try:
+            with open(ASK_DATA_SHADOW_LOG_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data if isinstance(data, list) else []
+        except Exception:
+            pass
+    return []
+
+
+def _append_local_ask_data_shadow_log(entry: dict) -> None:
+    """Append one shadow comparison locally, trimming to the most recent
+    ASK_DATA_SHADOW_LOG_LOCAL_MAX_ENTRIES (this is a diagnostic log, not a financial record -- unbounded local
+    growth is never appropriate; Supabase, when configured, keeps the full history instead)."""
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    entries = _load_local_ask_data_shadow_log()
+    entries.append(entry)
+    if len(entries) > ASK_DATA_SHADOW_LOG_LOCAL_MAX_ENTRIES:
+        entries = entries[-ASK_DATA_SHADOW_LOG_LOCAL_MAX_ENTRIES:]
+    with open(ASK_DATA_SHADOW_LOG_FILE, "w", encoding="utf-8") as f:
+        json.dump(entries, f, indent=2, default=_json_default)
+
+
 def _load_local_bank_payments_log() -> list:
     if BANK_PAYMENTS_LOG_FILE.exists():
         try:
@@ -643,6 +669,43 @@ def save_project_change_log(entries: list) -> None:
         if not _is_missing_supabase_table_error(exc, "project_change_log"):
             logger.warning("Could not save project change log to Supabase: %s", exc)
     _save_local_project_change_log(entries)
+
+
+def load_ask_data_shadow_log() -> list:
+    """Load Ask Data v2/v3 shadow comparisons (read-only diagnostics), preferring Supabase when available.
+
+    This is never financial data -- see services/ask_data/shadow.py for exactly what each entry contains
+    (and, just as importantly, what it never contains: ledger rows, amounts, bank details or secrets)."""
+    local_entries = _load_local_ask_data_shadow_log()
+    try:
+        from services.supabase_service import load_ask_data_shadow_log as load_remote_ask_data_shadow_log
+
+        remote_entries = load_remote_ask_data_shadow_log()
+        return remote_entries or local_entries
+    except RuntimeError as exc:
+        if "Supabase credentials not configured" not in str(exc):
+            logger.warning("Falling back to local Ask Data shadow log: %s", exc)
+    except Exception as exc:
+        if not _is_missing_supabase_table_error(exc, "ask_data_shadow_log"):
+            logger.warning("Falling back to local Ask Data shadow log: %s", exc)
+    return local_entries
+
+
+def append_ask_data_shadow_log(entry: dict) -> None:
+    """Append one Ask Data v2/v3 shadow comparison, preferring Supabase and always keeping a bounded local
+    backup (so the diagnostic works immediately, even before the ask_data_shadow_log table is created --
+    see migrations/create_ask_data_shadow_log.sql)."""
+    try:
+        from services.supabase_service import append_ask_data_shadow_log as append_remote_ask_data_shadow_log
+
+        append_remote_ask_data_shadow_log(entry)
+    except RuntimeError as exc:
+        if "Supabase credentials not configured" not in str(exc):
+            logger.warning("Could not append Ask Data shadow log to Supabase: %s", exc)
+    except Exception as exc:
+        if not _is_missing_supabase_table_error(exc, "ask_data_shadow_log"):
+            logger.warning("Could not append Ask Data shadow log to Supabase: %s", exc)
+    _append_local_ask_data_shadow_log(entry)
 
 
 def load_bank_payments_log() -> list:
