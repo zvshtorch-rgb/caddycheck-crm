@@ -35,8 +35,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 
-def build_snapshot_rows(invoices, projects) -> list[dict]:
-    """Pure: one dict per invoice row, matching the invoice_snapshots schema exactly. No I/O."""
+def build_snapshot_rows(invoices, projects, captured_at: str) -> list[dict]:
+    """Pure: one dict per invoice row, matching the invoice_snapshots schema exactly. No I/O.
+
+    `captured_at` is a single UTC ISO timestamp computed ONCE by the caller for the whole run and stamped
+    on every row explicitly -- never left to the table's DB-level default. The default only fires on a
+    fresh INSERT; on the UPDATE branch of an upsert (a same-day rerun hitting the (snapshot_date,
+    invoice_row_id) unique constraint), a column absent from the payload is left untouched, so relying on
+    the DB default would silently keep the OLD captured_at forever after the first run. Passing it
+    explicitly here, identical for every row, is what makes a rerun's captured_at actually refresh."""
     from services.ask_data.resolver import NetworkIndex, ProjectIndex
 
     project_index = ProjectIndex(projects)
@@ -61,6 +68,7 @@ def build_snapshot_rows(invoices, projects) -> list[dict]:
             "payment_date": inv.payment_date.date().isoformat() if inv.payment_date else None,
             "country_at_capture": country,
             "network_at_capture": network,
+            "captured_at": captured_at,
         })
     return rows
 
@@ -71,6 +79,9 @@ def run(snapshot_date: datetime.date, *, dry_run: bool = False) -> int:
     )
 
     started_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    # One timestamp for the ENTIRE run, shared by every row AND the run-log -- see build_snapshot_rows()'s
+    # docstring for why this must be explicit rather than relying on the table's DB-level default.
+    captured_at = started_at
     print(f"Invoice snapshot for {snapshot_date.isoformat()} starting at {started_at}...")
 
     if not dry_run:
@@ -79,7 +90,7 @@ def run(snapshot_date: datetime.date, *, dry_run: bool = False) -> int:
     try:
         invoices = load_invoices()
         projects = load_projects()
-        rows = build_snapshot_rows(invoices, projects)
+        rows = build_snapshot_rows(invoices, projects, captured_at)
     except Exception as exc:
         print(f"FAILED to build snapshot rows: {exc}")
         if not dry_run:
