@@ -150,8 +150,15 @@ def answer_turn(
     legacy_answer,
     next_invoice_number=None,
     result_store: Optional[ResultStore] = None,
+    history_enabled: bool = False,
 ) -> TurnOutcome:
-    """Process one chat turn against `context` (mutated in place) and return a `TurnOutcome`."""
+    """Process one chat turn against `context` (mutated in place) and return a `TurnOutcome`.
+
+    `history_enabled` (Ask Data Phase 5, default False) gates the historical/trend tools entirely: when
+    False, behavior is byte-identical to pre-Phase-5 (is_historical_question() still returns the fixed
+    HISTORICAL_LIMITATION_TEXT immediately, zero Gemini calls). When True, a historical question instead
+    flows through the normal planner -> validator -> executor pipeline below, with the planner told about
+    the 6 new tools (see planner.py's `history_enabled` parameter)."""
     st, store = _session(result_store)
     st.session_state.pop("_ask_data_v3_llm_error", None)
     st.session_state.pop("_ask_data_v3_tool_call", None)
@@ -173,10 +180,13 @@ def answer_turn(
             text, df = rows_table_for_result(previous, store)
         return TurnOutcome(text, df, "drilldown", tool=previous.tool, result=previous)
 
-    if is_historical_question(question):
-        # No Phase 5 history source yet -- never let the planner silently pick an unrelated current-state
-        # tool for a trend/change-over-time question (the production bug this guards against). A stale
-        # clarification (if any) is abandoned, since this is clearly a different, unrelated question.
+    if is_historical_question(question) and not history_enabled:
+        # No Phase 5 history source available/enabled -- never let the planner silently pick an unrelated
+        # current-state tool for a trend/change-over-time question (the production bug this guards
+        # against). A stale clarification (if any) is abandoned, since this is clearly a different,
+        # unrelated question. When `history_enabled` is True this check is skipped entirely and the
+        # question falls through to the normal planner -> validator -> executor pipeline below, which now
+        # knows about the 6 historical tools (see planner.py's `history_enabled` parameter).
         context.clarification = None
         return TurnOutcome(HISTORICAL_LIMITATION_TEXT, None, "historical_unsupported")
 
@@ -201,7 +211,7 @@ def answer_turn(
             # the clarified call itself failed validation (rare) -- clear and fall through to a fresh question
         context.clarification = None
 
-    parsed = _llm_parse_data_question(question, context=context.planner_hint())
+    parsed = _llm_parse_data_question(question, context=context.planner_hint(), history_enabled=history_enabled)
     if parsed is not None:
         validation = validate_tool_call(parsed, projects)
         if validation.clarification is not None:

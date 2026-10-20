@@ -9,7 +9,7 @@ from config.settings import get_gemini_config
 from services.ask_data.tool_specs import _ask_data_tool_catalog_text
 
 
-def _llm_parse_data_question(question: str, context: Optional[dict] = None) -> Optional[dict]:
+def _llm_parse_data_question(question: str, context: Optional[dict] = None, *, history_enabled: bool = False) -> Optional[dict]:
     """
     Ask Gemini to translate a free-text question into ONE structured,
     read-only tool call: {"tool": "<name>", "arguments": {...}}.
@@ -25,6 +25,13 @@ def _llm_parse_data_question(question: str, context: Optional[dict] = None) -> O
     `context` is `None` for a standalone question (byte-identical prompt to before Phase 4) or
     `{"tool": <previous tool name>, "arguments": {<already-resolved filter> -> <value>, ...}}` for a
     follow-up turn (see services/ask_data/context.py's `ConversationContext.planner_hint`).
+
+    `history_enabled` (Ask Data Phase 5, default False) gates the historical/trend tools (get_debt_at,
+    get_debt_change, etc.) entirely out of the prompt/catalog when off, so the prompt is BYTE-IDENTICAL to
+    pre-Phase-5 unless a caller explicitly passes `history_enabled=True` (see conversation.py). When on,
+    the model is only ever asked to copy a date/period PHRASE verbatim out of the question -- never to
+    compute or write an actual date itself; the real calendar math happens afterward, deterministically,
+    in services/ask_data/history_dates.py.
     """
     gemini_cfg = get_gemini_config()
     api_key = gemini_cfg.get("api_key", "")
@@ -124,7 +131,18 @@ def _llm_parse_data_question(question: str, context: Optional[dict] = None) -> O
             "EOP not updated -> paid_year=N. 'EOP earlier than justified by payments' / 'needs EOP "
             "update' with no specific year -> needs_update='yes'. Add project/country/project_status "
             "only if the question names them. This tool is read-only.\n\n"
-            f"Tool catalog:\n{_ask_data_tool_catalog_text()}\n\n"
+            f"Tool catalog:\n{_ask_data_tool_catalog_text(include_history=history_enabled)}\n\n"
+            + ("" if not history_enabled else (
+                "- Historical/trend questions (e.g. 'what changed since September 1', 'how much was the "
+                "debt last week', 'how much has debt increased this month', 'which invoices were added "
+                "since October 1', 'which payments reduced the debt this month', 'compare debt today vs "
+                "30 September') use get_debt_at / compare_debt_dates / get_debt_change / "
+                "get_invoice_changes / get_payments_in_period / get_new_invoices_in_period. For these "
+                "tools, the 'at_date'/'date_a'/'date_b'/'period' argument must be the EXACT date/period "
+                "phrase copied verbatim from the question (e.g. 'today', 'last week', 'this month', "
+                "'since September 1', 'past 30 days', '30 September') -- never compute, normalize, or "
+                "write an actual calendar date yourself; a deterministic resolver does that afterward.\n\n"
+            ))
             + ("" if context is None else (
                 "This is a FOLLOW-UP to a previous turn. The previous turn resolved to this tool call "
                 f"(tool and already-resolved filter values only -- no amounts, no rows):\n{json.dumps(context)}\n\n"

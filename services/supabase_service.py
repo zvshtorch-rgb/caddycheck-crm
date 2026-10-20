@@ -18,6 +18,9 @@ BANK_PAYMENTS_TABLE = "bank_payments"
 BANK_PAYMENT_ALLOCATIONS_TABLE = "bank_payment_allocations"
 TICKET_ATTACHMENTS_TABLE = "ticket_attachments"
 ASK_DATA_SHADOW_LOG_TABLE = "ask_data_shadow_log"
+INVOICE_SNAPSHOTS_TABLE = "invoice_snapshots"
+INVOICE_SNAPSHOT_RUNS_TABLE = "invoice_snapshot_runs"
+INVOICE_CHANGE_LOG_TABLE = "invoice_change_log"
 SUPABASE_PAGE_SIZE = 1000
 
 
@@ -1452,6 +1455,80 @@ def load_bank_payment_allocations(payment_id: Optional[int] = None) -> List[dict
     query = client.table(BANK_PAYMENT_ALLOCATIONS_TABLE).select("*").order("id", desc=False)
     if payment_id is not None:
         query = query.eq("payment_id", int(payment_id))
+    return query.execute().data or []
+
+
+# ── Ask Data Phase 5: invoice history snapshots (read-only from Ask Data; written only by the ──────────
+# standalone services/ask_data/../snapshot_invoice_history.py scheduled job -- never by the app itself).
+
+def load_invoice_snapshot_runs() -> List[dict]:
+    """The small (~1 row/day) audit/idempotency log of the snapshot job. Cheap: used to find which
+    calendar days have a reliable ('success') snapshot without touching the much larger row-level table."""
+    client = _get_client()
+    resp = client.table(INVOICE_SNAPSHOT_RUNS_TABLE).select("*").order("snapshot_date", desc=True).execute()
+    return resp.data or []
+
+
+def load_invoice_snapshot(snapshot_date) -> List[dict]:
+    """Every invoice_snapshots row for ONE calendar day (bounded: one invoice row's worth, never an
+    unbounded scan of the whole history table)."""
+    client = _get_client()
+    date_str = snapshot_date.isoformat() if hasattr(snapshot_date, "isoformat") else str(snapshot_date)
+    resp = client.table(INVOICE_SNAPSHOTS_TABLE).select("*").eq("snapshot_date", date_str).execute()
+    return resp.data or []
+
+
+def upsert_invoice_snapshot_run(snapshot_date, *, status: str, row_count: Optional[int] = None,
+                                error_message: Optional[str] = None, started_at: Optional[str] = None,
+                                completed_at: Optional[str] = None) -> None:
+    """Idempotent: one row per `snapshot_date` (unique constraint) -- a rerun for the same day UPDATES
+    this same row rather than inserting a second one. Used only by the standalone snapshot writer job."""
+    client = _get_client()
+    date_str = snapshot_date.isoformat() if hasattr(snapshot_date, "isoformat") else str(snapshot_date)
+    row: Dict[str, Any] = {"snapshot_date": date_str, "status": status}
+    if row_count is not None:
+        row["row_count"] = row_count
+    if error_message is not None:
+        row["error_message"] = error_message
+    if started_at is not None:
+        row["started_at"] = started_at
+    if completed_at is not None:
+        row["completed_at"] = completed_at
+    client.table(INVOICE_SNAPSHOT_RUNS_TABLE).upsert(row, on_conflict="snapshot_date").execute()
+
+
+def upsert_invoice_snapshot_rows(snapshot_date, rows: List[Dict[str, Any]], *, batch_size: int = 500) -> int:
+    """Idempotent upsert of one day's invoice_snapshots rows, keyed on (snapshot_date, invoice_row_id) --
+    a rerun for the same day fully overwrites that day's rows (including `captured_at`, which is always
+    the latest run's timestamp) rather than duplicating them. Used only by the standalone snapshot writer
+    job -- Ask Data itself never calls this."""
+    if not rows:
+        return 0
+    client = _get_client()
+    date_str = snapshot_date.isoformat() if hasattr(snapshot_date, "isoformat") else str(snapshot_date)
+    written = 0
+    for i in range(0, len(rows), batch_size):
+        batch = [dict(row, snapshot_date=date_str) for row in rows[i:i + batch_size]]
+        client.table(INVOICE_SNAPSHOTS_TABLE).upsert(batch, on_conflict="snapshot_date,invoice_row_id").execute()
+        written += len(batch)
+    return written
+
+
+def load_invoice_change_log(date_from=None, date_to=None, *, invoice_number=None) -> List[dict]:
+    """Read-only: the trigger-populated audit log of every change to `invoices` (create, update, renumber,
+    payment_status_change, delete, credit_note, cancellation, replace -- see
+    migration_run_kit/create_invoice_integrity.sql). Used by Ask Data's historical bridge ONLY to EXPLAIN
+    a transition already observed between two snapshots -- never as the state-at-time source itself (the
+    log only has entries from when the audit trigger was installed onward, so it cannot answer "what was
+    the state on <date>" on its own)."""
+    client = _get_client()
+    query = client.table(INVOICE_CHANGE_LOG_TABLE).select("*").order("changed_at", desc=False)
+    if date_from is not None:
+        query = query.gte("changed_at", date_from.isoformat() if hasattr(date_from, "isoformat") else str(date_from))
+    if date_to is not None:
+        query = query.lte("changed_at", date_to.isoformat() if hasattr(date_to, "isoformat") else str(date_to))
+    if invoice_number is not None:
+        query = query.eq("invoice_number", str(invoice_number))
     return query.execute().data or []
 
 

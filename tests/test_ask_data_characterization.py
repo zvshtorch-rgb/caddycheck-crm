@@ -117,8 +117,11 @@ class TestRefactoredAppWrappersMatchOriginal(_SectionMixin, unittest.TestCase):
 
 class TestScenarioCoverage(unittest.TestCase):
     def test_every_tool_in_the_catalog_has_a_scenario(self):
-        from services.ask_data.tool_specs import TOOL_SPECS
-        covered = {tool for _id, tool, _args in TOOL_CASES} | {"get_last_bank_payment"}
+        from services.ask_data.tool_specs import TOOL_SPECS, HISTORY_TOOL_NAMES
+        # Phase 5's 6 new historical tools are entirely new (no pre-Phase-5 oracle behavior exists to
+        # golden-diff against) -- they are intentionally excluded from this harness's scenario-coverage
+        # check and are instead directly covered by tests/test_ask_data_history_tools.py.
+        covered = {tool for _id, tool, _args in TOOL_CASES} | {"get_last_bank_payment"} | set(HISTORY_TOOL_NAMES)
         self.assertEqual(set(TOOL_SPECS), covered - {"definitely_not_a_tool"})
 
     def test_scenario_counts_match_golden(self):
