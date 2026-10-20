@@ -77,48 +77,40 @@ def _deployment_diagnostics_snapshot() -> dict:
     return {"commit_sha": commit_sha, "supabase_host": supabase_host, "ad_sint_kruis_brugge_license_eop": raw_eop}
 
 
-def _safe_int(v, default=0):
-    """Convert v to int safely, returning default for None/NaN/empty."""
-    try:
-        if v is None:
-            return default
-        if isinstance(v, float) and math.isnan(v):
-            return default
-        return int(v)
-    except Exception:
-        return default
-
-def _safe_float(v, default=0.0):
-    """Convert v to float safely, returning default for None/NaN/empty."""
-    try:
-        if v is None:
-            return default
-        f = float(v)
-        return default if math.isnan(f) else f
-    except Exception:
-        return default
-
-def _safe_str(v):
-    """Convert v to str, returning '' for None/NaN."""
-    if v is None:
-        return ""
-    try:
-        if isinstance(v, float) and math.isnan(v):
-            return ""
-    except Exception:
-        pass
-    return str(v)
+from services.ask_data import data_clock  # noqa: E402 - records when the cached CRM data was loaded
+from services.ask_data.money import fmt_eur, sum_money, to_money  # noqa: E402 - exact (Decimal) money for answers
+from services.ask_data.resolver import ProjectIndex  # noqa: E402 - canonical ledger-name -> project matching
+from services.ask_data.helpers import (  # noqa: E402 - shared pure helpers, moved to services/ask_data (Phase 1)
+    DETECTION_CAMERA_FIELDS,
+    ORDER_STATUS_OPTIONS,
+    PROJECT_STATUS_OPTIONS,
+    _build_invoice_answer_df,
+    _build_project_answer_df,
+    _invoice_category_label,
+    _is_maintenance_category,
+    _is_new_installation_category,
+    _is_paid_trial_category,
+    _license_status,
+    _match_countries_from_question,
+    _normalize_country,
+    _normalize_detection_key,
+    _normalize_project_name_key,
+    _normalize_project_status,
+    _normalize_query_text,
+    _parse_detection_camera_counts,
+    _project_detection_counts,
+    _project_license_date,
+    _safe_float,
+    _safe_int,
+    _safe_str,
+    _suggest_best_project_match,
+)
 
 
 def _safe_bool(v) -> bool:
     if isinstance(v, bool):
         return v
     return _safe_str(v).strip().lower() in {"1", "true", "yes", "y", "approved", "x"}
-
-
-def _normalize_project_name_key(value: object) -> str:
-    text = _safe_str(value).strip().lower()
-    return re.sub(r"[^a-z0-9]+", "", text)
 
 
 def _project_name_matches(candidate: object, existing_keys: set[str]) -> bool:
@@ -134,31 +126,6 @@ def _project_name_matches(candidate: object, existing_keys: set[str]) -> bool:
     from difflib import SequenceMatcher
 
     return any(SequenceMatcher(None, candidate_key, existing_key).ratio() >= 0.88 for existing_key in existing_keys)
-
-
-def _suggest_best_project_match(candidate: object, project_names: list[str]) -> tuple[str, float]:
-    candidate_key = _normalize_project_name_key(candidate)
-    if not candidate_key or not project_names:
-        return "", 0.0
-
-    from difflib import SequenceMatcher
-
-    best_name = ""
-    best_score = 0.0
-    for project_name in project_names:
-        project_key = _normalize_project_name_key(project_name)
-        if not project_key:
-            continue
-        if candidate_key == project_key:
-            return project_name, 1.0
-        if candidate_key in project_key or project_key in candidate_key:
-            score = 0.95
-        else:
-            score = SequenceMatcher(None, candidate_key, project_key).ratio()
-        if score > best_score:
-            best_score = score
-            best_name = project_name
-    return best_name, best_score
 
 
 def _suggest_project_matches(candidate: object, project_names: list[str], limit: int = 5) -> list[str]:
@@ -238,44 +205,6 @@ def _get_exact_existing_project_match(candidate: object, project_names: list[str
     return ""
 
 
-def _invoice_category_label(invoice) -> str:
-    return str(getattr(invoice, "maintenance_year", "")).strip().lower()
-
-
-def _is_paid_trial_category(invoice) -> bool:
-    checker = getattr(invoice, "is_paid_trial_category", None)
-    if callable(checker):
-        try:
-            return bool(checker())
-        except Exception:
-            pass
-    return "paid trial" in _invoice_category_label(invoice)
-
-
-def _is_new_installation_category(invoice) -> bool:
-    if _invoice_category_label(invoice) == "credit":
-        return True
-    checker = getattr(invoice, "is_new_installation_category", None)
-    if callable(checker):
-        try:
-            return bool(checker())
-        except Exception:
-            pass
-    return _invoice_category_label(invoice) in {"y1", "credit"}
-
-
-def _is_maintenance_category(invoice) -> bool:
-    if _invoice_category_label(invoice) == "credit":
-        return False
-    checker = getattr(invoice, "is_maintenance_category", None)
-    if callable(checker):
-        try:
-            return bool(checker())
-        except Exception:
-            pass
-    return not _is_new_installation_category(invoice) and not _is_paid_trial_category(invoice)
-
-
 def _dedupe_invoice_project_rows(invoice_rows):
     deduped_rows = []
     seen_invoice_project_keys = set()
@@ -306,6 +235,7 @@ from config.settings import (
     load_orders_records,
     save_orders_records,
     get_gemini_config,
+    get_ask_data_v3_enabled,
 )
 
 try:
@@ -351,17 +281,6 @@ from services.invoice_save_guard import (
     describe_changes as describe_invoice_number_changes,
 )
 
-ORDER_STATUS_OPTIONS = [
-    "New",
-    "Ordered",
-    "In Progress",
-    "Installed",
-    "Active",
-    "Cancelled",
-]
-
-PROJECT_STATUS_OPTIONS = ORDER_STATUS_OPTIONS[:1] + ["Trial"] + ORDER_STATUS_OPTIONS[1:-1] + ["Uninstalled", "Offline"] + ORDER_STATUS_OPTIONS[-1:]
-
 TICKET_SUBCATEGORY_OPTIONS = ["PushOut", "TopDown", "BackTray", "License"]
 TICKET_TITLE_OPTIONS = [
     "Detection improvement",
@@ -374,11 +293,6 @@ TICKET_TITLE_OPTIONS = [
 TICKET_CAMERA_OPTIONS = [""] + [f"K{i}B" for i in range(1, 11)] + [f"K{i}TD" for i in range(1, 11)]
 TICKET_ATTACHMENT_FILE_TYPES = ["jpg", "jpeg", "png", "webp", "gif", "mp4", "mov", "webm"]
 TICKET_ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024
-DETECTION_CAMERA_FIELDS = [
-    ("Backtray", "backtray_cameras", "Backtray Cams"),
-    ("TopDown", "topdown_cameras", "TopDown Cams"),
-    ("Pushout", "pushout_cameras", "Pushout Cams"),
-]
 DETECTION_TYPE_OPTIONS = ["", "Backtray", "TopDown", "Pushout", "Mixed"]
 DETECTION_CAMERA_COUNT_OPTIONS = list(range(0, 21))
 VIM_VERSION_OPTIONS = ["", "V4", "V11", "V60", "V66", "V70"]
@@ -389,6 +303,7 @@ from services.excel_service import (
     compute_debt_summaries,
     get_yearly_summary,
     get_monthly_invoice_projects,
+    get_projects_for_month,
     load_projects as load_projects_excel,
     load_invoices as load_invoices_excel,
     save_projects_to_excel,
@@ -926,6 +841,7 @@ def load_data():
         project.status = _normalize_project_status(getattr(project, "status", ""))
     debt_summaries = compute_debt_summaries(projects, invoices)
     yearly_summary = get_yearly_summary(invoices)
+    data_clock.mark_loaded(source_name)  # cache-miss only; lets Ask Data show "Data as of <load time>"
     return projects, invoices, debt_summaries, yearly_summary, source_name
 
 
@@ -1036,10 +952,6 @@ def _suggest_month_invoice_number(month_projects, invoices, year: int, source_na
     return _get_next_invoice_number(invoices, source_name)
 
 
-def _normalize_query_text(value: str) -> str:
-    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9+ ]", " ", _safe_str(value).lower())).strip()
-
-
 def _extract_question_year(question: str) -> Optional[int]:
     match = re.search(r"\b(20\d{2})\b", question)
     return int(match.group(1)) if match else None
@@ -1051,16 +963,6 @@ def _extract_question_invoice_number(question: str) -> Optional[int]:
         return int(match.group(1))
     standalone = re.search(r"\b(8\d{3,5})\b", question)
     return int(standalone.group(1)) if standalone else None
-
-
-def _project_license_date(project) -> Optional[datetime.date]:
-    if not project.license_eop:
-        return None
-    if isinstance(project.license_eop, datetime.datetime):
-        return project.license_eop.date()
-    if isinstance(project.license_eop, datetime.date):
-        return project.license_eop
-    return None
 
 
 def _add_months(base_date: datetime.date, months: int) -> datetime.date:
@@ -1126,64 +1028,6 @@ def _license_confirmation_still_valid(
         pending.get("project_name") == project_name
         and pending.get("target_license_date") == target_license_date_iso
     )
-
-
-def _license_status(project, today: Optional[datetime.date] = None) -> str:
-    today = today or datetime.date.today()
-    if _normalize_project_status(getattr(project, "status", "")).lower() == "cancelled":
-        return "Cancelled"
-    license_date = _project_license_date(project)
-    if license_date is None:
-        return "Missing"
-    if license_date < today:
-        return "Expired"
-    next_month = today.month % 12 + 1
-    next_month_year = today.year if today.month < 12 else today.year + 1
-    if license_date.month == next_month and license_date.year == next_month_year:
-        return "Update Next Month"
-    return "Active"
-
-
-
-def _normalize_detection_key(value: str) -> str:
-    text = re.sub(r"[^a-z0-9]+", "", _safe_str(value).lower())
-    aliases = {
-        "back": "backtray_cameras",
-        "backtray": "backtray_cameras",
-        "top": "topdown_cameras",
-        "topdown": "topdown_cameras",
-        "push": "pushout_cameras",
-        "pushout": "pushout_cameras",
-    }
-    return aliases.get(text, "")
-
-
-def _parse_detection_camera_counts(detection_text: str) -> dict[str, int]:
-    counts = {field_name: 0 for _, field_name, _ in DETECTION_CAMERA_FIELDS}
-    text = _safe_str(detection_text)
-    if not text.strip():
-        return counts
-
-    type_pattern = r"backtray|back|topdown|top\s*down|pushout|push\s*out"
-    for match in re.finditer(rf"(\d+)\s*(?:cams?|cameras?)?\s*[-:]?\s*({type_pattern})", text, flags=re.IGNORECASE):
-        field_name = _normalize_detection_key(match.group(2))
-        if field_name:
-            counts[field_name] += _safe_int(match.group(1), default=0)
-    for match in re.finditer(rf"({type_pattern})\s*[-:]?\s*(\d+)", text, flags=re.IGNORECASE):
-        field_name = _normalize_detection_key(match.group(1))
-        if field_name and counts[field_name] == 0:
-            counts[field_name] += _safe_int(match.group(2), default=0)
-    return counts
-
-
-def _project_detection_counts(project) -> dict[str, int]:
-    counts = {
-        field_name: _safe_int(getattr(project, field_name, 0), default=0)
-        for _, field_name, _ in DETECTION_CAMERA_FIELDS
-    }
-    if any(counts.values()):
-        return counts
-    return _parse_detection_camera_counts(getattr(project, "detection_type", ""))
 
 
 def _format_detection_summary(counts: dict[str, int], fallback: str = "") -> str:
@@ -1301,68 +1145,6 @@ def _match_country_from_question(question: str, projects) -> str:
     return matches[0] if matches else ""
 
 
-def _match_countries_from_question(question: str, projects, fuzzy_threshold: float = 0.8) -> list[str]:
-    """
-    Return every distinct project country mentioned in the question.
-
-    Matches both the short DB code (e.g. 'Bel') and its full name (e.g.
-    'Belgium'), and tolerates small typos in the full name (e.g. 'blegium')
-    via a fuzzy ratio so users don't need exact spelling.
-    """
-    q = _normalize_query_text(question)
-    if not q:
-        return []
-    words = q.split(" ")
-    known_codes = sorted({p.country for p in projects if p.country})
-    matched = []
-    for code in known_codes:
-        code_lower = code.lower()
-        full_name = _normalize_country(code).lower()
-        if code_lower in q or full_name in q:
-            matched.append(code)
-            continue
-        if len(full_name) >= 4:
-            from difflib import SequenceMatcher
-            for word in words:
-                if len(word) < 4:
-                    continue
-                if SequenceMatcher(None, word, full_name).ratio() >= fuzzy_threshold:
-                    matched.append(code)
-                    break
-    return matched
-
-
-
-def _build_invoice_answer_df(invoice_rows, projects) -> pd.DataFrame:
-    country_map = {p.project_name.lower().strip(): p.country for p in projects}
-    return pd.DataFrame([
-        {
-            "Invoice #": str(int(inv.invoice_number)) if inv.invoice_number else "—",
-            "Project": inv.project_name,
-            "Country": country_map.get(inv.project_name.lower().strip(), ""),
-            "Maint. Year": inv.maintenance_year,
-            "Amount (€)": float(inv.payment_amount),
-            "Paid": inv.paid,
-            "Payment Date": inv.payment_date.date().isoformat() if inv.payment_date else "",
-            "Year": inv.year or "",
-        }
-        for inv in invoice_rows
-    ])
-
-
-def _build_project_answer_df(project_rows) -> pd.DataFrame:
-    return pd.DataFrame([
-        {
-            "Project": p.project_name,
-            "Country": p.country,
-            "# Cams": p.num_cams,
-            "Payment Month": p.payment_month,
-            "Status": p.status,
-        }
-        for p in project_rows
-    ])
-
-
 def _answer_data_question(question: str, projects, invoices, debt_summaries) -> tuple[str, Optional[pd.DataFrame]]:
     q = _normalize_query_text(question)
     if not q:
@@ -1404,9 +1186,10 @@ def _answer_data_question(question: str, projects, invoices, debt_summaries) -> 
         if not invoice_rows:
             return f"Invoice {invoice_number} is not in the invoice ledger.", None
 
-        total_amount = sum(float(inv.payment_amount) for inv in invoice_rows)
+        total_amount = sum_money(inv.payment_amount for inv in invoice_rows)
         df = _build_invoice_answer_df(invoice_rows, projects)
-        return f"Invoice {invoice_number} has {len(df)} row(s) totaling €{total_amount:,.0f}.", df
+        return (f"Invoice {invoice_number} has {len(df)} row(s) totaling {fmt_eur(total_amount)}."
+                f"\n\n{data_clock.format_as_of(data_clock.loaded_at())}."), df
 
     if ("sent" in q or "emailed" in q or "email" in q) and ("pdf" in q or "invoice" in q):
         rows = load_sent_invoices_log()
@@ -1481,11 +1264,12 @@ def _answer_data_question(question: str, projects, invoices, debt_summaries) -> 
             debt_rows = [inv for inv in debt_rows if _safe_int(inv.invoice_number, default=0) == invoice_number]
         if year is not None:
             debt_rows = [inv for inv in debt_rows if inv.year == year]
-        if country_names:
-            project_names_in_country = {p.project_name for p in projects if p.country in country_names}
-            debt_rows = [inv for inv in debt_rows if inv.project_name in project_names_in_country]
-        if project_name:
-            debt_rows = [inv for inv in debt_rows if inv.project_name == project_name]
+        if country_names or project_name:
+            project_index = ProjectIndex(projects)
+            if country_names:
+                debt_rows = [inv for inv in debt_rows if project_index.country(inv.project_name) in country_names]
+            if project_name:
+                debt_rows = [inv for inv in debt_rows if project_index.canonical_name(inv.project_name) == project_name]
         if "trial" in q:
             debt_rows = [inv for inv in debt_rows if _is_paid_trial_category(inv)]
         elif "y1" in q or "first year" in q or "new installation" in q:
@@ -1494,9 +1278,10 @@ def _answer_data_question(question: str, projects, invoices, debt_summaries) -> 
             debt_rows = [inv for inv in debt_rows if _is_maintenance_category(inv)]
         if not debt_rows:
             return "No unpaid invoice rows match that question.", None
-        total_amount = sum(float(inv.payment_amount) for inv in debt_rows)
+        total_amount = sum_money(inv.payment_amount for inv in debt_rows)
         df = _build_invoice_answer_df(debt_rows, projects)
-        return f"I found {len(df)} unpaid invoice row(s) totaling €{total_amount:,.0f}.", df
+        return (f"I found {len(df)} unpaid invoice row(s) totaling {fmt_eur(total_amount)}."
+                f"\n\n{data_clock.format_as_of(data_clock.loaded_at())}."), df
 
     if "top" in q and "debt" in q:
         debt_by_project = {}
@@ -1505,8 +1290,7 @@ def _answer_data_question(question: str, projects, invoices, debt_summaries) -> 
                 continue
             if year is not None and inv.year != year:
                 continue
-            debt_by_project.setdefault(inv.project_name, 0.0)
-            debt_by_project[inv.project_name] += float(inv.payment_amount)
+            debt_by_project[inv.project_name] = debt_by_project.get(inv.project_name, to_money(0)) + to_money(inv.payment_amount)
         if not debt_by_project:
             return "No unpaid debt rows match that question.", None
         df = pd.DataFrame([
@@ -1629,1003 +1413,127 @@ def _llm_normalize_question(question: str) -> Optional[str]:
 # never writes SQL, never performs arithmetic, and cannot select anything
 # outside `_ASK_DATA_TOOL_SPECS`. Any failure at any step falls back to the
 # original `_answer_data_question` (unchanged).
+#
+# The v2 code itself now lives in services/ask_data/ (tool_specs, validation, executor,
+# planner, router); the legacy keyword matcher below remains here and is injected as the
+# router's fallback.
 # ══════════════════════════════════════════════════════════════════════════════
 
-# arg_name -> (kind, required). kind is one of:
-#   "int", "project", "country", "status", "month", or "enum:a,b,c"
-_ASK_DATA_TOOL_SPECS: dict[str, dict[str, tuple[str, bool]]] = {
-    "get_invoice": {
-        "invoice_number": ("int", True),
-        "year": ("int", False),
-    },
-    "get_invoices": {
-        "project": ("project", False),
-        "year": ("int", False),
-        "paid_year": ("int", False),
-        "country": ("country", False),
-        "paid": ("enum:yes,no,cancelled", False),
-    },
-    "get_unpaid_invoices": {
-        "project": ("project", False),
-        "year": ("int", False),
-        "paid_year": ("int", False),
-        "country": ("country", False),
-        "category": ("enum:trial,y1,y2plus", False),
-    },
-    "get_project": {
-        "project": ("project", True),
-    },
-    "get_projects": {
-        "country": ("country", False),
-        "status": ("status", False),
-        "month": ("month", False),
-        "min_cameras": ("int", False),
-    },
-    "count_projects": {
-        "country": ("country", False),
-        "status": ("status", False),
-    },
-    "get_debt": {
-        "project": ("project", False),
-        "year": ("int", False),
-        "country": ("country", False),
-        "category": ("enum:trial,y1,y2plus", False),
-    },
-    "get_paid_amount": {
-        "project": ("project", False),
-        "year": ("int", False),
-        "paid_year": ("int", False),
-        "country": ("country", False),
-    },
-    "get_outstanding_amount": {
-        "project": ("project", False),
-        "year": ("int", False),
-        "country": ("country", False),
-    },
-    "get_top_debt_projects": {
-        "year": ("int", False),
-        "limit": ("int", False),
-    },
-    "get_sent_invoices": {
-        "invoice_number": ("int", False),
-        "year": ("int", False),
-        "project": ("project", False),
-    },
-    "get_next_invoice_number": {},
-    "get_camera_statistics": {
-        "country": ("country", False),
-        "status": ("status", False),
-        "camera_type": ("enum:all,TopDown,Backtray,Pushout", False),
-        "aggregation": ("enum:sum,count_projects,average_per_project,group_by_country,list_projects", False),
-    },
-    "get_last_bank_payment": {
-        "project": ("project", False),
-    },
-    "get_licenses": {
-        "project": ("project", False),
-        "country": ("country", False),
-        "license_status": ("enum:Active,Expired,Missing,Update Next Month,Cancelled", False),
-        "project_status": ("status", False),
-        "eop_year": ("int", False),
-        "eop_month": ("month", False),
-        "eop_date": ("date", False),
-    },
-    "get_license_payment_status": {
-        "project": ("project", False),
-        "country": ("country", False),
-        "license_status": ("enum:Active,Expired,Missing,Update Next Month,Cancelled", False),
-        "project_status": ("status", False),
-        "eop_year": ("int", False),
-        "eop_month": ("month", False),
-        "eop_date": ("date", False),
-    },
-    "get_license_eop_reconciliation": {
-        "project": ("project", False),
-        "country": ("country", False),
-        "project_status": ("status", False),
-        "paid_year": ("int", False),
-        "needs_update": ("enum:yes,no", False),
-    },
-}
-
-# Per-tool description shown to the LLM alongside its argument list. This is the primary
-# lever for disambiguating "payment event/history" (bank_payments/bank_payment_allocations —
-# an audit log that may be incomplete) from "financial/payment status" (invoices table — the
-# authoritative source for paid/unpaid/outstanding/debt). See `_llm_parse_data_question`'s
-# prompt for the higher-level routing rules that reference these tools by name.
-_ASK_DATA_TOOL_DESCRIPTIONS: dict[str, str] = {
-    "get_invoice": (
-        "Looks up a single invoice by number from the invoices table, the authoritative source "
-        "for invoice-level financial status. Use this for 'is invoice N paid', 'show invoice N', "
-        "'was invoice N sent' style questions."
-    ),
-    "get_invoices": (
-        "Lists/filters invoice ledger rows (invoices table). Use this for actual payment status, "
-        "paid/unpaid status, and invoice-level or project-level financial status questions. The "
-        "invoices table is the authoritative source for these questions — do NOT use "
-        "get_last_bank_payment for them."
-    ),
-    "get_unpaid_invoices": (
-        "Lists unpaid invoice ledger rows (invoices table), filterable by project/country/year/"
-        "category. Authoritative for 'which invoices/projects are unpaid or not fully paid' "
-        "questions — do NOT use get_last_bank_payment for these."
-    ),
-    "get_project": "Looks up static details (country, cameras, payment month, status) for one project.",
-    "get_projects": "Lists/filters projects by country, status, billing month, or minimum camera count.",
-    "count_projects": "Counts projects matching a country/status filter.",
-    "get_debt": (
-        "Computes modeled/expected outstanding debt from the invoices table. Use this for debt, "
-        "outstanding balance, and 'how much is owed' questions — the invoices table is the "
-        "authoritative source for actual payment status, paid/unpaid status, outstanding "
-        "balances, debt, and partial payments, not the bank-payment event log."
-    ),
-    "get_paid_amount": (
-        "Sums amounts actually paid from the invoices table (authoritative paid-status source). "
-        "Use this for 'has X paid', 'is X fully paid', 'how much has X paid' financial-status "
-        "questions — NOT get_last_bank_payment, which only covers a possibly-incomplete log of "
-        "individual transfer events, not overall paid/unpaid status."
-    ),
-    "get_outstanding_amount": (
-        "Sums unpaid invoice amounts from the invoices table. Use this for 'what is still "
-        "outstanding/owed for X' and 'how much is outstanding across all projects' questions — "
-        "the invoices table is authoritative for outstanding balances, not the bank-payment log."
-    ),
-    "get_top_debt_projects": "Ranks projects by outstanding debt (invoices table), optionally for one year.",
-    "get_sent_invoices": "Looks up the log of invoice PDFs actually emailed out (not payment status).",
-    "get_next_invoice_number": "Returns the next unused invoice number.",
-    "get_camera_statistics": "Aggregates camera counts (sum/average/by-country/etc.) across projects.",
-    "get_last_bank_payment": (
-        "Returns recorded bank-payment events and allocations from the bank_payments/"
-        "bank_payment_allocations audit log (optionally for one project). Use ONLY for questions "
-        "about a specific payment/transfer/remittance EVENT — when it happened, or what invoices/"
-        "amounts it covered (e.g. 'when was the last bank payment for X', 'what was included in "
-        "the last transfer', 'show the bank payment history'). This audit log may be INCOMPLETE "
-        "(not every paid invoice has a logged event here) and must NOT be used to determine "
-        "whether a project or invoice is paid, unpaid, fully paid, or has outstanding debt — use "
-        "get_invoice/get_invoices/get_unpaid_invoices/get_debt/get_paid_amount/"
-        "get_outstanding_amount/get_license_payment_status for those instead."
-    ),
-    "get_licenses": (
-        "Filters projects by license_status (the computed license classification: Active, "
-        "Expired, Missing, Update Next Month, Cancelled) and/or expiry date. 'license_status' is "
-        "NOT the same as 'project_status' (the project's own operational status: Active, "
-        "Offline, Cancelled, New, etc. -- the same values used by get_projects). For questions "
-        "combining both concepts, e.g. 'expired licenses on Active/Offline projects', 'licenses "
-        "that expired but the project is still active', set license_status='Expired' AND "
-        "project_status accordingly -- never drop the 'expired' part of the question just "
-        "because a project-status word like 'Active' is also mentioned. Not for payment/debt "
-        "questions."
-    ),
-    "get_license_payment_status": (
-        "Same license filtering as get_licenses (including the license_status vs project_status "
-        "distinction -- see get_licenses), PLUS the authoritative paid/unpaid status of each "
-        "project's latest already-due annual invoice, joined from the invoices table. Use this "
-        "instead of get_licenses when a license question also asks about invoices, payments, "
-        "debt, outstanding balance, or whether projects are paid/fully paid. It looks ONLY at the "
-        "latest annual invoice -- for 'was the License EOP updated for the paid years' questions "
-        "use get_license_eop_reconciliation instead."
-    ),
-    "get_license_eop_reconciliation": (
-        "READ-ONLY reconciliation of every project's CURRENT License EOP against the EOP its full "
-        "invoice/payment history justifies (Year 1, Year 2, ... all maintenance years from the invoices "
-        "table, not just the latest invoice). Returns per project: license start date, current EOP, Y1/Y2 "
-        "invoice numbers + paid status + payment dates, highest consecutively paid maintenance year, "
-        "expected EOP (start date + that many years), 'Needs EOP Update?' and a confidence flag. Use it "
-        "for: 'Year 1 paid but License EOP not updated', 'Year 2 paid but EOP not updated', 'paid licenses "
-        "whose EOP is earlier than the payments justify', 'which licenses need their EOP updated', "
-        "'expected license EOP'. Set paid_year=1 or 2 (etc.) for 'Year N paid but EOP not updated'; set "
-        "needs_update='yes' for 'EOP earlier than justified by payments'. It never changes any date."
-    ),
-}
-
-
-def _resolve_project_arg(value: object, projects) -> Optional[str]:
-    """Fuzzy-resolve a free-text project name to a real project name (reuses `_suggest_best_project_match`)."""
-    text = _safe_str(value).strip()
-    if not text:
-        return None
-    project_names = sorted({p.project_name for p in projects if p.project_name})
-    best_name, score = _suggest_best_project_match(text, project_names)
-    return best_name if best_name and score >= 0.55 else None
-
-
-def _resolve_single_country(value: object, projects) -> Optional[str]:
-    """Resolve a free-text country name/code (typo-tolerant) to a real project country code."""
-    text = _safe_str(value).strip()
-    if not text:
-        return None
-    known_codes = sorted({p.country for p in projects if p.country})
-    text_lower = text.lower()
-    for code in known_codes:
-        if code.lower() == text_lower or _normalize_country(code).lower() == text_lower:
-            return code
-    matches = _match_countries_from_question(text, projects)
-    return matches[0] if matches else None
-
-
-def _resolve_ask_data_arg(kind: str, value: object, projects) -> tuple[bool, object]:
-    """Validate + resolve one tool argument. Returns (ok, resolved_value)."""
-    if value is None:
-        return True, None
-    if kind == "int":
-        try:
-            return True, int(value)
-        except Exception:
-            return False, None
-    if kind == "date":
-        text = _safe_str(value).strip()
-        try:
-            return True, datetime.date.fromisoformat(text[:10])
-        except Exception:
-            return False, None
-    if kind == "project":
-        resolved = _resolve_project_arg(value, projects)
-        return (True, resolved) if resolved else (False, None)
-    if kind == "country":
-        resolved = _resolve_single_country(value, projects)
-        return (True, resolved) if resolved else (False, None)
-    if kind == "status":
-        text = _safe_str(value).strip()
-        if text.lower() == "all":
-            return True, "All"
-        for option in PROJECT_STATUS_OPTIONS:
-            if option.lower() == text.lower():
-                return True, option
-        return False, None
-    if kind == "month":
-        text = _safe_str(value).strip().lower()
-        for month in MONTH_ORDER:
-            if month.lower() == text or month[:3].lower() == text:
-                return True, month
-        return False, None
-    if kind.startswith("enum:"):
-        allowed = kind.split(":", 1)[1].split(",")
-        text = _safe_str(value).strip()
-        for option in allowed:
-            if option.lower() == text.lower():
-                return True, option
-        return False, None
-    return False, None
-
-
-def _validate_ask_data_tool_call(parsed: object, projects) -> tuple[Optional[str], dict, Optional[str]]:
-    """
-    Validate a parsed {"tool": ..., "arguments": {...}} payload against
-    `_ASK_DATA_TOOL_SPECS`. Rejects unknown tools, unresolvable/mistyped
-    arguments, and missing required arguments. Unknown argument keys are
-    silently ignored. Returns (tool_name, cleaned_arguments, error) — tool_name
-    is None on any validation failure.
-    """
-    if not isinstance(parsed, dict):
-        return None, {}, "LLM response was not a JSON object."
-    tool_name = _safe_str(parsed.get("tool")).strip()
-    if tool_name not in _ASK_DATA_TOOL_SPECS:
-        return None, {}, f"Unknown or missing tool name: {tool_name!r}."
-    raw_args = parsed.get("arguments")
-    if raw_args is None:
-        raw_args = {}
-    if not isinstance(raw_args, dict):
-        return None, {}, "Tool 'arguments' was not a JSON object."
-
-    spec = _ASK_DATA_TOOL_SPECS[tool_name]
-    cleaned: dict = {}
-    for arg_name, (kind, required) in spec.items():
-        raw_value = raw_args.get(arg_name)
-        ok, resolved = _resolve_ask_data_arg(kind, raw_value, projects)
-        if not ok:
-            return None, {}, f"Could not validate argument '{arg_name}'={raw_value!r} for tool '{tool_name}'."
-        if required and resolved is None:
-            return None, {}, f"Missing required argument '{arg_name}' for tool '{tool_name}'."
-        cleaned[arg_name] = resolved
-    # Any keys in raw_args beyond the spec are simply ignored (never executed).
-    return tool_name, cleaned, None
-
-
-def _camera_metric_for_project(project, camera_type: str) -> int:
-    if not camera_type or camera_type == "all":
-        return _safe_int(project.num_cams)
-    counts = _project_detection_counts(project)
-    field_map = {label: field_name for label, field_name, _ in DETECTION_CAMERA_FIELDS}
-    field_name = field_map.get(camera_type)
-    return _safe_int(counts.get(field_name, 0)) if field_name else 0
-
-
-def _filter_invoices_for_debt_tools(invoices, projects, args: dict, paid_predicate) -> list:
-    rows = [inv for inv in invoices if paid_predicate(inv)]
-    if args.get("year") is not None:
-        rows = [inv for inv in rows if inv.year == args["year"]]
-    if args.get("paid_year") is not None:
-        rows = [inv for inv in rows if inv.payment_date and inv.payment_date.year == args["paid_year"]]
-    if args.get("country"):
-        names_in_country = {p.project_name for p in projects if p.country == args["country"]}
-        rows = [inv for inv in rows if inv.project_name in names_in_country]
-    if args.get("project"):
-        rows = [inv for inv in rows if inv.project_name == args["project"]]
-    category = args.get("category")
-    if category == "trial":
-        rows = [inv for inv in rows if _is_paid_trial_category(inv)]
-    elif category == "y1":
-        rows = [inv for inv in rows if _is_new_installation_category(inv)]
-    elif category == "y2plus":
-        rows = [inv for inv in rows if _is_maintenance_category(inv)]
-    return rows
-
-
-def _filter_license_entries(projects, args: dict) -> list:
-    """Shared by get_licenses and get_license_payment_status: filter/sort (project, eop_date, status) triples."""
-    today = datetime.date.today()
-    entries = [(p, _project_license_date(p), _license_status(p, today)) for p in projects]
-    if args.get("project"):
-        entries = [e for e in entries if e[0].project_name == args["project"]]
-    if args.get("country"):
-        entries = [e for e in entries if e[0].country == args["country"]]
-    if args.get("license_status"):
-        entries = [e for e in entries if e[2] == args["license_status"]]
-    if args.get("project_status") and args["project_status"] != "All":
-        # project_status is the project's OWN operational status (Active/Offline/Cancelled/...),
-        # deliberately separate from license_status (the computed license classification above) —
-        # lets a question distinguish "expired license" from "project still operationally active".
-        entries = [e for e in entries if _normalize_project_status(e[0].status) == args["project_status"]]
-    if args.get("eop_year") is not None:
-        entries = [e for e in entries if e[1] and e[1].year == args["eop_year"]]
-    if args.get("eop_month"):
-        month_index = MONTH_ORDER.index(args["eop_month"]) + 1
-        entries = [e for e in entries if e[1] and e[1].month == month_index]
-    if args.get("eop_date") is not None:
-        entries = [e for e in entries if e[1] == args["eop_date"]]
-    entries.sort(key=lambda e: e[1] or datetime.date.max)
-    return entries
-
-
-def _annual_payment_month(project) -> str:
-    """Resolve the project's recurring annual billing month: `payment_month` (the real
-    field driving get_projects_for_month/the monthly invoicing job) with a fallback to
-    the License EOP's month name if payment_month is blank."""
-    month = _safe_str(getattr(project, "payment_month", "")).strip()
-    if month in MONTH_ORDER:
-        return month
-    eop = _project_license_date(project)
-    return MONTH_ORDER[eop.month - 1] if eop else ""
-
-
-def _latest_annual_invoice_year(annual_month: str, today: datetime.date) -> Optional[int]:
-    """Latest calendar year whose Annual Payment Month has already started (<= today)."""
-    if annual_month not in MONTH_ORDER:
-        return None
-    month_index = MONTH_ORDER.index(annual_month) + 1
-    return today.year if today.month >= month_index else today.year - 1
-
-
-def _annual_license_payment_row(project, eop, invoices, today: datetime.date) -> dict:
-    """
-    Determine whether THIS project's latest already-due annual license/maintenance
-    invoice (not simply its most recent/highest-numbered invoice) has been paid.
-    See `_annual_payment_month`/`_latest_annual_invoice_year` for how the due period
-    is anchored. Historical all-time totals are included for reference only — they
-    never influence the Annual Payment Status.
-    """
-    key = _safe_str(project.project_name).lower().strip()
-    active_rows = [
-        inv for inv in invoices
-        if _safe_str(inv.project_name).lower().strip() == key and not inv.is_cancelled()
-    ]
-    hist_invoiced = sum(float(inv.payment_amount) for inv in active_rows)
-    hist_paid = sum(float(inv.payment_amount) for inv in active_rows if inv.is_paid())
-    hist_outstanding = sum(float(inv.payment_amount) for inv in active_rows if inv.is_unpaid())
-
-    annual_month = _annual_payment_month(project)
-    target_year = _latest_annual_invoice_year(annual_month, today)
-
-    invoice_number, period_text = "", ""
-    invoice_amount, outstanding = 0.0, 0.0
-    paid_flag = "N/A"
-
-    if target_year is None:
-        status = "No Annual Invoice Found"
-    elif project.installation_year and target_year < project.installation_year:
-        status = "Not Yet Due"
-    else:
-        maintenance_year_number = project.get_maintenance_year(target_year) if project.installation_year else None
-        period_rows = [inv for inv in active_rows if inv.year == target_year]
-        label = f"Y{maintenance_year_number}" if maintenance_year_number else (period_rows[0].maintenance_year if period_rows else "")
-        period_text = f"{target_year} ({label})" if label else str(target_year)
-        if not period_rows:
-            status = "No Annual Invoice Found"
-        else:
-            invoice_amount = sum(float(inv.payment_amount) for inv in period_rows)
-            outstanding = sum(float(inv.payment_amount) for inv in period_rows if inv.is_unpaid())
-            invoice_number = ", ".join(
-                str(n) for n in sorted({_safe_int(inv.invoice_number, default=0) for inv in period_rows if inv.invoice_number})
-            )
-            paid_flag = "Yes" if outstanding == 0 else "No"
-            status = "Paid" if outstanding == 0 else "Unpaid"
-
-    return {
-        "Project": project.project_name,
-        "Country": project.country,
-        "License EOP": eop.isoformat() if eop else "",
-        "Annual Payment Month": annual_month or "Unknown",
-        "Latest Annual Invoice Number": invoice_number,
-        "Latest Annual Invoice Period / Maintenance Year": period_text,
-        "Latest Annual Invoice Amount": invoice_amount,
-        "Latest Annual Invoice Paid?": paid_flag,
-        "Latest Annual Invoice Outstanding Amount": outstanding,
-        "Annual Payment Status": status,
-        "Total Invoiced (All-Time)": hist_invoiced,
-        "Total Paid (All-Time)": hist_paid,
-        "Outstanding Balance (All-Time)": hist_outstanding,
-    }
+from services.ask_data.tool_specs import (  # noqa: E402,F401 - re-exported for backward compatibility
+    _ASK_DATA_TOOL_DESCRIPTIONS,
+    _ASK_DATA_TOOL_SPECS,
+    _ask_data_tool_catalog_text,
+)
+from services.ask_data.validation import _validate_ask_data_tool_call  # noqa: E402,F401
+from services.ask_data.planner import _llm_parse_data_question  # noqa: E402,F401
+from services.ask_data.executor import _execute_ask_data_tool as _ask_data_execute_tool_core  # noqa: E402
+from services.ask_data.router import _answer_data_question_smart as _ask_data_answer_smart_core  # noqa: E402
 
 
 def _execute_ask_data_tool(
     tool_name: str, args: dict, projects, invoices, debt_summaries
 ) -> tuple[str, Optional[pd.DataFrame]]:
-    """
-    Execute one validated, read-only tool call against the already-loaded
-    CRM data. All numbers are computed here in plain Python — the LLM never
-    sees or calculates any of this.
-    """
-    if tool_name == "get_invoice":
-        invoice_number = args["invoice_number"]
-        rows = [inv for inv in invoices if _safe_int(inv.invoice_number, default=0) == invoice_number]
-        if args.get("year") is not None:
-            rows = [inv for inv in rows if inv.year == args["year"]]
-        if not rows:
-            return f"Invoice {invoice_number} is not in the invoice ledger.", None
-        total = sum(float(inv.payment_amount) for inv in rows)
-        if len(rows) == 1:
-            paid_txt = "Cancelled" if rows[0].is_cancelled() else ("Paid" if rows[0].is_paid() else "Unpaid")
-            summary = f"Invoice {invoice_number} totals €{total:,.0f} and is {paid_txt}."
-        else:
-            summary = (
-                f"Invoice {invoice_number} has {len(rows)} row(s) totaling €{total:,.0f}; "
-                "see the Paid column below for each row's status."
-            )
-        return summary, _build_invoice_answer_df(rows, projects)
-
-    if tool_name in ("get_invoices", "get_unpaid_invoices"):
-        rows = list(invoices)
-        if tool_name == "get_unpaid_invoices":
-            rows = [inv for inv in rows if inv.is_unpaid()]
-        elif args.get("paid") == "yes":
-            rows = [inv for inv in rows if inv.is_paid()]
-        elif args.get("paid") == "no":
-            rows = [inv for inv in rows if inv.is_unpaid()]
-        elif args.get("paid") == "cancelled":
-            rows = [inv for inv in rows if inv.is_cancelled()]
-        if args.get("project"):
-            rows = [inv for inv in rows if inv.project_name == args["project"]]
-        if args.get("year") is not None:
-            rows = [inv for inv in rows if inv.year == args["year"]]
-        if args.get("paid_year") is not None:
-            rows = [inv for inv in rows if inv.payment_date and inv.payment_date.year == args["paid_year"]]
-        if args.get("country"):
-            names_in_country = {p.project_name for p in projects if p.country == args["country"]}
-            rows = [inv for inv in rows if inv.project_name in names_in_country]
-        category = args.get("category")
-        if category == "trial":
-            rows = [inv for inv in rows if _is_paid_trial_category(inv)]
-        elif category == "y1":
-            rows = [inv for inv in rows if _is_new_installation_category(inv)]
-        elif category == "y2plus":
-            rows = [inv for inv in rows if _is_maintenance_category(inv)]
-        if not rows:
-            return "No invoices match that question.", None
-        total = sum(float(inv.payment_amount) for inv in rows)
-        label = "unpaid invoice" if tool_name == "get_unpaid_invoices" else "invoice"
-        return f"Found {len(rows)} {label} row(s) totaling €{total:,.0f}.", _build_invoice_answer_df(rows, projects)
-
-    if tool_name == "get_project":
-        project = next((p for p in projects if p.project_name == args["project"]), None)
-        if project is None:
-            return f"I could not find project details for {args['project']}.", None
-        df = pd.DataFrame([{
-            "Project": project.project_name,
-            "Country": project.country,
-            "# Cams": project.num_cams,
-            "Payment Month": project.payment_month,
-            "Install Year": project.installation_year or "",
-            "Status": project.status,
-        }])
-        return f"Here are the project details for {project.project_name}.", df
-
-    if tool_name in ("get_projects", "count_projects"):
-        rows = list(projects)
-        status_arg = args.get("status")
-        status_scope = ""
-        if status_arg == "All":
-            pass
-        elif status_arg:
-            rows = [p for p in rows if _normalize_project_status(p.status) == status_arg]
-        else:
-            # Default to active/installed only, matching the Dashboard's "Active Projects" KPI.
-            rows = [p for p in rows if p.is_active()]
-            status_scope = "active "
-        if args.get("country"):
-            rows = [p for p in rows if p.country == args["country"]]
-        if args.get("month"):
-            rows = get_projects_for_month(rows, args["month"])
-        if args.get("min_cameras") is not None:
-            rows = [p for p in rows if _safe_int(p.num_cams) > args["min_cameras"]]
-        if tool_name == "count_projects":
-            qualifiers = []
-            if status_arg and status_arg != "All":
-                qualifiers.append(f"with status {status_arg}")
-            if args.get("country"):
-                qualifiers.append(f"in {args['country']}")
-            suffix = (" " + " ".join(qualifiers)) if qualifiers else ""
-            return f"There are {len(rows)} {status_scope}project(s){suffix}.", None
-        if not rows:
-            return "No projects match that question.", None
-        return f"Found {len(rows)} {status_scope}project(s).", _build_project_answer_df(rows)
-
-    if tool_name == "get_debt":
-        rows = _filter_invoices_for_debt_tools(invoices, projects, args, lambda inv: inv.is_unpaid())
-        if not rows:
-            return "No unpaid invoice rows match that question.", None
-        total = sum(float(inv.payment_amount) for inv in rows)
-        return f"I found {len(rows)} unpaid invoice row(s) totaling €{total:,.0f}.", _build_invoice_answer_df(rows, projects)
-
-    if tool_name == "get_outstanding_amount":
-        rows = _filter_invoices_for_debt_tools(invoices, projects, args, lambda inv: inv.is_unpaid())
-        total = sum(float(inv.payment_amount) for inv in rows)
-        subject = args.get("project") or args.get("country") or "the selected filters"
-        return f"Outstanding (unpaid) amount for {subject} is €{total:,.0f} across {len(rows)} invoice row(s).", None
-
-    if tool_name == "get_paid_amount":
-        rows = _filter_invoices_for_debt_tools(invoices, projects, args, lambda inv: inv.is_paid())
-        total = sum(float(inv.payment_amount) for inv in rows)
-        subject = args.get("project") or args.get("country") or "the selected filters"
-        # Also report the outstanding balance so "is X fully paid?" can never be answered with
-        # just a paid-amount figure that silently omits money still owed (paid_year is dropped
-        # here since it's a payment-date filter and unpaid invoices have no payment_date).
-        outstanding_args = {k: v for k, v in args.items() if k != "paid_year"}
-        outstanding_rows = _filter_invoices_for_debt_tools(invoices, projects, outstanding_args, lambda inv: inv.is_unpaid())
-        outstanding_total = sum(float(inv.payment_amount) for inv in outstanding_rows)
-        if not rows and not outstanding_rows:
-            # Zero paid AND zero unpaid rows means no matching invoices exist at all — never
-            # claim "fully paid" for a scope with no invoices to be paid in the first place.
-            status_txt = " No paid or unpaid invoices were found for this scope, so payment status cannot be determined."
-        elif outstanding_total <= 0:
-            status_txt = " No outstanding balance remains — fully paid."
-        else:
-            status_txt = (
-                f" €{outstanding_total:,.0f} across {len(outstanding_rows)} invoice row(s) is still "
-                "outstanding — NOT fully paid."
-            )
-        return f"Paid amount for {subject} is €{total:,.0f} across {len(rows)} invoice row(s).{status_txt}", None
-
-    if tool_name == "get_top_debt_projects":
-        year = args.get("year")
-        limit = max(1, args.get("limit") or 10)
-        debt_by_project: dict[str, float] = {}
-        for inv in invoices:
-            if not inv.is_unpaid():
-                continue
-            if year is not None and inv.year != year:
-                continue
-            debt_by_project.setdefault(inv.project_name, 0.0)
-            debt_by_project[inv.project_name] += float(inv.payment_amount)
-        if not debt_by_project:
-            return "No unpaid debt rows match that question.", None
-        top = sorted(debt_by_project.items(), key=lambda item: item[1], reverse=True)[:limit]
-        df = pd.DataFrame([{"Project": name, "Debt (€)": amount} for name, amount in top])
-        return f"Here are the top {len(top)} debt project(s).", df
-
-    if tool_name == "get_sent_invoices":
-        rows = load_sent_invoices_log()
-        if args.get("invoice_number") is not None:
-            rows = [row for row in rows if _safe_int(row.get("invoice_number"), default=0) == args["invoice_number"]]
-        if args.get("year") is not None:
-            rows = [row for row in rows if _safe_int(row.get("year"), default=0) == args["year"]]
-        if args.get("project"):
-            rows = [row for row in rows if args["project"].lower() in _safe_str(row.get("subject", "")).lower()]
-        if not rows:
-            return "No sent PDF invoices match that question.", None
-        df = pd.DataFrame([
-            {
-                "Sent At": _safe_str(row.get("sent_at", "")).replace("T", " ")[:19],
-                "Invoice #": _safe_int(row.get("invoice_number"), default=0),
-                "Month": _safe_str(row.get("month", "")),
-                "Year": _safe_int(row.get("year"), default=0),
-                "PDF": _safe_str(row.get("pdf_filename", "")),
-                "To": ", ".join(row.get("recipients", [])),
-            }
-            for row in reversed(rows)
-        ])
-        return f"Found {len(df)} sent PDF invoice record(s).", df
-
-    if tool_name == "get_next_invoice_number":
-        next_inv = _get_next_invoice_number(invoices, _data_path)
-        return f"The next invoice number is {next_inv}.", None
-
-    if tool_name == "get_last_bank_payment":
-        from config.settings import load_bank_payments_log
-        try:
-            payments = load_bank_payments_log()
-        except Exception as exc:
-            return f"Could not load bank payments: {exc}", None
-        if not payments:
-            return "No bank payments have been recorded yet.", None
-
-        try:
-            from services.supabase_service import load_bank_payment_allocations
-        except Exception:
-            load_bank_payment_allocations = None
-
-        def _allocations_for(payment):
-            payment_id = payment.get("id")
-            if not payment_id or load_bank_payment_allocations is None:
-                return []
-            try:
-                return load_bank_payment_allocations(payment_id) or []
-            except Exception:
-                return []
-
-        target_project = args.get("project")
-        last_payment, allocations = None, []
-        if target_project:
-            for payment in payments:  # already newest-first
-                candidate_allocations = _allocations_for(payment)
-                names_in_payment = {a.get("project_name") for a in candidate_allocations if a.get("project_name")}
-                if target_project in names_in_payment:
-                    last_payment, allocations = payment, candidate_allocations
-                    break
-            if last_payment is None:
-                return (
-                    f"No recorded bank payment event was found for {target_project}. This audit log "
-                    "may be incomplete and this result does not indicate whether the project is paid "
-                    "or unpaid — ask about its payment/paid status separately to check that.",
-                    None,
-                )
-        else:
-            last_payment = payments[0]
-            allocations = _allocations_for(last_payment)
-
-        date_txt = _safe_str(last_payment.get("payment_date")) or "unknown date"
-        if allocations:
-            df = pd.DataFrame([
-                {
-                    "Invoice #": a.get("invoice_number"),
-                    "Project": a.get("project_name"),
-                    "Maint. Year": a.get("maintenance_year"),
-                    "Amount (€)": a.get("amount_applied"),
-                    "Year": a.get("year"),
-                }
-                for a in allocations
-            ])
-            total = sum(_safe_float(a.get("amount_applied")) for a in allocations)
-            return f"Last bank payment ({date_txt}) covered {len(df)} invoice line(s) totaling €{total:,.0f}.", df
-
-        total = _safe_float(last_payment.get("applied_amount")) or _safe_float(last_payment.get("received_amount"))
-        inv_no = last_payment.get("invoice_number")
-        subject = f"invoice #{inv_no}" if inv_no else (last_payment.get("source_name") or "an invoice")
-        return f"Last bank payment ({date_txt}): {subject}, €{total:,.0f}.", None
-
-    if tool_name == "get_licenses":
-        entries = _filter_license_entries(projects, args)
-        if not entries:
-            return "No projects match that license question.", None
-        df = pd.DataFrame([
-            {
-                "Project": p.project_name,
-                "Country": p.country,
-                "License EOP": eop.isoformat() if eop else "",
-                "License Status": status,
-                "Project Status": p.status,
-            }
-            for p, eop, status in entries
-        ])
-        status_counts: dict[str, int] = {}
-        for _, _, status in entries:
-            status_counts[status] = status_counts.get(status, 0) + 1
-        summary = ", ".join(f"{count} {status}" for status, count in status_counts.items())
-        return f"Found {len(entries)} project(s) ({summary}).", df
-
-    if tool_name == "get_license_payment_status":
-        entries = _filter_license_entries(projects, args)
-        if not entries:
-            return "No projects match that license question.", None
-        today = datetime.date.today()
-        rows = [_annual_license_payment_row(p, eop, invoices, today) for p, eop, _status in entries]
-        df = pd.DataFrame(rows)
-        status_counts: dict[str, int] = {}
-        for row in rows:
-            status_counts[row["Annual Payment Status"]] = status_counts.get(row["Annual Payment Status"], 0) + 1
-        summary = ", ".join(f"{count} {status}" for status, count in status_counts.items())
-        return f"Found {len(rows)} project(s) with latest annual payment status ({summary}).", df
-
-    if tool_name == "get_license_eop_reconciliation":
-        all_rows = build_license_reconciliation(projects, invoices, _normalize_project_status)
-        rows = filter_reconciliation(
-            all_rows,
-            project=args.get("project"),
-            country=args.get("country"),
-            project_status=args.get("project_status"),
-            paid_year=args.get("paid_year"),
-            needs_update=args.get("needs_update"),
-        )
-        if not rows:
-            return "No projects match that License EOP reconciliation question. (Read-only: no License EOP was changed.)", None
-        need_rows = [r for r in rows if r["Needs EOP Update?"] == "Yes"]
-        low_count = sum(1 for r in need_rows if r["Confidence"] == "Low")
-        year_txt = f" with Year {args['paid_year']} paid" if args.get("paid_year") is not None else ""
-        summary = (
-            f"Found {len(rows)} project(s){year_txt}; {len(need_rows)} need a License EOP update"
-            f" ({len(need_rows) - low_count} high confidence, {low_count} low confidence"
-            f" - verify manually). Expected EOP = license start date + the highest consecutively paid "
-            "maintenance year (Y1, Y2, ...) from the full invoice history. Read-only: no License EOP was changed."
-        )
-        df = pd.DataFrame([{col: r.get(col) for col in LICENSE_RECONCILIATION_COLUMNS} for r in rows])
-        return summary, df
-
-    if tool_name == "get_camera_statistics":
-        rows = list(projects)
-        status_arg = args.get("status")
-        status_scope = ""
-        if status_arg == "All":
-            pass
-        elif status_arg:
-            rows = [p for p in rows if _normalize_project_status(p.status) == status_arg]
-        else:
-            # Default to active/installed only, matching the Dashboard's "Total Cameras" KPI.
-            rows = [p for p in rows if p.is_active()]
-            status_scope = "active "
-        if args.get("country"):
-            rows = [p for p in rows if p.country == args["country"]]
-        camera_type = args.get("camera_type") or "all"
-        aggregation = args.get("aggregation") or "sum"
-        metric_label = "camera" if camera_type == "all" else camera_type
-
-        if aggregation == "group_by_country":
-            totals: dict[str, int] = {}
-            for p in rows:
-                key = p.country or "Unknown"
-                totals[key] = totals.get(key, 0) + _camera_metric_for_project(p, camera_type)
-            if not totals:
-                return "No projects match that question.", None
-            df = pd.DataFrame([
-                {"Country": country, f"{metric_label.title()} Cameras": total}
-                for country, total in sorted(totals.items(), key=lambda item: item[1], reverse=True)
-            ])
-            top_country, top_total = max(totals.items(), key=lambda item: item[1])
-            return f"{top_country} has the most {metric_label} cameras ({top_total}, {status_scope or 'any status '}projects).", df
-
-        if aggregation == "list_projects":
-            if not rows:
-                return "No projects match that question.", None
-            df = pd.DataFrame([
-                {
-                    "Project": p.project_name,
-                    "Country": p.country,
-                    f"{metric_label.title()} Cameras": _camera_metric_for_project(p, camera_type),
-                    "Status": p.status,
-                }
-                for p in rows
-            ])
-            return f"Found {len(rows)} {status_scope}project(s).", df
-
-        total = sum(_camera_metric_for_project(p, camera_type) for p in rows)
-        country_txt = f" in {args['country']}" if args.get("country") else ""
-        if aggregation == "count_projects":
-            return f"There are {len(rows)} {status_scope}project(s){country_txt}.", None
-        if aggregation == "average_per_project":
-            avg = (total / len(rows)) if rows else 0.0
-            return f"Average {metric_label} cameras per {status_scope}project is {avg:.1f} (across {len(rows)} project(s)).", None
-        return f"There are {total} {metric_label} camera(s) across {len(rows)} {status_scope}project(s){country_txt}.", None
-
-    return "I could not execute that tool.", None
-
-
-def _ask_data_tool_catalog_text() -> str:
-    lines = []
-    for tool_name, spec in _ASK_DATA_TOOL_SPECS.items():
-        if not spec:
-            signature = f"- {tool_name}(): no arguments"
-        else:
-            parts = []
-            for arg_name, (kind, required) in spec.items():
-                marker = "required" if required else "optional"
-                if kind.startswith("enum:"):
-                    parts.append(f"{arg_name} ({marker}, one of: {kind.split(':', 1)[1]})")
-                else:
-                    parts.append(f"{arg_name} ({marker}, {kind})")
-            signature = f"- {tool_name}({', '.join(parts)})"
-        description = _ASK_DATA_TOOL_DESCRIPTIONS.get(tool_name)
-        lines.append(f"{signature}\n  {description}" if description else signature)
-    return "\n".join(lines)
-
-
-def _llm_parse_data_question(question: str) -> Optional[dict]:
-    """
-    Ask Gemini to translate a free-text question into ONE structured,
-    read-only tool call: {"tool": "<name>", "arguments": {...}}.
-
-    Gemini only ever sees this prompt (the question + a fixed tool catalog)
-    — never any invoice/project/customer data — and only ever picks a tool
-    name + arguments. It cannot write SQL, cannot write Python, cannot select
-    a write/update/delete action (none exist in the catalog), and never
-    computes any number itself; `_execute_ask_data_tool` does that
-    deterministically in Python. Returns None on any failure (missing key,
-    network error, timeout, invalid JSON), so the caller falls back to the
-    legacy `_answer_data_question`.
-    """
-    gemini_cfg = get_gemini_config()
-    api_key = gemini_cfg.get("api_key", "")
-    if not api_key or not str(question).strip():
-        return None
-    try:
-        import json
-        import requests
-
-        prompt = (
-            "You are a strict, read-only query router for a CRM. Given the user's question, choose "
-            "exactly ONE tool from the catalog below plus the arguments it needs, then reply with ONLY "
-            "raw JSON (no markdown fences, no explanation) in exactly this shape:\n"
-            '{"tool": "<tool_name>", "arguments": {"<arg_name>": <value>, ...}}\n\n'
-            "Rules:\n"
-            "- Only use tool names and argument names that appear in the catalog below. Never invent one.\n"
-            "- Omit any argument you are not confident about; it will default to 'no filter'.\n"
-            "- Never produce SQL, Python, or any instruction to write/update/delete/send anything — "
-            "every tool in the catalog is read-only, so only ever select one of them.\n"
-            "- 'year', 'invoice_number', 'min_cameras' and 'limit' must be plain integers.\n"
-            "- 'year' filters an invoice's billing/maintenance year (when it was invoiced FOR). "
-            "'paid_year' filters by when the invoice was ACTUALLY PAID (its payment date). For "
-            "questions like 'paid in 2026', 'payments received in 2026', or 'bank transactions in "
-            "2026', use 'paid_year', not 'year' — an invoice can be billed for one year but paid "
-            "in a later one.\n"
-            "- 'country' should be the country name/code exactly as it appears in the question.\n"
-            "- 'project' should be the project name exactly as it appears in the question.\n"
-            "- For get_projects/count_projects/get_camera_statistics, omitting 'status' means 'active "
-            "projects only' (the CRM's default reporting scope). Only set status to 'All' if the user "
-            "explicitly asks to include cancelled/offline/inactive projects too.\n"
-            "- Distinguish PAYMENT-EVENT/HISTORY questions from FINANCIAL-STATUS questions — this is "
-            "the single most important routing decision:\n"
-            "  * PAYMENT-EVENT/HISTORY: the question asks about a specific bank transfer/wire/"
-            "remittance as an EVENT — WHEN it happened, or WHAT it covered/included. Trigger words: "
-            "'bank payment', 'bank transfer', 'wire', 'remittance', 'last payment'/'last bank payment' "
-            "used to ask for a date or contents, 'payment history'. Examples: 'when was the last bank "
-            "payment for X', 'when did X last pay us', 'what was included/covered in the last payment/"
-            "transfer for X', 'show the bank payment history for X', 'show the latest bank transfer "
-            "allocations'. Use get_last_bank_payment for ALL of these, even if the wording also "
-            "contains 'paid'/'pay'. Its underlying bank_payments/bank_payment_allocations audit log "
-            "may be INCOMPLETE (not every paid invoice has a logged event) — NEVER use it to answer "
-            "whether a project/invoice is paid, unpaid, fully paid, partially paid, settled, or has "
-            "outstanding debt/balance.\n"
-            "  * FINANCIAL-STATUS: the question asks about the current paid/unpaid state, balance, "
-            "or debt, regardless of individual payment events. Trigger words: 'paid', 'unpaid', 'fully "
-            "paid', 'partially paid', 'settled', 'balance', 'outstanding', 'debt', 'owe'/'owes', "
-            "'payment status'. Examples: 'is X fully paid', 'has X paid us', 'does X owe us money', "
-            "'what is the outstanding amount for X', 'which invoices/projects are unpaid or not fully "
-            "paid', 'is invoice N paid', 'how much is still outstanding across all projects'. Use "
-            "get_invoice/get_invoices/get_unpaid_invoices/get_debt/get_paid_amount/"
-            "get_outstanding_amount/get_top_debt_projects/get_license_payment_status for these — the "
-            "invoices table is the authoritative source of paid/unpaid/outstanding/debt status, never "
-            "the bank-payment log.\n"
-            "  * Tie-break rule when a question uses 'paid'/'pay' AND could go either way: if it asks "
-            "WHEN something happened or WHAT a transfer contained, it's a payment-EVENT question "
-            "(e.g. 'when did X last pay us' -> get_last_bank_payment, because it wants a date). If it "
-            "asks whether something IS paid/settled or what balance/debt remains, it's a FINANCIAL-"
-            "STATUS question (e.g. 'has X paid us' -> get_paid_amount/get_invoices, because it wants "
-            "a yes/no payment-status answer, not a specific transfer's date or contents).\n"
-            "- For questions about license expiry/status (e.g. 'expired licenses', 'licenses needing "
-            "update', 'license for AD Anderlecht', 'licenses expiring in October'), use get_licenses. "
-            "'eop_year'/'eop_month' filter by the License EOP date, not an invoice year. "
-            "'license_status' is one of: Active, Expired, Missing, Update Next Month, Cancelled — it "
-            "is the COMPUTED license classification (already accounts for whether the EOP date has "
-            "passed). It is NOT the same field as 'project_status' (the project's own operational "
-            "status: Active, Offline, Cancelled, New, Installed, etc. — same values as get_projects' "
-            "'status'). Do not confuse the two: a project can be license_status='Expired' while its "
-            "project_status is still 'Active' (license needs renewal but the site is still running) — "
-            "that is a normal, common, and important combination, NOT a contradiction. If a question "
-            "names both concepts (e.g. 'expired licenses on Active projects', 'licenses that expired "
-            "but the project is still active/offline'), set license_status='Expired' AND set "
-            "project_status to the mentioned operational status — never drop 'expired' just because "
-            "another status word like 'Active' also appears in the question. "
-            "If the user gives an exact day (e.g. 'on October 1st 2026', '2026-10-01'), use 'eop_date' "
-            "(format YYYY-MM-DD) instead of eop_year/eop_month, so only that exact date matches.\n"
-            "- If the question about licenses ALSO asks about invoices, payments, debt, outstanding "
-            "balance, or whether projects are paid/fully paid, use get_license_payment_status instead "
-            "of get_licenses — it takes the exact same arguments but also resolves, per project, the "
-            "LATEST already-due annual license/maintenance invoice (based on the project's recurring "
-            "Annual Payment Month, not merely its most recent or highest-numbered invoice) and whether "
-            "THAT specific invoice is paid: Paid, Unpaid, Not Yet Due, or No Annual Invoice Found. "
-            "All-time historical totals are included for reference only.\n"
-            "- License EOP reconciliation: if the question asks whether a paid year (Year 1 / Year 2 / "
-            "Y1 / Y2 ...) was reflected in the License EOP — e.g. 'projects with Year 1 paid but License "
-            "EOP not updated', 'Year 2 paid but EOP not updated', 'paid licenses where the current "
-            "License EOP is earlier than the EOP justified by payments', 'expected license EOP', 'which "
-            "licenses need their EOP updated' — use get_license_eop_reconciliation (NOT "
-            "get_license_payment_status, which only sees the latest annual invoice). Year 'N' paid but "
-            "EOP not updated -> paid_year=N. 'EOP earlier than justified by payments' / 'needs EOP "
-            "update' with no specific year -> needs_update='yes'. Add project/country/project_status "
-            "only if the question names them. This tool is read-only.\n\n"
-            f"Tool catalog:\n{_ask_data_tool_catalog_text()}\n\n"
-            f"Question: {question}"
-        )
-        model = gemini_cfg.get("model", "gemini-flash-latest")
-        request_body = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "temperature": 0,
-                "maxOutputTokens": 2048,
-                "thinkingConfig": {"thinkingBudget": 0},
-                "responseMimeType": "application/json",
-            },
-        }
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-        headers = {"x-goog-api-key": api_key}
-        resp = None
-        last_exc: Optional[Exception] = None
-        for attempt in range(2):  # transient 5xx from Gemini is common; retry once
-            try:
-                resp = requests.post(url, headers=headers, json=request_body, timeout=20)
-                if resp.status_code >= 500:
-                    last_exc = ValueError(f"{resp.status_code} Server Error from Gemini")
-                    continue
-                break
-            except requests.exceptions.RequestException as exc:
-                last_exc = exc
-        if resp is None or resp.status_code >= 500:
-            raise last_exc or ValueError("Gemini request failed with no response")
-        resp.raise_for_status()
-        payload = resp.json()
-        text = " ".join(
-            part.get("text", "")
-            for part in payload["candidates"][0]["content"]["parts"]
-        ).strip()
-        if not text:
-            return None
-        try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError as exc:
-            finish_reason = payload["candidates"][0].get("finishReason", "?")
-            usage = payload.get("usageMetadata", {})
-            raise ValueError(
-                f"Gemini returned invalid/truncated JSON ({len(text)} chars, "
-                f"finishReason={finish_reason}, usage={usage}): {text[:200]!r}"
-            ) from exc
-        return parsed if isinstance(parsed, dict) else None
-    except Exception as exc:
-        try:
-            import re as _re
-            import streamlit as st
-            safe_msg = _re.sub(r"key=[^&\s]+", "key=***", str(exc))
-            safe_msg = safe_msg.replace(api_key, "***")
-            st.session_state["_ask_data_llm_error"] = safe_msg
-        except Exception:
-            pass
-        return None
+    """Thin wrapper: the tool executor now lives in services/ask_data/executor.py."""
+    return _ask_data_execute_tool_core(
+        tool_name, args, projects, invoices, debt_summaries,
+        next_invoice_number=lambda: _get_next_invoice_number(invoices, _data_path),
+    )
 
 
 def _answer_data_question_smart(question: str, projects, invoices, debt_summaries) -> tuple[str, Optional[pd.DataFrame]]:
-    """
-    Preferred Ask Data entry point: Gemini tool-selection first, deterministic
-    Python execution second, with the original keyword-based
-    `_answer_data_question` (which itself still tries an LLM template-rewrite)
-    as the fallback for any failure along the way.
-    """
-    import streamlit as st
+    """Thin wrapper: the planner -> validator -> executor router now lives in services/ask_data/router.py;
+    the legacy keyword matcher (still defined in this file) is injected as its fallback."""
+    return _ask_data_answer_smart_core(
+        question, projects, invoices, debt_summaries,
+        legacy_normalize_question=_llm_normalize_question,
+        legacy_answer=_answer_data_question,
+        next_invoice_number=lambda: _get_next_invoice_number(invoices, _data_path),
+    )
 
-    st.session_state.pop("_ask_data_llm_error", None)
-    st.session_state.pop("_ask_data_llm_tool_call", None)
 
-    parsed = _llm_parse_data_question(question)
-    if parsed is not None:
-        tool_name, cleaned_args, error = _validate_ask_data_tool_call(parsed, projects)
-        if tool_name is not None:
-            try:
-                st.session_state["_ask_data_llm_tool_call"] = {"tool": tool_name, "arguments": cleaned_args}
-                return _execute_ask_data_tool(tool_name, cleaned_args, projects, invoices, debt_summaries)
-            except Exception as exc:
-                st.session_state["_ask_data_llm_error"] = f"Tool execution failed: {exc}"
-        else:
-            st.session_state["_ask_data_llm_error"] = error
+# ══════════════════════════════════════════════════════════════════════════════
+# Ask Data v3 (Phase 4): conversational chat UI, behind the `ask_data_v3` feature flag.
+# Same planner -> validator -> executor -> ToolResult pipeline as v2, plus a per-session
+# ConversationContext for follow-ups/drill-down (see services/ask_data/conversation.py).
+# v2 above is completely untouched and remains the default when the flag is off.
+# ══════════════════════════════════════════════════════════════════════════════
 
-    # Fallback: legacy keyword matcher (with its own internal LLM template-rewrite attempt).
-    normalized = _llm_normalize_question(question)
-    effective_question = normalized or question
-    return _answer_data_question(effective_question, projects, invoices, debt_summaries)
+from services.ask_data.context import ConversationContext  # noqa: E402
+from services.ask_data.conversation import answer_turn  # noqa: E402
+from services.ask_data.tool_result import ResultStore  # noqa: E402
+
+
+def _answer_data_turn_v3(question: str, context: ConversationContext, projects, invoices, debt_summaries):
+    """Thin wrapper: v3's turn orchestrator now lives in services/ask_data/conversation.py."""
+    return answer_turn(
+        question, projects, invoices, debt_summaries, context,
+        legacy_normalize_question=_llm_normalize_question,
+        legacy_answer=_answer_data_question,
+        next_invoice_number=lambda: _get_next_invoice_number(invoices, _data_path),
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Ask Data v2/v3 shadow comparison: editor-only diagnostics (read-only), see services/ask_data/shadow.py.
+#
+# While an approved editor (CAN_EDIT) has the ask_data_v3 flag on, the Ask Data page shows a v2/v3 mode
+# switcher (defaulting to v2 every session). Whichever pipeline is NOT shown to the editor is still run in
+# the background on the same question ("shadow run") so the two can be compared; the comparison is logged
+# (append_ask_data_shadow_log) and never shown as part of the answer. Any failure in the shadow path is
+# swallowed -- it must never affect the real, user-visible answer.
+# ══════════════════════════════════════════════════════════════════════════════
+
+from services.ask_data.shadow import ShadowSummary, build_comparison  # noqa: E402
+from config.settings import append_ask_data_shadow_log, load_ask_data_shadow_log  # noqa: E402
+
+
+def _ask_data_shadow_v3_summary(question: str, projects, invoices, debt_summaries) -> ShadowSummary:
+    """Shadow-run v3 for a question actually asked via v2. Uses its own persistent context/result store (not
+    the editor's "real" v3 session, if any) so sequential follow-ups accumulate independently."""
+    try:
+        shadow_context = st.session_state.setdefault("_ask_data_shadow_v3_context", ConversationContext())
+        shadow_store = st.session_state.setdefault("_ask_data_shadow_v3_store", ResultStore())
+        outcome = answer_turn(
+            question, projects, invoices, debt_summaries, shadow_context,
+            legacy_normalize_question=_llm_normalize_question,
+            legacy_answer=_answer_data_question,
+            next_invoice_number=lambda: _get_next_invoice_number(invoices, _data_path),
+            result_store=shadow_store,
+        )
+        if outcome.kind == "clarification":
+            return ShadowSummary.from_clarification()
+        if outcome.kind in ("tool", "drilldown"):
+            return ShadowSummary.from_tool_result(outcome.result, outcome_kind=outcome.kind)
+        if outcome.kind == "legacy":
+            return ShadowSummary.from_legacy(outcome.dataframe)
+        return ShadowSummary.from_error()
+    except Exception:
+        return ShadowSummary.from_error()
+
+
+def _ask_data_shadow_v2_summary(question: str, projects, invoices, debt_summaries) -> ShadowSummary:
+    """Shadow-run v2 for a question actually asked via v3. v2 has no conversation context, so this is exactly
+    what a real v2 user typing that same text alone (no history) would get."""
+    try:
+        st.session_state.pop("_ask_data_clarification", None)
+        st.session_state.pop("_ask_data_last_result", None)
+        _text, df = _answer_data_question_smart(question, projects, invoices, debt_summaries)
+        if st.session_state.get("_ask_data_clarification") is not None:
+            return ShadowSummary.from_clarification()
+        result = st.session_state.get("_ask_data_last_result")
+        if result is not None:
+            return ShadowSummary.from_tool_result(result)
+        return ShadowSummary.from_legacy(df)
+    except Exception:
+        return ShadowSummary.from_error()
+
+
+def _log_ask_data_shadow(question: str, primary_mode: str, v2_summary: ShadowSummary, v3_summary: ShadowSummary) -> None:
+    try:
+        comparison = build_comparison(question, primary_mode, v2_summary, v3_summary, editor=_current_user)
+        append_ask_data_shadow_log(comparison.to_log_entry())
+    except Exception:
+        pass   # shadow logging is best-effort diagnostics; it must never affect the real answer
 
 
 def _find_invoice_header_row(worksheet) -> Optional[tuple[int, dict[str, int]]]:
@@ -3286,39 +2194,6 @@ def _normalize_order_status(value: str) -> str:
         if option.lower() == cleaned.lower():
             return option
     return cleaned
-
-
-def _normalize_project_status(value: str) -> str:
-    cleaned = _safe_str(value).strip()
-    if not cleaned:
-        return "New"
-    if cleaned.lower() == "offline":
-        return "Offline"
-    for option in PROJECT_STATUS_OPTIONS:
-        if option.lower() == cleaned.lower():
-            return option
-    return cleaned
-
-
-def _normalize_country(value: str) -> str:
-    """Normalize country codes and names to full country names."""
-    cleaned = _safe_str(value).strip()
-    if not cleaned:
-        return ""
-    country_mapping = {
-        "bel": "Belgium",
-        "ger": "Germany",
-        "hol": "Netherlands",
-        "lux": "Luxembourg",
-        "fra": "France",
-        "ita": "Italy",
-        "esp": "Spain",
-        "gbr": "United Kingdom",
-        "deu": "Germany",
-        "nld": "Netherlands",
-    }
-    normalized_key = cleaned.lower()
-    return country_mapping.get(normalized_key, cleaned)
 
 
 def _order_country_label(value: str) -> str:
@@ -4874,92 +3749,222 @@ elif page == "❓ Ask Data":
                 f"AD Sint-Kruis Brugge license_eop:   {_diag['ad_sint_kruis_brugge_license_eop']}",
                 language=None,
             )
-    _ask_data_llm_on = bool(get_gemini_config().get("api_key", ""))
-    if _ask_data_llm_on:
-        st.caption("Ask naturally about projects, invoices, debt, payments, licenses, or camera statistics.")
-    else:
-        st.caption("Ask questions about projects, invoices, debt, or sent PDF invoices.")
 
-    def _ask_data_answer(raw_question: str) -> tuple[str, Optional[pd.DataFrame]]:
+    # Ask Data v3 is only ever offered to approved editors (CAN_EDIT), and only while the ask_data_v3 flag
+    # is on in secrets/env (the global kill switch -- flipping it off instantly hides v3 and the switcher for
+    # everyone, no redeploy needed). Even then, every session defaults back to v2; editors must opt in each
+    # time (goal 1 + 2 + 4). Viewers never see the switcher and are completely unaffected (goal 3).
+    _ask_data_v3_master_enabled = get_ask_data_v3_enabled()
+    _ask_data_editor_pilot = CAN_EDIT and _ask_data_v3_master_enabled
+    _ask_data_use_v3 = False
+
+    if _ask_data_editor_pilot:
+        st.session_state.setdefault("_ask_data_mode_choice", "Ask Data v2")
+        _ask_data_mode_choice = st.radio(
+            "Mode (editor-only preview)",
+            ["Ask Data v2", "Ask Data v3 (preview)"],
+            key="_ask_data_mode_choice",
+            horizontal=True,
+            help=(
+                "v3 adds conversation follow-ups and drill-down and is only shown to editors while it is "
+                "being piloted. Every question asked here is also compared against the other version in the "
+                "background (read-only shadow log) so we can catch differences before a wider rollout."
+            ),
+        )
+        _ask_data_use_v3 = _ask_data_mode_choice == "Ask Data v3 (preview)"
+
+        _ask_data_shadow_entries = []
+        try:
+            _ask_data_shadow_entries = load_ask_data_shadow_log()
+        except Exception:
+            pass
+        if _ask_data_shadow_entries:
+            _ask_data_shadow_mismatches = [e for e in _ask_data_shadow_entries if e.get("has_mismatch")]
+            with st.expander(
+                f"🔬 Shadow diagnostics — {len(_ask_data_shadow_entries)} compared, "
+                f"{len(_ask_data_shadow_mismatches)} with a flagged difference",
+                expanded=False,
+            ):
+                st.caption(
+                    "Read-only v2 vs v3 comparison log. Never shows ledger rows, amounts, bank data, or the "
+                    "raw question text (only a hash + word/character counts) — see services/ask_data/shadow.py."
+                )
+                st.dataframe(
+                    pd.DataFrame([
+                        {
+                            "When": e.get("timestamp") or e.get("created_at"), "Editor": e.get("editor"),
+                            "Question hash": str(e.get("question_hash") or "")[:12],
+                            "Question words": e.get("question_word_count"), "Primary": e.get("primary_mode"),
+                            "v2 outcome": e.get("v2_outcome_kind"), "v3 outcome": e.get("v3_outcome_kind"),
+                            "Mismatch flags": ", ".join(e.get("mismatch_flags") or []),
+                        }
+                        for e in _ask_data_shadow_entries[:50]
+                    ]),
+                    use_container_width=True, hide_index=True, height=300,
+                )
+
+    if not _ask_data_use_v3:
+        _ask_data_llm_on = bool(get_gemini_config().get("api_key", ""))
         if _ask_data_llm_on:
-            return _answer_data_question_smart(raw_question, projects, invoices, debt_summaries)
-        return _answer_data_question(raw_question, projects, invoices, debt_summaries)
+            st.caption("Ask naturally about projects, invoices, debt, payments, licenses, or camera statistics.")
+        else:
+            st.caption("Ask questions about projects, invoices, debt, or sent PDF invoices.")
 
-    def _remember_ask_data_question(raw_question: str) -> None:
-        text = _safe_str(raw_question).strip()
-        if not text:
-            return
-        history = st.session_state.get("ask_data_history", [])
-        history = [q for q in history if q != text]  # move to front if repeated
-        history.insert(0, text)
-        st.session_state["ask_data_history"] = history[:10]
+        def _ask_data_answer(raw_question: str) -> tuple[str, Optional[pd.DataFrame]]:
+            if _ask_data_llm_on:
+                text, df = _answer_data_question_smart(raw_question, projects, invoices, debt_summaries)
+            else:
+                # the legacy keyword matcher never touches these keys; clear any stale value from a
+                # previous smart-path call so the shadow classification below can't misread it.
+                st.session_state.pop("_ask_data_last_result", None)
+                st.session_state.pop("_ask_data_clarification", None)
+                text, df = _answer_data_question(raw_question, projects, invoices, debt_summaries)
+            if _ask_data_editor_pilot:
+                v2_result = st.session_state.get("_ask_data_last_result")
+                v2_summary = (
+                    ShadowSummary.from_clarification() if st.session_state.get("_ask_data_clarification") is not None
+                    else ShadowSummary.from_tool_result(v2_result) if v2_result is not None
+                    else ShadowSummary.from_legacy(df)
+                )
+                v3_summary = _ask_data_shadow_v3_summary(raw_question, projects, invoices, debt_summaries)
+                _log_ask_data_shadow(raw_question, "v2", v2_summary, v3_summary)
+            return text, df
 
-    quick_question_cols = st.columns(4)
-    quick_questions = [
-        "How many cameras do we have in total?",
-        "How many TopDown cameras are in Belgium?",
-        "Which country has the most cameras?",
-        "How much Y1 debt do we have in 2026?",
-    ]
-    for idx, quick_question in enumerate(quick_questions):
-        if quick_question_cols[idx].button(quick_question, key=f"ask_quick_{idx}", use_container_width=True):
-            st.session_state["ask_data_question"] = quick_question
-            answer_text, answer_df = _ask_data_answer(quick_question)
-            _remember_ask_data_question(quick_question)
+        def _remember_ask_data_question(raw_question: str) -> None:
+            text = _safe_str(raw_question).strip()
+            if not text:
+                return
+            history = st.session_state.get("ask_data_history", [])
+            history = [q for q in history if q != text]  # move to front if repeated
+            history.insert(0, text)
+            st.session_state["ask_data_history"] = history[:10]
+
+        quick_question_cols = st.columns(4)
+        quick_questions = [
+            "How many cameras do we have in total?",
+            "How many TopDown cameras are in Belgium?",
+            "Which country has the most cameras?",
+            "How much Y1 debt do we have in 2026?",
+        ]
+        for idx, quick_question in enumerate(quick_questions):
+            if quick_question_cols[idx].button(quick_question, key=f"ask_quick_{idx}", use_container_width=True):
+                st.session_state["ask_data_question"] = quick_question
+                answer_text, answer_df = _ask_data_answer(quick_question)
+                _remember_ask_data_question(quick_question)
+                st.session_state["ask_data_answer_text"] = answer_text
+                st.session_state["ask_data_answer_df"] = answer_df.to_dict(orient="records") if answer_df is not None else None
+                st.rerun()
+
+        with st.form("ask_data_form"):
+            question = st.text_area(
+                "Question",
+                value=st.session_state.get("ask_data_question", ""),
+                height=100,
+                placeholder="Examples: How many cameras do we have in total? Show unpaid invoices for AD Anderlecht. Which country has the most cameras? Show invoice 8676.",
+            )
+            submitted = st.form_submit_button("Ask")
+
+        if submitted:
+            st.session_state["ask_data_question"] = question
+            answer_text, answer_df = _ask_data_answer(question)
+            _remember_ask_data_question(question)
             st.session_state["ask_data_answer_text"] = answer_text
             st.session_state["ask_data_answer_df"] = answer_df.to_dict(orient="records") if answer_df is not None else None
+
+        _ask_data_history = st.session_state.get("ask_data_history", [])
+        if _ask_data_history:
+            with st.expander(f"🕘 Recent questions ({len(_ask_data_history)})", expanded=False):
+                for _hist_idx, _hist_question in enumerate(_ask_data_history):
+                    if st.button(_hist_question, key=f"ask_history_{_hist_idx}", use_container_width=True):
+                        st.session_state["ask_data_question"] = _hist_question
+                        answer_text, answer_df = _ask_data_answer(_hist_question)
+                        _remember_ask_data_question(_hist_question)
+                        st.session_state["ask_data_answer_text"] = answer_text
+                        st.session_state["ask_data_answer_df"] = answer_df.to_dict(orient="records") if answer_df is not None else None
+                        st.rerun()
+
+        if CAN_EDIT and _ask_data_llm_on:
+            _llm_error = st.session_state.get("_ask_data_llm_error")
+            _llm_tool_call = st.session_state.get("_ask_data_llm_tool_call")
+            if _llm_tool_call:
+                st.caption(f"🤖 Tool call: `{_llm_tool_call['tool']}({_llm_tool_call['arguments']})`")
+            elif _llm_error:
+                st.caption(f"⚠️ LLM assist failed, used keyword matcher instead: {_llm_error}")
+
+        answer_text = st.session_state.get("ask_data_answer_text")
+        answer_rows = st.session_state.get("ask_data_answer_df")
+
+        if answer_text:
+            st.success(answer_text)
+        else:
+            st.info(
+                "Try: 'How many cameras do we have in total?', 'How many TopDown cameras are in Belgium?', "
+                "'Which country has the most cameras?', 'How much Y1 debt do we have in 2026?', "
+                "'Show unpaid invoices for AD Anderlecht', or 'Show invoice 8676'."
+            )
+
+        if answer_rows:
+            st.dataframe(pd.DataFrame(answer_rows), use_container_width=True, hide_index=True, height=420)
+
+    else:
+        # ── Ask Data v3: conversational chat UI (behind the ask_data_v3 flag) ───────────────────────────
+        st.caption(
+            "Chat naturally, in English or Hebrew, about projects, invoices, debt, payments, or licenses. "
+            "Ask a follow-up ('Only Belgium?', 'Which invoices make that up?') and I'll keep the context."
+        )
+
+        _v3_messages = st.session_state.setdefault("_ask_data_v3_messages", [])
+        _v3_context = st.session_state.setdefault("_ask_data_v3_context", ConversationContext())
+
+        if st.button("🧹 New conversation", key="ask_data_v3_reset"):
+            st.session_state["_ask_data_v3_messages"] = []
+            _v3_context.reset()
             st.rerun()
 
-    with st.form("ask_data_form"):
-        question = st.text_area(
-            "Question",
-            value=st.session_state.get("ask_data_question", ""),
-            height=100,
-            placeholder="Examples: How many cameras do we have in total? Show unpaid invoices for AD Anderlecht. Which country has the most cameras? Show invoice 8676.",
-        )
-        submitted = st.form_submit_button("Ask")
+        def _render_v3_message(msg: dict, *, show_drilldown_buttons: bool = False) -> None:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+                if msg.get("dataframe") is not None:
+                    st.dataframe(msg["dataframe"], use_container_width=True, hide_index=True, height=360)
+                if show_drilldown_buttons and msg.get("kind") == "tool":
+                    _col_rows, _col_breakdown = st.columns(2)
+                    if _col_rows.button("📄 Show invoices", key="ask_data_v3_drill_rows", use_container_width=True):
+                        _run_v3_turn("Show invoices", shadow=False)
+                        st.rerun()
+                    if _col_breakdown.button("📊 Show breakdown", key="ask_data_v3_drill_breakdown", use_container_width=True):
+                        _run_v3_turn("Show breakdown", shadow=False)
+                        st.rerun()
 
-    if submitted:
-        st.session_state["ask_data_question"] = question
-        answer_text, answer_df = _ask_data_answer(question)
-        _remember_ask_data_question(question)
-        st.session_state["ask_data_answer_text"] = answer_text
-        st.session_state["ask_data_answer_df"] = answer_df.to_dict(orient="records") if answer_df is not None else None
+        def _run_v3_turn(raw_question: str, *, shadow: bool = True) -> None:
+            text = _safe_str(raw_question).strip()
+            if not text:
+                return
+            _v3_messages.append({"role": "user", "content": text})
+            outcome = _answer_data_turn_v3(text, _v3_context, projects, invoices, debt_summaries)
+            _v3_messages.append({
+                "role": "assistant", "content": outcome.text, "dataframe": outcome.dataframe, "kind": outcome.kind,
+            })
+            if shadow and _ask_data_editor_pilot:
+                if outcome.kind == "clarification":
+                    v3_summary = ShadowSummary.from_clarification()
+                elif outcome.kind in ("tool", "drilldown"):
+                    v3_summary = ShadowSummary.from_tool_result(outcome.result, outcome_kind=outcome.kind)
+                elif outcome.kind == "legacy":
+                    v3_summary = ShadowSummary.from_legacy(outcome.dataframe)
+                else:
+                    v3_summary = ShadowSummary.from_error()
+                v2_summary = _ask_data_shadow_v2_summary(text, projects, invoices, debt_summaries)
+                _log_ask_data_shadow(text, "v3", v2_summary, v3_summary)
 
-    _ask_data_history = st.session_state.get("ask_data_history", [])
-    if _ask_data_history:
-        with st.expander(f"🕘 Recent questions ({len(_ask_data_history)})", expanded=False):
-            for _hist_idx, _hist_question in enumerate(_ask_data_history):
-                if st.button(_hist_question, key=f"ask_history_{_hist_idx}", use_container_width=True):
-                    st.session_state["ask_data_question"] = _hist_question
-                    answer_text, answer_df = _ask_data_answer(_hist_question)
-                    _remember_ask_data_question(_hist_question)
-                    st.session_state["ask_data_answer_text"] = answer_text
-                    st.session_state["ask_data_answer_df"] = answer_df.to_dict(orient="records") if answer_df is not None else None
-                    st.rerun()
+        for _msg_idx, _msg in enumerate(_v3_messages):
+            _is_last_assistant = _msg["role"] == "assistant" and _msg_idx == len(_v3_messages) - 1
+            _render_v3_message(_msg, show_drilldown_buttons=_is_last_assistant)
 
-    if CAN_EDIT and _ask_data_llm_on:
-        _llm_error = st.session_state.get("_ask_data_llm_error")
-        _llm_tool_call = st.session_state.get("_ask_data_llm_tool_call")
-        if _llm_tool_call:
-            st.caption(f"🤖 Tool call: `{_llm_tool_call['tool']}({_llm_tool_call['arguments']})`")
-        elif _llm_error:
-            st.caption(f"⚠️ LLM assist failed, used keyword matcher instead: {_llm_error}")
+        if _v3_prompt := st.chat_input("Ask about projects, invoices, debt, payments, or licenses…"):
+            _run_v3_turn(_v3_prompt)
+            st.rerun()
 
-    answer_text = st.session_state.get("ask_data_answer_text")
-    answer_rows = st.session_state.get("ask_data_answer_df")
 
-    if answer_text:
-        st.success(answer_text)
-    else:
-        st.info(
-            "Try: 'How many cameras do we have in total?', 'How many TopDown cameras are in Belgium?', "
-            "'Which country has the most cameras?', 'How much Y1 debt do we have in 2026?', "
-            "'Show unpaid invoices for AD Anderlecht', or 'Show invoice 8676'."
-        )
-
-    if answer_rows:
-        st.dataframe(pd.DataFrame(answer_rows), use_container_width=True, hide_index=True, height=420)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

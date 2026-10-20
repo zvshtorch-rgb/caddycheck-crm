@@ -1,0 +1,4707 @@
+{
+ "bank": {
+  "bank/latest_nothing_recorded": {
+   "df": null,
+   "text": "Last bank payment (unknown date): an invoice, €0."
+  },
+  "bank/latest_with_allocations": {
+   "df": {
+    "columns": [
+     "Invoice #",
+     "Project",
+     "Maint. Year",
+     "Amount (€)",
+     "Year"
+    ],
+    "records": [
+     {
+      "Amount (€)": 7780.0,
+      "Invoice #": 8001,
+      "Maint. Year": "Y1",
+      "Project": "AD Alpha",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 3890.0,
+      "Invoice #": 8001,
+      "Maint. Year": "Y1",
+      "Project": "Edeka Epsilon - Town",
+      "Year": 2026
+     }
+    ]
+   },
+   "text": "Last bank payment (2026-09-28) covered 2 invoice line(s) totaling €11,670."
+  },
+  "bank/latest_without_allocations_applied": {
+   "df": null,
+   "text": "Last bank payment (2026-09-28): invoice #8001, €7,780."
+  },
+  "bank/latest_without_allocations_received": {
+   "df": null,
+   "text": "Last bank payment (2026-09-14): p2.pdf, €912."
+  },
+  "bank/load_error": {
+   "df": null,
+   "text": "Could not load bank payments: bank log unavailable"
+  },
+  "bank/no_payments": {
+   "df": null,
+   "text": "No bank payments have been recorded yet."
+  },
+  "bank/project_found": {
+   "df": {
+    "columns": [
+     "Invoice #",
+     "Project",
+     "Maint. Year",
+     "Amount (€)",
+     "Year"
+    ],
+    "records": [
+     {
+      "Amount (€)": 7780.0,
+      "Invoice #": 8001,
+      "Maint. Year": "Y1",
+      "Project": "AD Alpha",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 3890.0,
+      "Invoice #": 8001,
+      "Maint. Year": "Y1",
+      "Project": "Edeka Epsilon - Town",
+      "Year": 2026
+     }
+    ]
+   },
+   "text": "Last bank payment (2026-09-28) covered 2 invoice line(s) totaling €11,670."
+  },
+  "bank/project_not_found": {
+   "df": null,
+   "text": "No recorded bank payment event was found for Spar Eta. This audit log may be incomplete and this result does not indicate whether the project is paid or unpaid — ask about its payment/paid status separately to check that."
+  }
+ },
+ "catalog": "- get_invoice(invoice_number (required, int), year (optional, int))\n  Looks up a single invoice by number from the invoices table, the authoritative source for invoice-level financial status. Use this for 'is invoice N paid', 'show invoice N', 'was invoice N sent' style questions.\n- get_invoices(project (optional, project), year (optional, int), paid_year (optional, int), country (optional, country), paid (optional, one of: yes,no,cancelled))\n  Lists/filters invoice ledger rows (invoices table). Use this for actual payment status, paid/unpaid status, and invoice-level or project-level financial status questions. The invoices table is the authoritative source for these questions — do NOT use get_last_bank_payment for them.\n- get_unpaid_invoices(project (optional, project), year (optional, int), paid_year (optional, int), country (optional, country), category (optional, one of: trial,y1,y2plus))\n  Lists unpaid invoice ledger rows (invoices table), filterable by project/country/year/category. Authoritative for 'which invoices/projects are unpaid or not fully paid' questions — do NOT use get_last_bank_payment for these.\n- get_project(project (required, project))\n  Looks up static details (country, cameras, payment month, status) for one project.\n- get_projects(country (optional, country), status (optional, status), month (optional, month), min_cameras (optional, int))\n  Lists/filters projects by country, status, billing month, or minimum camera count.\n- count_projects(country (optional, country), status (optional, status))\n  Counts projects matching a country/status filter.\n- get_debt(project (optional, project), year (optional, int), country (optional, country), category (optional, one of: trial,y1,y2plus))\n  Computes modeled/expected outstanding debt from the invoices table. Use this for debt, outstanding balance, and 'how much is owed' questions — the invoices table is the authoritative source for actual payment status, paid/unpaid status, outstanding balances, debt, and partial payments, not the bank-payment event log.\n- get_paid_amount(project (optional, project), year (optional, int), paid_year (optional, int), country (optional, country))\n  Sums amounts actually paid from the invoices table (authoritative paid-status source). Use this for 'has X paid', 'is X fully paid', 'how much has X paid' financial-status questions — NOT get_last_bank_payment, which only covers a possibly-incomplete log of individual transfer events, not overall paid/unpaid status.\n- get_outstanding_amount(project (optional, project), year (optional, int), country (optional, country))\n  Sums unpaid invoice amounts from the invoices table. Use this for 'what is still outstanding/owed for X' and 'how much is outstanding across all projects' questions — the invoices table is authoritative for outstanding balances, not the bank-payment log.\n- get_top_debt_projects(year (optional, int), limit (optional, int))\n  Ranks projects by outstanding debt (invoices table), optionally for one year.\n- get_sent_invoices(invoice_number (optional, int), year (optional, int), project (optional, project))\n  Looks up the log of invoice PDFs actually emailed out (not payment status).\n- get_next_invoice_number(): no arguments\n  Returns the next unused invoice number.\n- get_camera_statistics(country (optional, country), status (optional, status), camera_type (optional, one of: all,TopDown,Backtray,Pushout), aggregation (optional, one of: sum,count_projects,average_per_project,group_by_country,list_projects))\n  Aggregates camera counts (sum/average/by-country/etc.) across projects.\n- get_last_bank_payment(project (optional, project))\n  Returns recorded bank-payment events and allocations from the bank_payments/bank_payment_allocations audit log (optionally for one project). Use ONLY for questions about a specific payment/transfer/remittance EVENT — when it happened, or what invoices/amounts it covered (e.g. 'when was the last bank payment for X', 'what was included in the last transfer', 'show the bank payment history'). This audit log may be INCOMPLETE (not every paid invoice has a logged event here) and must NOT be used to determine whether a project or invoice is paid, unpaid, fully paid, or has outstanding debt — use get_invoice/get_invoices/get_unpaid_invoices/get_debt/get_paid_amount/get_outstanding_amount/get_license_payment_status for those instead.\n- get_licenses(project (optional, project), country (optional, country), license_status (optional, one of: Active,Expired,Missing,Update Next Month,Cancelled), project_status (optional, status), eop_year (optional, int), eop_month (optional, month), eop_date (optional, date))\n  Filters projects by license_status (the computed license classification: Active, Expired, Missing, Update Next Month, Cancelled) and/or expiry date. 'license_status' is NOT the same as 'project_status' (the project's own operational status: Active, Offline, Cancelled, New, etc. -- the same values used by get_projects). For questions combining both concepts, e.g. 'expired licenses on Active/Offline projects', 'licenses that expired but the project is still active', set license_status='Expired' AND project_status accordingly -- never drop the 'expired' part of the question just because a project-status word like 'Active' is also mentioned. Not for payment/debt questions.\n- get_license_payment_status(project (optional, project), country (optional, country), license_status (optional, one of: Active,Expired,Missing,Update Next Month,Cancelled), project_status (optional, status), eop_year (optional, int), eop_month (optional, month), eop_date (optional, date))\n  Same license filtering as get_licenses (including the license_status vs project_status distinction -- see get_licenses), PLUS the authoritative paid/unpaid status of each project's latest already-due annual invoice, joined from the invoices table. Use this instead of get_licenses when a license question also asks about invoices, payments, debt, outstanding balance, or whether projects are paid/fully paid. It looks ONLY at the latest annual invoice -- for 'was the License EOP updated for the paid years' questions use get_license_eop_reconciliation instead.\n- get_license_eop_reconciliation(project (optional, project), country (optional, country), project_status (optional, status), paid_year (optional, int), needs_update (optional, one of: yes,no))\n  READ-ONLY reconciliation of every project's CURRENT License EOP against the EOP its full invoice/payment history justifies (Year 1, Year 2, ... all maintenance years from the invoices table, not just the latest invoice). Returns per project: license start date, current EOP, Y1/Y2 invoice numbers + paid status + payment dates, highest consecutively paid maintenance year, expected EOP (start date + that many years), 'Needs EOP Update?' and a confidence flag. Use it for: 'Year 1 paid but License EOP not updated', 'Year 2 paid but EOP not updated', 'paid licenses whose EOP is earlier than the payments justify', 'which licenses need their EOP updated', 'expected license EOP'. Set paid_year=1 or 2 (etc.) for 'Year N paid but EOP not updated'; set needs_update='yes' for 'EOP earlier than justified by payments'. It never changes any date.",
+ "planner": {
+  "blank_question": {
+   "exception": null,
+   "first_request": null,
+   "posts": 0,
+   "result": null,
+   "state": {}
+  },
+  "connection_errors_redacted": {
+   "exception": null,
+   "first_request": {
+    "generationConfig": {
+     "maxOutputTokens": 2048,
+     "responseMimeType": "application/json",
+     "temperature": 0,
+     "thinkingConfig": {
+      "thinkingBudget": 0
+     }
+    },
+    "headers": {
+     "x-goog-api-key": "TESTKEY-123"
+    },
+    "prompt_len": 13781,
+    "prompt_sha256": "1485c020474eab04127102c2f9097ae897bd498dbb73a13cbf9049e9d2c3d819",
+    "prompt_tail": "t updated'; set needs_update='yes' for 'EOP earlier than justified by payments'. It never changes any date.\n\nQuestion: q",
+    "timeout": 20,
+    "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-test-model:generateContent"
+   },
+   "posts": 2,
+   "result": null,
+   "state": {
+    "_ask_data_llm_error": "HTTPSConnectionPool: failed ?key=***&alt=json ***"
+   }
+  },
+  "custom_model_in_url": {
+   "exception": null,
+   "first_request": {
+    "generationConfig": {
+     "maxOutputTokens": 2048,
+     "responseMimeType": "application/json",
+     "temperature": 0,
+     "thinkingConfig": {
+      "thinkingBudget": 0
+     }
+    },
+    "headers": {
+     "x-goog-api-key": "TESTKEY-123"
+    },
+    "prompt_len": 13781,
+    "prompt_sha256": "1485c020474eab04127102c2f9097ae897bd498dbb73a13cbf9049e9d2c3d819",
+    "prompt_tail": "t updated'; set needs_update='yes' for 'EOP earlier than justified by payments'. It never changes any date.\n\nQuestion: q",
+    "timeout": 20,
+    "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-x:generateContent"
+   },
+   "posts": 1,
+   "result": {
+    "tool": "get_next_invoice_number"
+   },
+   "state": {}
+  },
+  "empty_text": {
+   "exception": null,
+   "first_request": {
+    "generationConfig": {
+     "maxOutputTokens": 2048,
+     "responseMimeType": "application/json",
+     "temperature": 0,
+     "thinkingConfig": {
+      "thinkingBudget": 0
+     }
+    },
+    "headers": {
+     "x-goog-api-key": "TESTKEY-123"
+    },
+    "prompt_len": 13781,
+    "prompt_sha256": "1485c020474eab04127102c2f9097ae897bd498dbb73a13cbf9049e9d2c3d819",
+    "prompt_tail": "t updated'; set needs_update='yes' for 'EOP earlier than justified by payments'. It never changes any date.\n\nQuestion: q",
+    "timeout": 20,
+    "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-test-model:generateContent"
+   },
+   "posts": 1,
+   "result": null,
+   "state": {}
+  },
+  "http_400": {
+   "exception": null,
+   "first_request": {
+    "generationConfig": {
+     "maxOutputTokens": 2048,
+     "responseMimeType": "application/json",
+     "temperature": 0,
+     "thinkingConfig": {
+      "thinkingBudget": 0
+     }
+    },
+    "headers": {
+     "x-goog-api-key": "TESTKEY-123"
+    },
+    "prompt_len": 13781,
+    "prompt_sha256": "1485c020474eab04127102c2f9097ae897bd498dbb73a13cbf9049e9d2c3d819",
+    "prompt_tail": "t updated'; set needs_update='yes' for 'EOP earlier than justified by payments'. It never changes any date.\n\nQuestion: q",
+    "timeout": 20,
+    "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-test-model:generateContent"
+   },
+   "posts": 1,
+   "result": null,
+   "state": {
+    "_ask_data_llm_error": "400 Client Error for url: https://x/y?key=***"
+   }
+  },
+  "invalid_json": {
+   "exception": null,
+   "first_request": {
+    "generationConfig": {
+     "maxOutputTokens": 2048,
+     "responseMimeType": "application/json",
+     "temperature": 0,
+     "thinkingConfig": {
+      "thinkingBudget": 0
+     }
+    },
+    "headers": {
+     "x-goog-api-key": "TESTKEY-123"
+    },
+    "prompt_len": 13781,
+    "prompt_sha256": "1485c020474eab04127102c2f9097ae897bd498dbb73a13cbf9049e9d2c3d819",
+    "prompt_tail": "t updated'; set needs_update='yes' for 'EOP earlier than justified by payments'. It never changes any date.\n\nQuestion: q",
+    "timeout": 20,
+    "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-test-model:generateContent"
+   },
+   "posts": 1,
+   "result": null,
+   "state": {
+    "_ask_data_llm_error": "Gemini returned invalid/truncated JSON (15 chars, finishReason=STOP, usage={'totalTokenCount': 10}): 'not json at all'"
+   }
+  },
+  "json_list_is_none": {
+   "exception": null,
+   "first_request": {
+    "generationConfig": {
+     "maxOutputTokens": 2048,
+     "responseMimeType": "application/json",
+     "temperature": 0,
+     "thinkingConfig": {
+      "thinkingBudget": 0
+     }
+    },
+    "headers": {
+     "x-goog-api-key": "TESTKEY-123"
+    },
+    "prompt_len": 13781,
+    "prompt_sha256": "1485c020474eab04127102c2f9097ae897bd498dbb73a13cbf9049e9d2c3d819",
+    "prompt_tail": "t updated'; set needs_update='yes' for 'EOP earlier than justified by payments'. It never changes any date.\n\nQuestion: q",
+    "timeout": 20,
+    "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-test-model:generateContent"
+   },
+   "posts": 1,
+   "result": null,
+   "state": {}
+  },
+  "no_api_key": {
+   "exception": null,
+   "first_request": null,
+   "posts": 0,
+   "result": null,
+   "state": {}
+  },
+  "retry_after_500": {
+   "exception": null,
+   "first_request": {
+    "generationConfig": {
+     "maxOutputTokens": 2048,
+     "responseMimeType": "application/json",
+     "temperature": 0,
+     "thinkingConfig": {
+      "thinkingBudget": 0
+     }
+    },
+    "headers": {
+     "x-goog-api-key": "TESTKEY-123"
+    },
+    "prompt_len": 13781,
+    "prompt_sha256": "1485c020474eab04127102c2f9097ae897bd498dbb73a13cbf9049e9d2c3d819",
+    "prompt_tail": "t updated'; set needs_update='yes' for 'EOP earlier than justified by payments'. It never changes any date.\n\nQuestion: q",
+    "timeout": 20,
+    "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-test-model:generateContent"
+   },
+   "posts": 2,
+   "result": {
+    "tool": "get_next_invoice_number"
+   },
+   "state": {}
+  },
+  "two_500s": {
+   "exception": null,
+   "first_request": {
+    "generationConfig": {
+     "maxOutputTokens": 2048,
+     "responseMimeType": "application/json",
+     "temperature": 0,
+     "thinkingConfig": {
+      "thinkingBudget": 0
+     }
+    },
+    "headers": {
+     "x-goog-api-key": "TESTKEY-123"
+    },
+    "prompt_len": 13781,
+    "prompt_sha256": "1485c020474eab04127102c2f9097ae897bd498dbb73a13cbf9049e9d2c3d819",
+    "prompt_tail": "t updated'; set needs_update='yes' for 'EOP earlier than justified by payments'. It never changes any date.\n\nQuestion: q",
+    "timeout": 20,
+    "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-test-model:generateContent"
+   },
+   "posts": 2,
+   "result": null,
+   "state": {
+    "_ask_data_llm_error": "502 Server Error from Gemini"
+   }
+  },
+  "valid_tool_call": {
+   "exception": null,
+   "first_request": {
+    "generationConfig": {
+     "maxOutputTokens": 2048,
+     "responseMimeType": "application/json",
+     "temperature": 0,
+     "thinkingConfig": {
+      "thinkingBudget": 0
+     }
+    },
+    "headers": {
+     "x-goog-api-key": "TESTKEY-123"
+    },
+    "prompt_len": 13806,
+    "prompt_sha256": "41c8a4976354b6e383591c4639b80077c1f9d74269cce3dadce90a31bc68d7f0",
+    "prompt_tail": "ate='yes' for 'EOP earlier than justified by payments'. It never changes any date.\n\nQuestion: How much does Belgium owe?",
+    "timeout": 20,
+    "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-test-model:generateContent"
+   },
+   "posts": 1,
+   "result": {
+    "arguments": {
+     "country": "Belgium"
+    },
+    "tool": "get_debt"
+   },
+   "state": {}
+  }
+ },
+ "router": {
+  "fallback_uses_normalized_question": {
+   "legacy_calls": [
+    [
+     "normalize",
+     "weird phrasing"
+    ],
+    [
+     "answer",
+     "Show top debt projects"
+    ]
+   ],
+   "posts": 1,
+   "result": {
+    "df": null,
+    "text": "LEGACY[Show top debt projects]"
+   },
+   "state": {
+    "_ask_data_llm_error": "Unknown or missing tool name: 'nope'."
+   }
+  },
+  "gemini_failure_goes_to_legacy": {
+   "legacy_calls": [
+    [
+     "normalize",
+     "q"
+    ],
+    [
+     "answer",
+     "q"
+    ]
+   ],
+   "posts": 2,
+   "result": {
+    "df": null,
+    "text": "LEGACY[q]"
+   },
+   "state": {
+    "_ask_data_llm_error": "500 Server Error from Gemini"
+   }
+  },
+  "next_invoice": {
+   "legacy_calls": [],
+   "posts": 1,
+   "result": {
+    "df": null,
+    "text": "The next invoice number is 8042."
+   },
+   "state": {
+    "_ask_data_llm_tool_call": {
+     "arguments": {},
+     "tool": "get_next_invoice_number"
+    }
+   }
+  },
+  "no_api_key_goes_straight_to_legacy": {
+   "legacy_calls": [
+    [
+     "normalize",
+     "anything"
+    ],
+    [
+     "answer",
+     "anything"
+    ]
+   ],
+   "posts": 0,
+   "result": {
+    "df": null,
+    "text": "LEGACY[anything]"
+   },
+   "state": {}
+  },
+  "outstanding_total": {
+   "legacy_calls": [],
+   "posts": 1,
+   "result": {
+    "df": null,
+    "text": "Outstanding (unpaid) amount for the selected filters is €28,914 across 12 invoice row(s)."
+   },
+   "state": {
+    "_ask_data_llm_tool_call": {
+     "arguments": {
+      "country": null,
+      "project": null,
+      "year": null
+     },
+     "tool": "get_outstanding_amount"
+    }
+   }
+  },
+  "tool_call_success": {
+   "legacy_calls": [],
+   "posts": 1,
+   "result": {
+    "df": {
+     "columns": [
+      "Invoice #",
+      "Project",
+      "Country",
+      "Maint. Year",
+      "Amount (€)",
+      "Paid",
+      "Payment Date",
+      "Year"
+     ],
+     "records": [
+      {
+       "Amount (€)": 7780.0,
+       "Country": "Bel",
+       "Invoice #": "8001",
+       "Maint. Year": "Y1",
+       "Paid": "No",
+       "Payment Date": "",
+       "Project": "AD Alpha",
+       "Year": 2026
+      },
+      {
+       "Amount (€)": 1140.0,
+       "Country": "Bel",
+       "Invoice #": "8004",
+       "Maint. Year": "Y2",
+       "Paid": "No",
+       "Payment Date": "",
+       "Project": "CM Gamma",
+       "Year": 2025
+      },
+      {
+       "Amount (€)": 4668.0,
+       "Country": "Bel",
+       "Invoice #": "8008",
+       "Maint. Year": "Y1",
+       "Paid": "No",
+       "Payment Date": "",
+       "Project": "Intermarche Heusy",
+       "Year": 2026
+      },
+      {
+       "Amount (€)": 778.0,
+       "Country": "Bel",
+       "Invoice #": "8012",
+       "Maint. Year": "Y1",
+       "Paid": "No",
+       "Payment Date": "",
+       "Project": "AD Theta",
+       "Year": 2024
+      },
+      {
+       "Amount (€)": -2723.0,
+       "Country": "Bel",
+       "Invoice #": "8013",
+       "Maint. Year": "Credit",
+       "Paid": "No",
+       "Payment Date": "",
+       "Project": "AD Alpha",
+       "Year": 2026
+      },
+      {
+       "Amount (€)": 228.0,
+       "Country": "Bel",
+       "Invoice #": "—",
+       "Maint. Year": "Y3",
+       "Paid": "No",
+       "Payment Date": "",
+       "Project": "CM Gamma",
+       "Year": ""
+      },
+      {
+       "Amount (€)": 5016.0,
+       "Country": "Bel",
+       "Invoice #": "8016",
+       "Maint. Year": "Y2",
+       "Paid": "No",
+       "Payment Date": "",
+       "Project": "AD Beta",
+       "Year": 2026
+      }
+     ]
+    },
+    "text": "I found 7 unpaid invoice row(s) totaling €16,887."
+   },
+   "state": {
+    "_ask_data_llm_tool_call": {
+     "arguments": {
+      "category": null,
+      "country": "Bel",
+      "project": null,
+      "year": null
+     },
+     "tool": "get_debt"
+    }
+   }
+  },
+  "tool_exception_falls_back": {
+   "legacy_calls": [
+    [
+     "normalize",
+     "projects billed in March"
+    ],
+    [
+     "answer",
+     "projects billed in March"
+    ]
+   ],
+   "posts": 1,
+   "result": {
+    "df": null,
+    "text": "LEGACY[projects billed in March]"
+   },
+   "state": {
+    "_ask_data_llm_error": "Tool execution failed: name 'get_projects_for_month' is not defined",
+    "_ask_data_llm_tool_call": {
+     "arguments": {
+      "country": null,
+      "min_cameras": null,
+      "month": "March",
+      "status": null
+     },
+     "tool": "get_projects"
+    }
+   }
+  },
+  "unknown_tool_falls_back": {
+   "legacy_calls": [
+    [
+     "normalize",
+     "drop it"
+    ],
+    [
+     "answer",
+     "drop it"
+    ]
+   ],
+   "posts": 1,
+   "result": {
+    "df": null,
+    "text": "LEGACY[drop it]"
+   },
+   "state": {
+    "_ask_data_llm_error": "Unknown or missing tool name: 'drop_table'."
+   }
+  },
+  "unresolvable_project_falls_back": {
+   "legacy_calls": [
+    [
+     "normalize",
+     "q"
+    ],
+    [
+     "answer",
+     "q"
+    ]
+   ],
+   "posts": 1,
+   "result": {
+    "df": null,
+    "text": "LEGACY[q]"
+   },
+   "state": {
+    "_ask_data_llm_error": "Could not validate argument 'project'='Zzzzzz Qqqq' for tool 'get_debt'."
+   }
+  }
+ },
+ "tools": {
+  "count_projects/all_ger": {
+   "df": null,
+   "text": "There are 1 project(s) in Ger."
+  },
+  "count_projects/country": {
+   "df": null,
+   "text": "There are 4 active project(s) in Bel."
+  },
+  "count_projects/default": {
+   "df": null,
+   "text": "There are 6 active project(s)."
+  },
+  "count_projects/status_cancelled": {
+   "df": null,
+   "text": "There are 1 project(s) with status Cancelled."
+  },
+  "get_camera_statistics/average": {
+   "df": null,
+   "text": "Average camera cameras per active project is 7.8 (across 6 project(s))."
+  },
+  "get_camera_statistics/average_cancelled": {
+   "df": null,
+   "text": "Average camera cameras per project is 3.0 (across 1 project(s))."
+  },
+  "get_camera_statistics/backtray_bel": {
+   "df": null,
+   "text": "There are 4 Backtray camera(s) across 4 active project(s) in Bel."
+  },
+  "get_camera_statistics/count_projects": {
+   "df": null,
+   "text": "There are 6 active project(s)."
+  },
+  "get_camera_statistics/country": {
+   "df": null,
+   "text": "There are 31 camera camera(s) across 4 active project(s) in Bel."
+  },
+  "get_camera_statistics/group_by_country": {
+   "df": {
+    "columns": [
+     "Country",
+     "Camera Cameras"
+    ],
+    "records": [
+     {
+      "Camera Cameras": 31,
+      "Country": "Bel"
+     },
+     {
+      "Camera Cameras": 12,
+      "Country": "Ger"
+     },
+     {
+      "Camera Cameras": 4,
+      "Country": "Hol"
+     }
+    ]
+   },
+   "text": "Bel has the most camera cameras (31, active projects)."
+  },
+  "get_camera_statistics/group_by_country_topdown": {
+   "df": {
+    "columns": [
+     "Country",
+     "Topdown Cameras"
+    ],
+    "records": [
+     {
+      "Country": "Bel",
+      "Topdown Cameras": 27
+     },
+     {
+      "Country": "Hol",
+      "Topdown Cameras": 2
+     },
+     {
+      "Country": "Ger",
+      "Topdown Cameras": 0
+     }
+    ]
+   },
+   "text": "Bel has the most TopDown cameras (27, active projects)."
+  },
+  "get_camera_statistics/group_empty": {
+   "df": null,
+   "text": "No projects match that question."
+  },
+  "get_camera_statistics/list_all_status": {
+   "df": {
+    "columns": [
+     "Project",
+     "Country",
+     "Camera Cameras",
+     "Status"
+    ],
+    "records": [
+     {
+      "Camera Cameras": 10,
+      "Country": "Bel",
+      "Project": "AD Alpha",
+      "Status": "Active"
+     },
+     {
+      "Camera Cameras": 8,
+      "Country": "Bel",
+      "Project": "AD Beta",
+      "Status": "Active"
+     },
+     {
+      "Camera Cameras": 5,
+      "Country": "Bel",
+      "Project": "CM Gamma",
+      "Status": "Offline"
+     },
+     {
+      "Camera Cameras": 3,
+      "Country": "Bel",
+      "Project": "Proxy Delta",
+      "Status": "Cancelled"
+     },
+     {
+      "Camera Cameras": 12,
+      "Country": "Ger",
+      "Project": "Edeka Epsilon - Town",
+      "Status": "Active"
+     },
+     {
+      "Camera Cameras": 4,
+      "Country": "Hol",
+      "Project": "Plus Zeta",
+      "Status": "Installed"
+     },
+     {
+      "Camera Cameras": 2,
+      "Country": "Lux",
+      "Project": "Spar Eta",
+      "Status": "Trial"
+     },
+     {
+      "Camera Cameras": 6,
+      "Country": "Bel",
+      "Project": "Intermarche Heusy",
+      "Status": "Active"
+     },
+     {
+      "Camera Cameras": 7,
+      "Country": "Bel",
+      "Project": "AD Theta",
+      "Status": "active"
+     }
+    ]
+   },
+   "text": "Found 9 project(s)."
+  },
+  "get_camera_statistics/list_empty": {
+   "df": null,
+   "text": "No projects match that question."
+  },
+  "get_camera_statistics/pushout": {
+   "df": null,
+   "text": "There are 12 Pushout camera(s) across 6 active project(s)."
+  },
+  "get_camera_statistics/sum": {
+   "df": null,
+   "text": "There are 47 camera camera(s) across 6 active project(s)."
+  },
+  "get_camera_statistics/topdown": {
+   "df": null,
+   "text": "There are 29 TopDown camera(s) across 6 active project(s)."
+  },
+  "get_debt/all": {
+   "df": {
+    "columns": [
+     "Invoice #",
+     "Project",
+     "Country",
+     "Maint. Year",
+     "Amount (€)",
+     "Paid",
+     "Payment Date",
+     "Year"
+    ],
+    "records": [
+     {
+      "Amount (€)": 7780.0,
+      "Country": "Bel",
+      "Invoice #": "8001",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Alpha",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 3890.0,
+      "Country": "Ger",
+      "Invoice #": "8001",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "Edeka Epsilon - Town",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 1140.0,
+      "Country": "Bel",
+      "Invoice #": "8004",
+      "Maint. Year": "Y2",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "CM Gamma",
+      "Year": 2025
+     },
+     {
+      "Amount (€)": 912.0,
+      "Country": "Hol",
+      "Invoice #": "8006",
+      "Maint. Year": "Y6",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "Plus Zeta",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 1000.5,
+      "Country": "Hol",
+      "Invoice #": "8006",
+      "Maint. Year": "Y6",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "Plus Zeta",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 4668.0,
+      "Country": "Bel",
+      "Invoice #": "8008",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "Intermarche Heusy",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 3112.0,
+      "Country": "Bel",
+      "Invoice #": "8009",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "intermarche heusy",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 3112.0,
+      "Country": "",
+      "Invoice #": "8010",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "CM Essen (coplementary)",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 778.0,
+      "Country": "Bel",
+      "Invoice #": "8012",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Theta",
+      "Year": 2024
+     },
+     {
+      "Amount (€)": -2723.0,
+      "Country": "Bel",
+      "Invoice #": "8013",
+      "Maint. Year": "Credit",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Alpha",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 228.0,
+      "Country": "Bel",
+      "Invoice #": "—",
+      "Maint. Year": "Y3",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "CM Gamma",
+      "Year": ""
+     },
+     {
+      "Amount (€)": 5016.0,
+      "Country": "Bel",
+      "Invoice #": "8016",
+      "Maint. Year": "Y2",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Beta",
+      "Year": 2026
+     }
+    ]
+   },
+   "text": "I found 12 unpaid invoice row(s) totaling €28,914."
+  },
+  "get_debt/country": {
+   "df": {
+    "columns": [
+     "Invoice #",
+     "Project",
+     "Country",
+     "Maint. Year",
+     "Amount (€)",
+     "Paid",
+     "Payment Date",
+     "Year"
+    ],
+    "records": [
+     {
+      "Amount (€)": 7780.0,
+      "Country": "Bel",
+      "Invoice #": "8001",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Alpha",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 1140.0,
+      "Country": "Bel",
+      "Invoice #": "8004",
+      "Maint. Year": "Y2",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "CM Gamma",
+      "Year": 2025
+     },
+     {
+      "Amount (€)": 4668.0,
+      "Country": "Bel",
+      "Invoice #": "8008",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "Intermarche Heusy",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 778.0,
+      "Country": "Bel",
+      "Invoice #": "8012",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Theta",
+      "Year": 2024
+     },
+     {
+      "Amount (€)": -2723.0,
+      "Country": "Bel",
+      "Invoice #": "8013",
+      "Maint. Year": "Credit",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Alpha",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 228.0,
+      "Country": "Bel",
+      "Invoice #": "—",
+      "Maint. Year": "Y3",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "CM Gamma",
+      "Year": ""
+     },
+     {
+      "Amount (€)": 5016.0,
+      "Country": "Bel",
+      "Invoice #": "8016",
+      "Maint. Year": "Y2",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Beta",
+      "Year": 2026
+     }
+    ]
+   },
+   "text": "I found 7 unpaid invoice row(s) totaling €16,887."
+  },
+  "get_debt/empty": {
+   "df": null,
+   "text": "No unpaid invoice rows match that question."
+  },
+  "get_debt/ger_y2plus": {
+   "df": null,
+   "text": "No unpaid invoice rows match that question."
+  },
+  "get_debt/project": {
+   "df": {
+    "columns": [
+     "Invoice #",
+     "Project",
+     "Country",
+     "Maint. Year",
+     "Amount (€)",
+     "Paid",
+     "Payment Date",
+     "Year"
+    ],
+    "records": [
+     {
+      "Amount (€)": 7780.0,
+      "Country": "Bel",
+      "Invoice #": "8001",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Alpha",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": -2723.0,
+      "Country": "Bel",
+      "Invoice #": "8013",
+      "Maint. Year": "Credit",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Alpha",
+      "Year": 2026
+     }
+    ]
+   },
+   "text": "I found 2 unpaid invoice row(s) totaling €5,057."
+  },
+  "get_debt/y1": {
+   "df": {
+    "columns": [
+     "Invoice #",
+     "Project",
+     "Country",
+     "Maint. Year",
+     "Amount (€)",
+     "Paid",
+     "Payment Date",
+     "Year"
+    ],
+    "records": [
+     {
+      "Amount (€)": 7780.0,
+      "Country": "Bel",
+      "Invoice #": "8001",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Alpha",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 3890.0,
+      "Country": "Ger",
+      "Invoice #": "8001",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "Edeka Epsilon - Town",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 4668.0,
+      "Country": "Bel",
+      "Invoice #": "8008",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "Intermarche Heusy",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 3112.0,
+      "Country": "Bel",
+      "Invoice #": "8009",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "intermarche heusy",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 3112.0,
+      "Country": "",
+      "Invoice #": "8010",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "CM Essen (coplementary)",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 778.0,
+      "Country": "Bel",
+      "Invoice #": "8012",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Theta",
+      "Year": 2024
+     },
+     {
+      "Amount (€)": -2723.0,
+      "Country": "Bel",
+      "Invoice #": "8013",
+      "Maint. Year": "Credit",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Alpha",
+      "Year": 2026
+     }
+    ]
+   },
+   "text": "I found 7 unpaid invoice row(s) totaling €20,617."
+  },
+  "get_debt/year": {
+   "df": {
+    "columns": [
+     "Invoice #",
+     "Project",
+     "Country",
+     "Maint. Year",
+     "Amount (€)",
+     "Paid",
+     "Payment Date",
+     "Year"
+    ],
+    "records": [
+     {
+      "Amount (€)": 7780.0,
+      "Country": "Bel",
+      "Invoice #": "8001",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Alpha",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 3890.0,
+      "Country": "Ger",
+      "Invoice #": "8001",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "Edeka Epsilon - Town",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 912.0,
+      "Country": "Hol",
+      "Invoice #": "8006",
+      "Maint. Year": "Y6",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "Plus Zeta",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 1000.5,
+      "Country": "Hol",
+      "Invoice #": "8006",
+      "Maint. Year": "Y6",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "Plus Zeta",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 4668.0,
+      "Country": "Bel",
+      "Invoice #": "8008",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "Intermarche Heusy",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 3112.0,
+      "Country": "Bel",
+      "Invoice #": "8009",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "intermarche heusy",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 3112.0,
+      "Country": "",
+      "Invoice #": "8010",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "CM Essen (coplementary)",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": -2723.0,
+      "Country": "Bel",
+      "Invoice #": "8013",
+      "Maint. Year": "Credit",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Alpha",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 5016.0,
+      "Country": "Bel",
+      "Invoice #": "8016",
+      "Maint. Year": "Y2",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Beta",
+      "Year": 2026
+     }
+    ]
+   },
+   "text": "I found 9 unpaid invoice row(s) totaling €26,768."
+  },
+  "get_invoice/missing": {
+   "df": null,
+   "text": "Invoice 99999 is not in the invoice ledger."
+  },
+  "get_invoice/multi_row": {
+   "df": {
+    "columns": [
+     "Invoice #",
+     "Project",
+     "Country",
+     "Maint. Year",
+     "Amount (€)",
+     "Paid",
+     "Payment Date",
+     "Year"
+    ],
+    "records": [
+     {
+      "Amount (€)": 7780.0,
+      "Country": "Bel",
+      "Invoice #": "8001",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Alpha",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 3890.0,
+      "Country": "Ger",
+      "Invoice #": "8001",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "Edeka Epsilon - Town",
+      "Year": 2026
+     }
+    ]
+   },
+   "text": "Invoice 8001 has 2 row(s) totaling €11,670; see the Paid column below for each row's status."
+  },
+  "get_invoice/single_cancelled": {
+   "df": {
+    "columns": [
+     "Invoice #",
+     "Project",
+     "Country",
+     "Maint. Year",
+     "Amount (€)",
+     "Paid",
+     "Payment Date",
+     "Year"
+    ],
+    "records": [
+     {
+      "Amount (€)": 684.0,
+      "Country": "Bel",
+      "Invoice #": "8005",
+      "Maint. Year": "Y3",
+      "Paid": "cancelled",
+      "Payment Date": "",
+      "Project": "Proxy Delta",
+      "Year": 2025
+     }
+    ]
+   },
+   "text": "Invoice 8005 totals €684 and is Cancelled."
+  },
+  "get_invoice/single_paid": {
+   "df": {
+    "columns": [
+     "Invoice #",
+     "Project",
+     "Country",
+     "Maint. Year",
+     "Amount (€)",
+     "Paid",
+     "Payment Date",
+     "Year"
+    ],
+    "records": [
+     {
+      "Amount (€)": 2280.0,
+      "Country": "Bel",
+      "Invoice #": "8002",
+      "Maint. Year": "Y2",
+      "Paid": "Yes",
+      "Payment Date": "2026-03-05",
+      "Project": "AD Alpha",
+      "Year": 2026
+     }
+    ]
+   },
+   "text": "Invoice 8002 totals €2,280 and is Paid."
+  },
+  "get_invoice/single_unpaid": {
+   "df": {
+    "columns": [
+     "Invoice #",
+     "Project",
+     "Country",
+     "Maint. Year",
+     "Amount (€)",
+     "Paid",
+     "Payment Date",
+     "Year"
+    ],
+    "records": [
+     {
+      "Amount (€)": 1140.0,
+      "Country": "Bel",
+      "Invoice #": "8004",
+      "Maint. Year": "Y2",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "CM Gamma",
+      "Year": 2025
+     }
+    ]
+   },
+   "text": "Invoice 8004 totals €1,140 and is Unpaid."
+  },
+  "get_invoice/year_filter": {
+   "df": {
+    "columns": [
+     "Invoice #",
+     "Project",
+     "Country",
+     "Maint. Year",
+     "Amount (€)",
+     "Paid",
+     "Payment Date",
+     "Year"
+    ],
+    "records": [
+     {
+      "Amount (€)": 7780.0,
+      "Country": "Bel",
+      "Invoice #": "8001",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Alpha",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 3890.0,
+      "Country": "Ger",
+      "Invoice #": "8001",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "Edeka Epsilon - Town",
+      "Year": 2026
+     }
+    ]
+   },
+   "text": "Invoice 8001 has 2 row(s) totaling €11,670; see the Paid column below for each row's status."
+  },
+  "get_invoice/year_filter_empty": {
+   "df": null,
+   "text": "Invoice 8001 is not in the invoice ledger."
+  },
+  "get_invoices/all": {
+   "df": {
+    "columns": [
+     "Invoice #",
+     "Project",
+     "Country",
+     "Maint. Year",
+     "Amount (€)",
+     "Paid",
+     "Payment Date",
+     "Year"
+    ],
+    "records": [
+     {
+      "Amount (€)": 7780.0,
+      "Country": "Bel",
+      "Invoice #": "8001",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Alpha",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 3890.0,
+      "Country": "Ger",
+      "Invoice #": "8001",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "Edeka Epsilon - Town",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 2280.0,
+      "Country": "Bel",
+      "Invoice #": "8002",
+      "Maint. Year": "Y2",
+      "Paid": "Yes",
+      "Payment Date": "2026-03-05",
+      "Project": "AD Alpha",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 1824.0,
+      "Country": "Bel",
+      "Invoice #": "8003",
+      "Maint. Year": "Y5",
+      "Paid": "Yes",
+      "Payment Date": "2025-06-02",
+      "Project": "AD Beta",
+      "Year": 2025
+     },
+     {
+      "Amount (€)": 1824.0,
+      "Country": "Bel",
+      "Invoice #": "8003",
+      "Maint. Year": "Y6",
+      "Paid": "Yes",
+      "Payment Date": "2026-06-02",
+      "Project": "AD Beta",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 1140.0,
+      "Country": "Bel",
+      "Invoice #": "8004",
+      "Maint. Year": "Y2",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "CM Gamma",
+      "Year": 2025
+     },
+     {
+      "Amount (€)": 684.0,
+      "Country": "Bel",
+      "Invoice #": "8005",
+      "Maint. Year": "Y3",
+      "Paid": "cancelled",
+      "Payment Date": "",
+      "Project": "Proxy Delta",
+      "Year": 2025
+     },
+     {
+      "Amount (€)": 912.0,
+      "Country": "Hol",
+      "Invoice #": "8006",
+      "Maint. Year": "Y6",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "Plus Zeta",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 1000.5,
+      "Country": "Hol",
+      "Invoice #": "8006",
+      "Maint. Year": "Y6",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "Plus Zeta",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 389.0,
+      "Country": "Lux",
+      "Invoice #": "8007",
+      "Maint. Year": "Paid Trial-0.5Y",
+      "Paid": "Yes",
+      "Payment Date": "2026-02-01",
+      "Project": "Spar Eta",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 4668.0,
+      "Country": "Bel",
+      "Invoice #": "8008",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "Intermarche Heusy",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 3112.0,
+      "Country": "Bel",
+      "Invoice #": "8009",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "intermarche heusy",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 3112.0,
+      "Country": "",
+      "Invoice #": "8010",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "CM Essen (coplementary)",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 5446.0,
+      "Country": "Bel",
+      "Invoice #": "8011",
+      "Maint. Year": "Y1",
+      "Paid": "Yes",
+      "Payment Date": "2025-12-31",
+      "Project": "AD Theta",
+      "Year": 2025
+     },
+     {
+      "Amount (€)": 778.0,
+      "Country": "Bel",
+      "Invoice #": "8012",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Theta",
+      "Year": 2024
+     },
+     {
+      "Amount (€)": -2723.0,
+      "Country": "Bel",
+      "Invoice #": "8013",
+      "Maint. Year": "Credit",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Alpha",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 456.0,
+      "Country": "Bel",
+      "Invoice #": "8014",
+      "Maint. Year": "Y3",
+      "Paid": "Yes",
+      "Payment Date": "2025-01-15",
+      "Project": "AD Alpha",
+      "Year": 2025
+     },
+     {
+      "Amount (€)": 228.0,
+      "Country": "Bel",
+      "Invoice #": "—",
+      "Maint. Year": "Y3",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "CM Gamma",
+      "Year": ""
+     },
+     {
+      "Amount (€)": 2736.0,
+      "Country": "Ger",
+      "Invoice #": "8015",
+      "Maint. Year": "Y2",
+      "Paid": "Yes",
+      "Payment Date": "2026-07-09",
+      "Project": "Edeka Epsilon - Town",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 5016.0,
+      "Country": "Bel",
+      "Invoice #": "8016",
+      "Maint. Year": "Y2",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Beta",
+      "Year": 2026
+     }
+    ]
+   },
+   "text": "Found 20 invoice row(s) totaling €44,552."
+  },
+  "get_invoices/country": {
+   "df": {
+    "columns": [
+     "Invoice #",
+     "Project",
+     "Country",
+     "Maint. Year",
+     "Amount (€)",
+     "Paid",
+     "Payment Date",
+     "Year"
+    ],
+    "records": [
+     {
+      "Amount (€)": 7780.0,
+      "Country": "Bel",
+      "Invoice #": "8001",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Alpha",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 2280.0,
+      "Country": "Bel",
+      "Invoice #": "8002",
+      "Maint. Year": "Y2",
+      "Paid": "Yes",
+      "Payment Date": "2026-03-05",
+      "Project": "AD Alpha",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 1824.0,
+      "Country": "Bel",
+      "Invoice #": "8003",
+      "Maint. Year": "Y5",
+      "Paid": "Yes",
+      "Payment Date": "2025-06-02",
+      "Project": "AD Beta",
+      "Year": 2025
+     },
+     {
+      "Amount (€)": 1824.0,
+      "Country": "Bel",
+      "Invoice #": "8003",
+      "Maint. Year": "Y6",
+      "Paid": "Yes",
+      "Payment Date": "2026-06-02",
+      "Project": "AD Beta",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 1140.0,
+      "Country": "Bel",
+      "Invoice #": "8004",
+      "Maint. Year": "Y2",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "CM Gamma",
+      "Year": 2025
+     },
+     {
+      "Amount (€)": 684.0,
+      "Country": "Bel",
+      "Invoice #": "8005",
+      "Maint. Year": "Y3",
+      "Paid": "cancelled",
+      "Payment Date": "",
+      "Project": "Proxy Delta",
+      "Year": 2025
+     },
+     {
+      "Amount (€)": 4668.0,
+      "Country": "Bel",
+      "Invoice #": "8008",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "Intermarche Heusy",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 5446.0,
+      "Country": "Bel",
+      "Invoice #": "8011",
+      "Maint. Year": "Y1",
+      "Paid": "Yes",
+      "Payment Date": "2025-12-31",
+      "Project": "AD Theta",
+      "Year": 2025
+     },
+     {
+      "Amount (€)": 778.0,
+      "Country": "Bel",
+      "Invoice #": "8012",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Theta",
+      "Year": 2024
+     },
+     {
+      "Amount (€)": -2723.0,
+      "Country": "Bel",
+      "Invoice #": "8013",
+      "Maint. Year": "Credit",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Alpha",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 456.0,
+      "Country": "Bel",
+      "Invoice #": "8014",
+      "Maint. Year": "Y3",
+      "Paid": "Yes",
+      "Payment Date": "2025-01-15",
+      "Project": "AD Alpha",
+      "Year": 2025
+     },
+     {
+      "Amount (€)": 228.0,
+      "Country": "Bel",
+      "Invoice #": "—",
+      "Maint. Year": "Y3",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "CM Gamma",
+      "Year": ""
+     },
+     {
+      "Amount (€)": 5016.0,
+      "Country": "Bel",
+      "Invoice #": "8016",
+      "Maint. Year": "Y2",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Beta",
+      "Year": 2026
+     }
+    ]
+   },
+   "text": "Found 13 invoice row(s) totaling €29,401."
+  },
+  "get_invoices/country_unpaid": {
+   "df": {
+    "columns": [
+     "Invoice #",
+     "Project",
+     "Country",
+     "Maint. Year",
+     "Amount (€)",
+     "Paid",
+     "Payment Date",
+     "Year"
+    ],
+    "records": [
+     {
+      "Amount (€)": 3890.0,
+      "Country": "Ger",
+      "Invoice #": "8001",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "Edeka Epsilon - Town",
+      "Year": 2026
+     }
+    ]
+   },
+   "text": "Found 1 invoice row(s) totaling €3,890."
+  },
+  "get_invoices/empty": {
+   "df": null,
+   "text": "No invoices match that question."
+  },
+  "get_invoices/paid_cancelled": {
+   "df": {
+    "columns": [
+     "Invoice #",
+     "Project",
+     "Country",
+     "Maint. Year",
+     "Amount (€)",
+     "Paid",
+     "Payment Date",
+     "Year"
+    ],
+    "records": [
+     {
+      "Amount (€)": 684.0,
+      "Country": "Bel",
+      "Invoice #": "8005",
+      "Maint. Year": "Y3",
+      "Paid": "cancelled",
+      "Payment Date": "",
+      "Project": "Proxy Delta",
+      "Year": 2025
+     }
+    ]
+   },
+   "text": "Found 1 invoice row(s) totaling €684."
+  },
+  "get_invoices/paid_no": {
+   "df": {
+    "columns": [
+     "Invoice #",
+     "Project",
+     "Country",
+     "Maint. Year",
+     "Amount (€)",
+     "Paid",
+     "Payment Date",
+     "Year"
+    ],
+    "records": [
+     {
+      "Amount (€)": 7780.0,
+      "Country": "Bel",
+      "Invoice #": "8001",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Alpha",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 3890.0,
+      "Country": "Ger",
+      "Invoice #": "8001",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "Edeka Epsilon - Town",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 1140.0,
+      "Country": "Bel",
+      "Invoice #": "8004",
+      "Maint. Year": "Y2",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "CM Gamma",
+      "Year": 2025
+     },
+     {
+      "Amount (€)": 912.0,
+      "Country": "Hol",
+      "Invoice #": "8006",
+      "Maint. Year": "Y6",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "Plus Zeta",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 1000.5,
+      "Country": "Hol",
+      "Invoice #": "8006",
+      "Maint. Year": "Y6",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "Plus Zeta",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 4668.0,
+      "Country": "Bel",
+      "Invoice #": "8008",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "Intermarche Heusy",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 3112.0,
+      "Country": "Bel",
+      "Invoice #": "8009",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "intermarche heusy",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 3112.0,
+      "Country": "",
+      "Invoice #": "8010",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "CM Essen (coplementary)",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 778.0,
+      "Country": "Bel",
+      "Invoice #": "8012",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Theta",
+      "Year": 2024
+     },
+     {
+      "Amount (€)": -2723.0,
+      "Country": "Bel",
+      "Invoice #": "8013",
+      "Maint. Year": "Credit",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Alpha",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 228.0,
+      "Country": "Bel",
+      "Invoice #": "—",
+      "Maint. Year": "Y3",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "CM Gamma",
+      "Year": ""
+     },
+     {
+      "Amount (€)": 5016.0,
+      "Country": "Bel",
+      "Invoice #": "8016",
+      "Maint. Year": "Y2",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Beta",
+      "Year": 2026
+     }
+    ]
+   },
+   "text": "Found 12 invoice row(s) totaling €28,914."
+  },
+  "get_invoices/paid_year": {
+   "df": {
+    "columns": [
+     "Invoice #",
+     "Project",
+     "Country",
+     "Maint. Year",
+     "Amount (€)",
+     "Paid",
+     "Payment Date",
+     "Year"
+    ],
+    "records": [
+     {
+      "Amount (€)": 2280.0,
+      "Country": "Bel",
+      "Invoice #": "8002",
+      "Maint. Year": "Y2",
+      "Paid": "Yes",
+      "Payment Date": "2026-03-05",
+      "Project": "AD Alpha",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 1824.0,
+      "Country": "Bel",
+      "Invoice #": "8003",
+      "Maint. Year": "Y6",
+      "Paid": "Yes",
+      "Payment Date": "2026-06-02",
+      "Project": "AD Beta",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 389.0,
+      "Country": "Lux",
+      "Invoice #": "8007",
+      "Maint. Year": "Paid Trial-0.5Y",
+      "Paid": "Yes",
+      "Payment Date": "2026-02-01",
+      "Project": "Spar Eta",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 2736.0,
+      "Country": "Ger",
+      "Invoice #": "8015",
+      "Maint. Year": "Y2",
+      "Paid": "Yes",
+      "Payment Date": "2026-07-09",
+      "Project": "Edeka Epsilon - Town",
+      "Year": 2026
+     }
+    ]
+   },
+   "text": "Found 4 invoice row(s) totaling €7,229."
+  },
+  "get_invoices/paid_yes": {
+   "df": {
+    "columns": [
+     "Invoice #",
+     "Project",
+     "Country",
+     "Maint. Year",
+     "Amount (€)",
+     "Paid",
+     "Payment Date",
+     "Year"
+    ],
+    "records": [
+     {
+      "Amount (€)": 2280.0,
+      "Country": "Bel",
+      "Invoice #": "8002",
+      "Maint. Year": "Y2",
+      "Paid": "Yes",
+      "Payment Date": "2026-03-05",
+      "Project": "AD Alpha",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 1824.0,
+      "Country": "Bel",
+      "Invoice #": "8003",
+      "Maint. Year": "Y5",
+      "Paid": "Yes",
+      "Payment Date": "2025-06-02",
+      "Project": "AD Beta",
+      "Year": 2025
+     },
+     {
+      "Amount (€)": 1824.0,
+      "Country": "Bel",
+      "Invoice #": "8003",
+      "Maint. Year": "Y6",
+      "Paid": "Yes",
+      "Payment Date": "2026-06-02",
+      "Project": "AD Beta",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 389.0,
+      "Country": "Lux",
+      "Invoice #": "8007",
+      "Maint. Year": "Paid Trial-0.5Y",
+      "Paid": "Yes",
+      "Payment Date": "2026-02-01",
+      "Project": "Spar Eta",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 5446.0,
+      "Country": "Bel",
+      "Invoice #": "8011",
+      "Maint. Year": "Y1",
+      "Paid": "Yes",
+      "Payment Date": "2025-12-31",
+      "Project": "AD Theta",
+      "Year": 2025
+     },
+     {
+      "Amount (€)": 456.0,
+      "Country": "Bel",
+      "Invoice #": "8014",
+      "Maint. Year": "Y3",
+      "Paid": "Yes",
+      "Payment Date": "2025-01-15",
+      "Project": "AD Alpha",
+      "Year": 2025
+     },
+     {
+      "Amount (€)": 2736.0,
+      "Country": "Ger",
+      "Invoice #": "8015",
+      "Maint. Year": "Y2",
+      "Paid": "Yes",
+      "Payment Date": "2026-07-09",
+      "Project": "Edeka Epsilon - Town",
+      "Year": 2026
+     }
+    ]
+   },
+   "text": "Found 7 invoice row(s) totaling €14,955."
+  },
+  "get_invoices/project": {
+   "df": {
+    "columns": [
+     "Invoice #",
+     "Project",
+     "Country",
+     "Maint. Year",
+     "Amount (€)",
+     "Paid",
+     "Payment Date",
+     "Year"
+    ],
+    "records": [
+     {
+      "Amount (€)": 7780.0,
+      "Country": "Bel",
+      "Invoice #": "8001",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Alpha",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 2280.0,
+      "Country": "Bel",
+      "Invoice #": "8002",
+      "Maint. Year": "Y2",
+      "Paid": "Yes",
+      "Payment Date": "2026-03-05",
+      "Project": "AD Alpha",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": -2723.0,
+      "Country": "Bel",
+      "Invoice #": "8013",
+      "Maint. Year": "Credit",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Alpha",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 456.0,
+      "Country": "Bel",
+      "Invoice #": "8014",
+      "Maint. Year": "Y3",
+      "Paid": "Yes",
+      "Payment Date": "2025-01-15",
+      "Project": "AD Alpha",
+      "Year": 2025
+     }
+    ]
+   },
+   "text": "Found 4 invoice row(s) totaling €7,793."
+  },
+  "get_invoices/year": {
+   "df": {
+    "columns": [
+     "Invoice #",
+     "Project",
+     "Country",
+     "Maint. Year",
+     "Amount (€)",
+     "Paid",
+     "Payment Date",
+     "Year"
+    ],
+    "records": [
+     {
+      "Amount (€)": 7780.0,
+      "Country": "Bel",
+      "Invoice #": "8001",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Alpha",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 3890.0,
+      "Country": "Ger",
+      "Invoice #": "8001",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "Edeka Epsilon - Town",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 2280.0,
+      "Country": "Bel",
+      "Invoice #": "8002",
+      "Maint. Year": "Y2",
+      "Paid": "Yes",
+      "Payment Date": "2026-03-05",
+      "Project": "AD Alpha",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 1824.0,
+      "Country": "Bel",
+      "Invoice #": "8003",
+      "Maint. Year": "Y6",
+      "Paid": "Yes",
+      "Payment Date": "2026-06-02",
+      "Project": "AD Beta",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 912.0,
+      "Country": "Hol",
+      "Invoice #": "8006",
+      "Maint. Year": "Y6",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "Plus Zeta",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 1000.5,
+      "Country": "Hol",
+      "Invoice #": "8006",
+      "Maint. Year": "Y6",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "Plus Zeta",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 389.0,
+      "Country": "Lux",
+      "Invoice #": "8007",
+      "Maint. Year": "Paid Trial-0.5Y",
+      "Paid": "Yes",
+      "Payment Date": "2026-02-01",
+      "Project": "Spar Eta",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 4668.0,
+      "Country": "Bel",
+      "Invoice #": "8008",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "Intermarche Heusy",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 3112.0,
+      "Country": "Bel",
+      "Invoice #": "8009",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "intermarche heusy",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 3112.0,
+      "Country": "",
+      "Invoice #": "8010",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "CM Essen (coplementary)",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": -2723.0,
+      "Country": "Bel",
+      "Invoice #": "8013",
+      "Maint. Year": "Credit",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Alpha",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 2736.0,
+      "Country": "Ger",
+      "Invoice #": "8015",
+      "Maint. Year": "Y2",
+      "Paid": "Yes",
+      "Payment Date": "2026-07-09",
+      "Project": "Edeka Epsilon - Town",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 5016.0,
+      "Country": "Bel",
+      "Invoice #": "8016",
+      "Maint. Year": "Y2",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Beta",
+      "Year": 2026
+     }
+    ]
+   },
+   "text": "Found 13 invoice row(s) totaling €33,996."
+  },
+  "get_license_eop_reconciliation/all": {
+   "df": {
+    "columns": [
+     "Project",
+     "Project Status",
+     "Country",
+     "License Start Date",
+     "Current License EOP",
+     "Y1 Invoice Number",
+     "Y1 Paid?",
+     "Y1 Payment Date",
+     "Y2 Invoice Number",
+     "Y2 Paid?",
+     "Y2 Payment Date",
+     "Highest Paid Maintenance Year",
+     "Paid Invoice Numbers",
+     "Expected License EOP",
+     "Needs EOP Update?",
+     "EOP vs Expected",
+     "Days Behind",
+     "Confidence",
+     "Later Years (Y3+)",
+     "Notes"
+    ],
+    "records": [
+     {
+      "Confidence": "n/a",
+      "Country": "Bel",
+      "Current License EOP": "2099-03-01",
+      "Days Behind": null,
+      "EOP vs Expected": "n/a (no paid year)",
+      "Expected License EOP": "",
+      "Highest Paid Maintenance Year": "None",
+      "Later Years (Y3+)": "Y3: Yes (8014)",
+      "License Start Date": "2024-01-01 (est.)",
+      "Needs EOP Update?": "No",
+      "Notes": "No activation date (start estimated from installation year) - manual review; Paid but not consecutive from Y1: Y2, Y3 (Y1 is no)",
+      "Paid Invoice Numbers": "",
+      "Project": "AD Alpha",
+      "Project Status": "Active",
+      "Y1 Invoice Number": "8001",
+      "Y1 Paid?": "No",
+      "Y1 Payment Date": "",
+      "Y2 Invoice Number": "8002",
+      "Y2 Paid?": "Yes",
+      "Y2 Payment Date": "2026-03-05"
+     },
+     {
+      "Confidence": "n/a",
+      "Country": "Bel",
+      "Current License EOP": "2020-05-01",
+      "Days Behind": null,
+      "EOP vs Expected": "n/a (no paid year)",
+      "Expected License EOP": "",
+      "Highest Paid Maintenance Year": "None",
+      "Later Years (Y3+)": "Y5: Yes (8003); Y6: Yes (8003)",
+      "License Start Date": "2022-01-01 (est.)",
+      "Needs EOP Update?": "No",
+      "Notes": "No activation date (start estimated from installation year) - manual review; Paid but not consecutive from Y1: Y5, Y6 (Y1 is no invoice)",
+      "Paid Invoice Numbers": "",
+      "Project": "AD Beta",
+      "Project Status": "Active",
+      "Y1 Invoice Number": "",
+      "Y1 Paid?": "No invoice",
+      "Y1 Payment Date": "",
+      "Y2 Invoice Number": "8016",
+      "Y2 Paid?": "No",
+      "Y2 Payment Date": ""
+     },
+     {
+      "Confidence": "n/a",
+      "Country": "Bel",
+      "Current License EOP": "2027-01-31",
+      "Days Behind": null,
+      "EOP vs Expected": "n/a (no paid year)",
+      "Expected License EOP": "",
+      "Highest Paid Maintenance Year": "None",
+      "Later Years (Y3+)": "",
+      "License Start Date": "2030-01-01 (est.)",
+      "Needs EOP Update?": "No",
+      "Notes": "No activation date (start estimated from installation year) - manual review; Y1 is only partly paid",
+      "Paid Invoice Numbers": "",
+      "Project": "AD Theta",
+      "Project Status": "Active",
+      "Y1 Invoice Number": "8011, 8012",
+      "Y1 Paid?": "Partial",
+      "Y1 Payment Date": "2025-12-31",
+      "Y2 Invoice Number": "",
+      "Y2 Paid?": "No invoice",
+      "Y2 Payment Date": ""
+     },
+     {
+      "Confidence": "n/a",
+      "Country": "Bel",
+      "Current License EOP": "",
+      "Days Behind": null,
+      "EOP vs Expected": "n/a (no paid year)",
+      "Expected License EOP": "",
+      "Highest Paid Maintenance Year": "None",
+      "Later Years (Y3+)": "Y3: No ()",
+      "License Start Date": "2023-01-01 (est.)",
+      "Needs EOP Update?": "No",
+      "Notes": "No activation date (start estimated from installation year) - manual review",
+      "Paid Invoice Numbers": "",
+      "Project": "CM Gamma",
+      "Project Status": "Offline",
+      "Y1 Invoice Number": "",
+      "Y1 Paid?": "No invoice",
+      "Y1 Payment Date": "",
+      "Y2 Invoice Number": "8004",
+      "Y2 Paid?": "No",
+      "Y2 Payment Date": ""
+     },
+     {
+      "Confidence": "n/a",
+      "Country": "Ger",
+      "Current License EOP": "2099-06-01",
+      "Days Behind": null,
+      "EOP vs Expected": "n/a (no paid year)",
+      "Expected License EOP": "",
+      "Highest Paid Maintenance Year": "None",
+      "Later Years (Y3+)": "",
+      "License Start Date": "2025-01-01 (est.)",
+      "Needs EOP Update?": "No",
+      "Notes": "No activation date (start estimated from installation year) - manual review; Paid but not consecutive from Y1: Y2 (Y1 is no)",
+      "Paid Invoice Numbers": "",
+      "Project": "Edeka Epsilon - Town",
+      "Project Status": "Active",
+      "Y1 Invoice Number": "8001",
+      "Y1 Paid?": "No",
+      "Y1 Payment Date": "",
+      "Y2 Invoice Number": "8015",
+      "Y2 Paid?": "Yes",
+      "Y2 Payment Date": "2026-07-09"
+     },
+     {
+      "Confidence": "n/a",
+      "Country": "Bel",
+      "Current License EOP": "2026-10-01",
+      "Days Behind": null,
+      "EOP vs Expected": "n/a (no paid year)",
+      "Expected License EOP": "",
+      "Highest Paid Maintenance Year": "None",
+      "Later Years (Y3+)": "",
+      "License Start Date": "2026-01-01 (est.)",
+      "Needs EOP Update?": "No",
+      "Notes": "No activation date (start estimated from installation year) - manual review",
+      "Paid Invoice Numbers": "",
+      "Project": "Intermarche Heusy",
+      "Project Status": "Active",
+      "Y1 Invoice Number": "8008, 8009",
+      "Y1 Paid?": "No",
+      "Y1 Payment Date": "",
+      "Y2 Invoice Number": "",
+      "Y2 Paid?": "No invoice",
+      "Y2 Payment Date": ""
+     },
+     {
+      "Confidence": "n/a",
+      "Country": "Hol",
+      "Current License EOP": "2026-11-15",
+      "Days Behind": null,
+      "EOP vs Expected": "n/a (no paid year)",
+      "Expected License EOP": "",
+      "Highest Paid Maintenance Year": "None",
+      "Later Years (Y3+)": "Y6: No (8006)",
+      "License Start Date": "2020-01-01 (est.)",
+      "Needs EOP Update?": "No",
+      "Notes": "No activation date (start estimated from installation year) - manual review",
+      "Paid Invoice Numbers": "",
+      "Project": "Plus Zeta",
+      "Project Status": "Installed",
+      "Y1 Invoice Number": "",
+      "Y1 Paid?": "No invoice",
+      "Y1 Payment Date": "",
+      "Y2 Invoice Number": "",
+      "Y2 Paid?": "No invoice",
+      "Y2 Payment Date": ""
+     },
+     {
+      "Confidence": "n/a",
+      "Country": "Bel",
+      "Current License EOP": "2030-01-01",
+      "Days Behind": null,
+      "EOP vs Expected": "n/a (no paid year)",
+      "Expected License EOP": "",
+      "Highest Paid Maintenance Year": "None",
+      "Later Years (Y3+)": "",
+      "License Start Date": "2021-01-01 (est.)",
+      "Needs EOP Update?": "No",
+      "Notes": "No activation date (start estimated from installation year) - manual review; No Y-labelled invoices on file",
+      "Paid Invoice Numbers": "",
+      "Project": "Proxy Delta",
+      "Project Status": "Cancelled",
+      "Y1 Invoice Number": "",
+      "Y1 Paid?": "No invoice",
+      "Y1 Payment Date": "",
+      "Y2 Invoice Number": "",
+      "Y2 Paid?": "No invoice",
+      "Y2 Payment Date": ""
+     },
+     {
+      "Confidence": "n/a",
+      "Country": "Lux",
+      "Current License EOP": "",
+      "Days Behind": null,
+      "EOP vs Expected": "n/a (no paid year)",
+      "Expected License EOP": "",
+      "Highest Paid Maintenance Year": "None",
+      "Later Years (Y3+)": "",
+      "License Start Date": "",
+      "Needs EOP Update?": "No",
+      "Notes": "No Y-labelled invoices on file",
+      "Paid Invoice Numbers": "",
+      "Project": "Spar Eta",
+      "Project Status": "Trial",
+      "Y1 Invoice Number": "",
+      "Y1 Paid?": "No invoice",
+      "Y1 Payment Date": "",
+      "Y2 Invoice Number": "",
+      "Y2 Paid?": "No invoice",
+      "Y2 Payment Date": ""
+     }
+    ]
+   },
+   "text": "Found 9 project(s); 0 need a License EOP update (0 high confidence, 0 low confidence - verify manually). Expected EOP = license start date + the highest consecutively paid maintenance year (Y1, Y2, ...) from the full invoice history. Read-only: no License EOP was changed."
+  },
+  "get_license_eop_reconciliation/country": {
+   "df": {
+    "columns": [
+     "Project",
+     "Project Status",
+     "Country",
+     "License Start Date",
+     "Current License EOP",
+     "Y1 Invoice Number",
+     "Y1 Paid?",
+     "Y1 Payment Date",
+     "Y2 Invoice Number",
+     "Y2 Paid?",
+     "Y2 Payment Date",
+     "Highest Paid Maintenance Year",
+     "Paid Invoice Numbers",
+     "Expected License EOP",
+     "Needs EOP Update?",
+     "EOP vs Expected",
+     "Days Behind",
+     "Confidence",
+     "Later Years (Y3+)",
+     "Notes"
+    ],
+    "records": [
+     {
+      "Confidence": "n/a",
+      "Country": "Ger",
+      "Current License EOP": "2099-06-01",
+      "Days Behind": null,
+      "EOP vs Expected": "n/a (no paid year)",
+      "Expected License EOP": "",
+      "Highest Paid Maintenance Year": "None",
+      "Later Years (Y3+)": "",
+      "License Start Date": "2025-01-01 (est.)",
+      "Needs EOP Update?": "No",
+      "Notes": "No activation date (start estimated from installation year) - manual review; Paid but not consecutive from Y1: Y2 (Y1 is no)",
+      "Paid Invoice Numbers": "",
+      "Project": "Edeka Epsilon - Town",
+      "Project Status": "Active",
+      "Y1 Invoice Number": "8001",
+      "Y1 Paid?": "No",
+      "Y1 Payment Date": "",
+      "Y2 Invoice Number": "8015",
+      "Y2 Paid?": "Yes",
+      "Y2 Payment Date": "2026-07-09"
+     }
+    ]
+   },
+   "text": "Found 1 project(s); 0 need a License EOP update (0 high confidence, 0 low confidence - verify manually). Expected EOP = license start date + the highest consecutively paid maintenance year (Y1, Y2, ...) from the full invoice history. Read-only: no License EOP was changed."
+  },
+  "get_license_eop_reconciliation/empty": {
+   "df": null,
+   "text": "No projects match that License EOP reconciliation question. (Read-only: no License EOP was changed.)"
+  },
+  "get_license_eop_reconciliation/needs_update": {
+   "df": null,
+   "text": "No projects match that License EOP reconciliation question. (Read-only: no License EOP was changed.)"
+  },
+  "get_license_eop_reconciliation/paid_year1": {
+   "df": null,
+   "text": "No projects match that License EOP reconciliation question. (Read-only: no License EOP was changed.)"
+  },
+  "get_license_eop_reconciliation/project": {
+   "df": {
+    "columns": [
+     "Project",
+     "Project Status",
+     "Country",
+     "License Start Date",
+     "Current License EOP",
+     "Y1 Invoice Number",
+     "Y1 Paid?",
+     "Y1 Payment Date",
+     "Y2 Invoice Number",
+     "Y2 Paid?",
+     "Y2 Payment Date",
+     "Highest Paid Maintenance Year",
+     "Paid Invoice Numbers",
+     "Expected License EOP",
+     "Needs EOP Update?",
+     "EOP vs Expected",
+     "Days Behind",
+     "Confidence",
+     "Later Years (Y3+)",
+     "Notes"
+    ],
+    "records": [
+     {
+      "Confidence": "n/a",
+      "Country": "Bel",
+      "Current License EOP": "2099-03-01",
+      "Days Behind": null,
+      "EOP vs Expected": "n/a (no paid year)",
+      "Expected License EOP": "",
+      "Highest Paid Maintenance Year": "None",
+      "Later Years (Y3+)": "Y3: Yes (8014)",
+      "License Start Date": "2024-01-01 (est.)",
+      "Needs EOP Update?": "No",
+      "Notes": "No activation date (start estimated from installation year) - manual review; Paid but not consecutive from Y1: Y2, Y3 (Y1 is no)",
+      "Paid Invoice Numbers": "",
+      "Project": "AD Alpha",
+      "Project Status": "Active",
+      "Y1 Invoice Number": "8001",
+      "Y1 Paid?": "No",
+      "Y1 Payment Date": "",
+      "Y2 Invoice Number": "8002",
+      "Y2 Paid?": "Yes",
+      "Y2 Payment Date": "2026-03-05"
+     }
+    ]
+   },
+   "text": "Found 1 project(s); 0 need a License EOP update (0 high confidence, 0 low confidence - verify manually). Expected EOP = license start date + the highest consecutively paid maintenance year (Y1, Y2, ...) from the full invoice history. Read-only: no License EOP was changed."
+  },
+  "get_license_payment_status/all": {
+   "df": {
+    "columns": [
+     "Project",
+     "Country",
+     "License EOP",
+     "Annual Payment Month",
+     "Latest Annual Invoice Number",
+     "Latest Annual Invoice Period / Maintenance Year",
+     "Latest Annual Invoice Amount",
+     "Latest Annual Invoice Paid?",
+     "Latest Annual Invoice Outstanding Amount",
+     "Annual Payment Status",
+     "Total Invoiced (All-Time)",
+     "Total Paid (All-Time)",
+     "Outstanding Balance (All-Time)"
+    ],
+    "records": [
+     {
+      "Annual Payment Month": "April",
+      "Annual Payment Status": "Unpaid",
+      "Country": "Bel",
+      "Latest Annual Invoice Amount": 6840.0,
+      "Latest Annual Invoice Number": "8003, 8016",
+      "Latest Annual Invoice Outstanding Amount": 5016.0,
+      "Latest Annual Invoice Paid?": "No",
+      "Latest Annual Invoice Period / Maintenance Year": "2026 (Y5)",
+      "License EOP": "2020-05-01",
+      "Outstanding Balance (All-Time)": 5016.0,
+      "Project": "AD Beta",
+      "Total Invoiced (All-Time)": 8664.0,
+      "Total Paid (All-Time)": 3648.0
+     },
+     {
+      "Annual Payment Month": "October",
+      "Annual Payment Status": "Unpaid",
+      "Country": "Bel",
+      "Latest Annual Invoice Amount": 7780.0,
+      "Latest Annual Invoice Number": "8008, 8009",
+      "Latest Annual Invoice Outstanding Amount": 7780.0,
+      "Latest Annual Invoice Paid?": "No",
+      "Latest Annual Invoice Period / Maintenance Year": "2026 (Y1)",
+      "License EOP": "2026-10-01",
+      "Outstanding Balance (All-Time)": 7780.0,
+      "Project": "Intermarche Heusy",
+      "Total Invoiced (All-Time)": 7780.0,
+      "Total Paid (All-Time)": 0.0
+     },
+     {
+      "Annual Payment Month": "November",
+      "Annual Payment Status": "No Annual Invoice Found",
+      "Country": "Hol",
+      "Latest Annual Invoice Amount": 0.0,
+      "Latest Annual Invoice Number": "",
+      "Latest Annual Invoice Outstanding Amount": 0.0,
+      "Latest Annual Invoice Paid?": "N/A",
+      "Latest Annual Invoice Period / Maintenance Year": "2025 (Y6)",
+      "License EOP": "2026-11-15",
+      "Outstanding Balance (All-Time)": 1912.5,
+      "Project": "Plus Zeta",
+      "Total Invoiced (All-Time)": 1912.5,
+      "Total Paid (All-Time)": 0.0
+     },
+     {
+      "Annual Payment Month": "January",
+      "Annual Payment Status": "Not Yet Due",
+      "Country": "Bel",
+      "Latest Annual Invoice Amount": 0.0,
+      "Latest Annual Invoice Number": "",
+      "Latest Annual Invoice Outstanding Amount": 0.0,
+      "Latest Annual Invoice Paid?": "N/A",
+      "Latest Annual Invoice Period / Maintenance Year": "",
+      "License EOP": "2027-01-31",
+      "Outstanding Balance (All-Time)": 778.0,
+      "Project": "AD Theta",
+      "Total Invoiced (All-Time)": 6224.0,
+      "Total Paid (All-Time)": 5446.0
+     },
+     {
+      "Annual Payment Month": "June",
+      "Annual Payment Status": "No Annual Invoice Found",
+      "Country": "Bel",
+      "Latest Annual Invoice Amount": 0.0,
+      "Latest Annual Invoice Number": "",
+      "Latest Annual Invoice Outstanding Amount": 0.0,
+      "Latest Annual Invoice Paid?": "N/A",
+      "Latest Annual Invoice Period / Maintenance Year": "2026 (Y6)",
+      "License EOP": "2030-01-01",
+      "Outstanding Balance (All-Time)": 0.0,
+      "Project": "Proxy Delta",
+      "Total Invoiced (All-Time)": 0.0,
+      "Total Paid (All-Time)": 0.0
+     },
+     {
+      "Annual Payment Month": "March",
+      "Annual Payment Status": "Unpaid",
+      "Country": "Bel",
+      "Latest Annual Invoice Amount": 7337.0,
+      "Latest Annual Invoice Number": "8001, 8002, 8013",
+      "Latest Annual Invoice Outstanding Amount": 5057.0,
+      "Latest Annual Invoice Paid?": "No",
+      "Latest Annual Invoice Period / Maintenance Year": "2026 (Y3)",
+      "License EOP": "2099-03-01",
+      "Outstanding Balance (All-Time)": 5057.0,
+      "Project": "AD Alpha",
+      "Total Invoiced (All-Time)": 7793.0,
+      "Total Paid (All-Time)": 2736.0
+     },
+     {
+      "Annual Payment Month": "June",
+      "Annual Payment Status": "Unpaid",
+      "Country": "Ger",
+      "Latest Annual Invoice Amount": 6626.0,
+      "Latest Annual Invoice Number": "8001, 8015",
+      "Latest Annual Invoice Outstanding Amount": 3890.0,
+      "Latest Annual Invoice Paid?": "No",
+      "Latest Annual Invoice Period / Maintenance Year": "2026 (Y2)",
+      "License EOP": "2099-06-01",
+      "Outstanding Balance (All-Time)": 3890.0,
+      "Project": "Edeka Epsilon - Town",
+      "Total Invoiced (All-Time)": 6626.0,
+      "Total Paid (All-Time)": 2736.0
+     },
+     {
+      "Annual Payment Month": "May",
+      "Annual Payment Status": "No Annual Invoice Found",
+      "Country": "Bel",
+      "Latest Annual Invoice Amount": 0.0,
+      "Latest Annual Invoice Number": "",
+      "Latest Annual Invoice Outstanding Amount": 0.0,
+      "Latest Annual Invoice Paid?": "N/A",
+      "Latest Annual Invoice Period / Maintenance Year": "2026 (Y4)",
+      "License EOP": "",
+      "Outstanding Balance (All-Time)": 1368.0,
+      "Project": "CM Gamma",
+      "Total Invoiced (All-Time)": 1368.0,
+      "Total Paid (All-Time)": 0.0
+     },
+     {
+      "Annual Payment Month": "Unknown",
+      "Annual Payment Status": "No Annual Invoice Found",
+      "Country": "Lux",
+      "Latest Annual Invoice Amount": 0.0,
+      "Latest Annual Invoice Number": "",
+      "Latest Annual Invoice Outstanding Amount": 0.0,
+      "Latest Annual Invoice Paid?": "N/A",
+      "Latest Annual Invoice Period / Maintenance Year": "",
+      "License EOP": "",
+      "Outstanding Balance (All-Time)": 0.0,
+      "Project": "Spar Eta",
+      "Total Invoiced (All-Time)": 389.0,
+      "Total Paid (All-Time)": 389.0
+     }
+    ]
+   },
+   "text": "Found 9 project(s) with latest annual payment status (4 Unpaid, 4 No Annual Invoice Found, 1 Not Yet Due)."
+  },
+  "get_license_payment_status/country": {
+   "df": {
+    "columns": [
+     "Project",
+     "Country",
+     "License EOP",
+     "Annual Payment Month",
+     "Latest Annual Invoice Number",
+     "Latest Annual Invoice Period / Maintenance Year",
+     "Latest Annual Invoice Amount",
+     "Latest Annual Invoice Paid?",
+     "Latest Annual Invoice Outstanding Amount",
+     "Annual Payment Status",
+     "Total Invoiced (All-Time)",
+     "Total Paid (All-Time)",
+     "Outstanding Balance (All-Time)"
+    ],
+    "records": [
+     {
+      "Annual Payment Month": "April",
+      "Annual Payment Status": "Unpaid",
+      "Country": "Bel",
+      "Latest Annual Invoice Amount": 6840.0,
+      "Latest Annual Invoice Number": "8003, 8016",
+      "Latest Annual Invoice Outstanding Amount": 5016.0,
+      "Latest Annual Invoice Paid?": "No",
+      "Latest Annual Invoice Period / Maintenance Year": "2026 (Y5)",
+      "License EOP": "2020-05-01",
+      "Outstanding Balance (All-Time)": 5016.0,
+      "Project": "AD Beta",
+      "Total Invoiced (All-Time)": 8664.0,
+      "Total Paid (All-Time)": 3648.0
+     },
+     {
+      "Annual Payment Month": "October",
+      "Annual Payment Status": "Unpaid",
+      "Country": "Bel",
+      "Latest Annual Invoice Amount": 7780.0,
+      "Latest Annual Invoice Number": "8008, 8009",
+      "Latest Annual Invoice Outstanding Amount": 7780.0,
+      "Latest Annual Invoice Paid?": "No",
+      "Latest Annual Invoice Period / Maintenance Year": "2026 (Y1)",
+      "License EOP": "2026-10-01",
+      "Outstanding Balance (All-Time)": 7780.0,
+      "Project": "Intermarche Heusy",
+      "Total Invoiced (All-Time)": 7780.0,
+      "Total Paid (All-Time)": 0.0
+     },
+     {
+      "Annual Payment Month": "January",
+      "Annual Payment Status": "Not Yet Due",
+      "Country": "Bel",
+      "Latest Annual Invoice Amount": 0.0,
+      "Latest Annual Invoice Number": "",
+      "Latest Annual Invoice Outstanding Amount": 0.0,
+      "Latest Annual Invoice Paid?": "N/A",
+      "Latest Annual Invoice Period / Maintenance Year": "",
+      "License EOP": "2027-01-31",
+      "Outstanding Balance (All-Time)": 778.0,
+      "Project": "AD Theta",
+      "Total Invoiced (All-Time)": 6224.0,
+      "Total Paid (All-Time)": 5446.0
+     },
+     {
+      "Annual Payment Month": "June",
+      "Annual Payment Status": "No Annual Invoice Found",
+      "Country": "Bel",
+      "Latest Annual Invoice Amount": 0.0,
+      "Latest Annual Invoice Number": "",
+      "Latest Annual Invoice Outstanding Amount": 0.0,
+      "Latest Annual Invoice Paid?": "N/A",
+      "Latest Annual Invoice Period / Maintenance Year": "2026 (Y6)",
+      "License EOP": "2030-01-01",
+      "Outstanding Balance (All-Time)": 0.0,
+      "Project": "Proxy Delta",
+      "Total Invoiced (All-Time)": 0.0,
+      "Total Paid (All-Time)": 0.0
+     },
+     {
+      "Annual Payment Month": "March",
+      "Annual Payment Status": "Unpaid",
+      "Country": "Bel",
+      "Latest Annual Invoice Amount": 7337.0,
+      "Latest Annual Invoice Number": "8001, 8002, 8013",
+      "Latest Annual Invoice Outstanding Amount": 5057.0,
+      "Latest Annual Invoice Paid?": "No",
+      "Latest Annual Invoice Period / Maintenance Year": "2026 (Y3)",
+      "License EOP": "2099-03-01",
+      "Outstanding Balance (All-Time)": 5057.0,
+      "Project": "AD Alpha",
+      "Total Invoiced (All-Time)": 7793.0,
+      "Total Paid (All-Time)": 2736.0
+     },
+     {
+      "Annual Payment Month": "May",
+      "Annual Payment Status": "No Annual Invoice Found",
+      "Country": "Bel",
+      "Latest Annual Invoice Amount": 0.0,
+      "Latest Annual Invoice Number": "",
+      "Latest Annual Invoice Outstanding Amount": 0.0,
+      "Latest Annual Invoice Paid?": "N/A",
+      "Latest Annual Invoice Period / Maintenance Year": "2026 (Y4)",
+      "License EOP": "",
+      "Outstanding Balance (All-Time)": 1368.0,
+      "Project": "CM Gamma",
+      "Total Invoiced (All-Time)": 1368.0,
+      "Total Paid (All-Time)": 0.0
+     }
+    ]
+   },
+   "text": "Found 6 project(s) with latest annual payment status (3 Unpaid, 1 Not Yet Due, 2 No Annual Invoice Found)."
+  },
+  "get_license_payment_status/empty": {
+   "df": null,
+   "text": "No projects match that license question."
+  },
+  "get_license_payment_status/expired": {
+   "df": {
+    "columns": [
+     "Project",
+     "Country",
+     "License EOP",
+     "Annual Payment Month",
+     "Latest Annual Invoice Number",
+     "Latest Annual Invoice Period / Maintenance Year",
+     "Latest Annual Invoice Amount",
+     "Latest Annual Invoice Paid?",
+     "Latest Annual Invoice Outstanding Amount",
+     "Annual Payment Status",
+     "Total Invoiced (All-Time)",
+     "Total Paid (All-Time)",
+     "Outstanding Balance (All-Time)"
+    ],
+    "records": [
+     {
+      "Annual Payment Month": "April",
+      "Annual Payment Status": "Unpaid",
+      "Country": "Bel",
+      "Latest Annual Invoice Amount": 6840.0,
+      "Latest Annual Invoice Number": "8003, 8016",
+      "Latest Annual Invoice Outstanding Amount": 5016.0,
+      "Latest Annual Invoice Paid?": "No",
+      "Latest Annual Invoice Period / Maintenance Year": "2026 (Y5)",
+      "License EOP": "2020-05-01",
+      "Outstanding Balance (All-Time)": 5016.0,
+      "Project": "AD Beta",
+      "Total Invoiced (All-Time)": 8664.0,
+      "Total Paid (All-Time)": 3648.0
+     },
+     {
+      "Annual Payment Month": "October",
+      "Annual Payment Status": "Unpaid",
+      "Country": "Bel",
+      "Latest Annual Invoice Amount": 7780.0,
+      "Latest Annual Invoice Number": "8008, 8009",
+      "Latest Annual Invoice Outstanding Amount": 7780.0,
+      "Latest Annual Invoice Paid?": "No",
+      "Latest Annual Invoice Period / Maintenance Year": "2026 (Y1)",
+      "License EOP": "2026-10-01",
+      "Outstanding Balance (All-Time)": 7780.0,
+      "Project": "Intermarche Heusy",
+      "Total Invoiced (All-Time)": 7780.0,
+      "Total Paid (All-Time)": 0.0
+     }
+    ]
+   },
+   "text": "Found 2 project(s) with latest annual payment status (2 Unpaid)."
+  },
+  "get_license_payment_status/project": {
+   "df": {
+    "columns": [
+     "Project",
+     "Country",
+     "License EOP",
+     "Annual Payment Month",
+     "Latest Annual Invoice Number",
+     "Latest Annual Invoice Period / Maintenance Year",
+     "Latest Annual Invoice Amount",
+     "Latest Annual Invoice Paid?",
+     "Latest Annual Invoice Outstanding Amount",
+     "Annual Payment Status",
+     "Total Invoiced (All-Time)",
+     "Total Paid (All-Time)",
+     "Outstanding Balance (All-Time)"
+    ],
+    "records": [
+     {
+      "Annual Payment Month": "March",
+      "Annual Payment Status": "Unpaid",
+      "Country": "Bel",
+      "Latest Annual Invoice Amount": 7337.0,
+      "Latest Annual Invoice Number": "8001, 8002, 8013",
+      "Latest Annual Invoice Outstanding Amount": 5057.0,
+      "Latest Annual Invoice Paid?": "No",
+      "Latest Annual Invoice Period / Maintenance Year": "2026 (Y3)",
+      "License EOP": "2099-03-01",
+      "Outstanding Balance (All-Time)": 5057.0,
+      "Project": "AD Alpha",
+      "Total Invoiced (All-Time)": 7793.0,
+      "Total Paid (All-Time)": 2736.0
+     }
+    ]
+   },
+   "text": "Found 1 project(s) with latest annual payment status (1 Unpaid)."
+  },
+  "get_licenses/active_bel": {
+   "df": {
+    "columns": [
+     "Project",
+     "Country",
+     "License EOP",
+     "License Status",
+     "Project Status"
+    ],
+    "records": [
+     {
+      "Country": "Bel",
+      "License EOP": "2027-01-31",
+      "License Status": "Active",
+      "Project": "AD Theta",
+      "Project Status": "active"
+     },
+     {
+      "Country": "Bel",
+      "License EOP": "2099-03-01",
+      "License Status": "Active",
+      "Project": "AD Alpha",
+      "Project Status": "Active"
+     }
+    ]
+   },
+   "text": "Found 2 project(s) (2 Active)."
+  },
+  "get_licenses/all": {
+   "df": {
+    "columns": [
+     "Project",
+     "Country",
+     "License EOP",
+     "License Status",
+     "Project Status"
+    ],
+    "records": [
+     {
+      "Country": "Bel",
+      "License EOP": "2020-05-01",
+      "License Status": "Expired",
+      "Project": "AD Beta",
+      "Project Status": "Active"
+     },
+     {
+      "Country": "Bel",
+      "License EOP": "2026-10-01",
+      "License Status": "Expired",
+      "Project": "Intermarche Heusy",
+      "Project Status": "Active"
+     },
+     {
+      "Country": "Hol",
+      "License EOP": "2026-11-15",
+      "License Status": "Update Next Month",
+      "Project": "Plus Zeta",
+      "Project Status": "Installed"
+     },
+     {
+      "Country": "Bel",
+      "License EOP": "2027-01-31",
+      "License Status": "Active",
+      "Project": "AD Theta",
+      "Project Status": "active"
+     },
+     {
+      "Country": "Bel",
+      "License EOP": "2030-01-01",
+      "License Status": "Cancelled",
+      "Project": "Proxy Delta",
+      "Project Status": "Cancelled"
+     },
+     {
+      "Country": "Bel",
+      "License EOP": "2099-03-01",
+      "License Status": "Active",
+      "Project": "AD Alpha",
+      "Project Status": "Active"
+     },
+     {
+      "Country": "Ger",
+      "License EOP": "2099-06-01",
+      "License Status": "Active",
+      "Project": "Edeka Epsilon - Town",
+      "Project Status": "Active"
+     },
+     {
+      "Country": "Bel",
+      "License EOP": "",
+      "License Status": "Missing",
+      "Project": "CM Gamma",
+      "Project Status": "Offline"
+     },
+     {
+      "Country": "Lux",
+      "License EOP": "",
+      "License Status": "Missing",
+      "Project": "Spar Eta",
+      "Project Status": "Trial"
+     }
+    ]
+   },
+   "text": "Found 9 project(s) (2 Expired, 1 Update Next Month, 3 Active, 1 Cancelled, 2 Missing)."
+  },
+  "get_licenses/empty": {
+   "df": null,
+   "text": "No projects match that license question."
+  },
+  "get_licenses/eop_date": {
+   "df": {
+    "columns": [
+     "Project",
+     "Country",
+     "License EOP",
+     "License Status",
+     "Project Status"
+    ],
+    "records": [
+     {
+      "Country": "Bel",
+      "License EOP": "2020-05-01",
+      "License Status": "Expired",
+      "Project": "AD Beta",
+      "Project Status": "Active"
+     }
+    ]
+   },
+   "text": "Found 1 project(s) (1 Expired)."
+  },
+  "get_licenses/eop_month": {
+   "df": {
+    "columns": [
+     "Project",
+     "Country",
+     "License EOP",
+     "License Status",
+     "Project Status"
+    ],
+    "records": [
+     {
+      "Country": "Bel",
+      "License EOP": "2020-05-01",
+      "License Status": "Expired",
+      "Project": "AD Beta",
+      "Project Status": "Active"
+     }
+    ]
+   },
+   "text": "Found 1 project(s) (1 Expired)."
+  },
+  "get_licenses/eop_year": {
+   "df": {
+    "columns": [
+     "Project",
+     "Country",
+     "License EOP",
+     "License Status",
+     "Project Status"
+    ],
+    "records": [
+     {
+      "Country": "Bel",
+      "License EOP": "2099-03-01",
+      "License Status": "Active",
+      "Project": "AD Alpha",
+      "Project Status": "Active"
+     },
+     {
+      "Country": "Ger",
+      "License EOP": "2099-06-01",
+      "License Status": "Active",
+      "Project": "Edeka Epsilon - Town",
+      "Project Status": "Active"
+     }
+    ]
+   },
+   "text": "Found 2 project(s) (2 Active)."
+  },
+  "get_licenses/expired": {
+   "df": {
+    "columns": [
+     "Project",
+     "Country",
+     "License EOP",
+     "License Status",
+     "Project Status"
+    ],
+    "records": [
+     {
+      "Country": "Bel",
+      "License EOP": "2020-05-01",
+      "License Status": "Expired",
+      "Project": "AD Beta",
+      "Project Status": "Active"
+     },
+     {
+      "Country": "Bel",
+      "License EOP": "2026-10-01",
+      "License Status": "Expired",
+      "Project": "Intermarche Heusy",
+      "Project Status": "Active"
+     }
+    ]
+   },
+   "text": "Found 2 project(s) (2 Expired)."
+  },
+  "get_licenses/project": {
+   "df": {
+    "columns": [
+     "Project",
+     "Country",
+     "License EOP",
+     "License Status",
+     "Project Status"
+    ],
+    "records": [
+     {
+      "Country": "Bel",
+      "License EOP": "2020-05-01",
+      "License Status": "Expired",
+      "Project": "AD Beta",
+      "Project Status": "Active"
+     }
+    ]
+   },
+   "text": "Found 1 project(s) (1 Expired)."
+  },
+  "get_licenses/project_status_active": {
+   "df": {
+    "columns": [
+     "Project",
+     "Country",
+     "License EOP",
+     "License Status",
+     "Project Status"
+    ],
+    "records": [
+     {
+      "Country": "Bel",
+      "License EOP": "2020-05-01",
+      "License Status": "Expired",
+      "Project": "AD Beta",
+      "Project Status": "Active"
+     },
+     {
+      "Country": "Bel",
+      "License EOP": "2026-10-01",
+      "License Status": "Expired",
+      "Project": "Intermarche Heusy",
+      "Project Status": "Active"
+     },
+     {
+      "Country": "Bel",
+      "License EOP": "2027-01-31",
+      "License Status": "Active",
+      "Project": "AD Theta",
+      "Project Status": "active"
+     },
+     {
+      "Country": "Bel",
+      "License EOP": "2099-03-01",
+      "License Status": "Active",
+      "Project": "AD Alpha",
+      "Project Status": "Active"
+     },
+     {
+      "Country": "Ger",
+      "License EOP": "2099-06-01",
+      "License Status": "Active",
+      "Project": "Edeka Epsilon - Town",
+      "Project Status": "Active"
+     }
+    ]
+   },
+   "text": "Found 5 project(s) (2 Expired, 3 Active)."
+  },
+  "get_licenses/project_status_all": {
+   "df": {
+    "columns": [
+     "Project",
+     "Country",
+     "License EOP",
+     "License Status",
+     "Project Status"
+    ],
+    "records": [
+     {
+      "Country": "Bel",
+      "License EOP": "2020-05-01",
+      "License Status": "Expired",
+      "Project": "AD Beta",
+      "Project Status": "Active"
+     },
+     {
+      "Country": "Bel",
+      "License EOP": "2026-10-01",
+      "License Status": "Expired",
+      "Project": "Intermarche Heusy",
+      "Project Status": "Active"
+     },
+     {
+      "Country": "Hol",
+      "License EOP": "2026-11-15",
+      "License Status": "Update Next Month",
+      "Project": "Plus Zeta",
+      "Project Status": "Installed"
+     },
+     {
+      "Country": "Bel",
+      "License EOP": "2027-01-31",
+      "License Status": "Active",
+      "Project": "AD Theta",
+      "Project Status": "active"
+     },
+     {
+      "Country": "Bel",
+      "License EOP": "2030-01-01",
+      "License Status": "Cancelled",
+      "Project": "Proxy Delta",
+      "Project Status": "Cancelled"
+     },
+     {
+      "Country": "Bel",
+      "License EOP": "2099-03-01",
+      "License Status": "Active",
+      "Project": "AD Alpha",
+      "Project Status": "Active"
+     },
+     {
+      "Country": "Ger",
+      "License EOP": "2099-06-01",
+      "License Status": "Active",
+      "Project": "Edeka Epsilon - Town",
+      "Project Status": "Active"
+     },
+     {
+      "Country": "Bel",
+      "License EOP": "",
+      "License Status": "Missing",
+      "Project": "CM Gamma",
+      "Project Status": "Offline"
+     },
+     {
+      "Country": "Lux",
+      "License EOP": "",
+      "License Status": "Missing",
+      "Project": "Spar Eta",
+      "Project Status": "Trial"
+     }
+    ]
+   },
+   "text": "Found 9 project(s) (2 Expired, 1 Update Next Month, 3 Active, 1 Cancelled, 2 Missing)."
+  },
+  "get_licenses/update_next_month": {
+   "df": {
+    "columns": [
+     "Project",
+     "Country",
+     "License EOP",
+     "License Status",
+     "Project Status"
+    ],
+    "records": [
+     {
+      "Country": "Hol",
+      "License EOP": "2026-11-15",
+      "License Status": "Update Next Month",
+      "Project": "Plus Zeta",
+      "Project Status": "Installed"
+     }
+    ]
+   },
+   "text": "Found 1 project(s) (1 Update Next Month)."
+  },
+  "get_next_invoice_number/basic": {
+   "df": null,
+   "text": "The next invoice number is 8042."
+  },
+  "get_outstanding_amount/all": {
+   "df": null,
+   "text": "Outstanding (unpaid) amount for the selected filters is €28,914 across 12 invoice row(s)."
+  },
+  "get_outstanding_amount/country": {
+   "df": null,
+   "text": "Outstanding (unpaid) amount for Ger is €3,890 across 1 invoice row(s)."
+  },
+  "get_outstanding_amount/none": {
+   "df": null,
+   "text": "Outstanding (unpaid) amount for Spar Eta is €0 across 0 invoice row(s)."
+  },
+  "get_outstanding_amount/project": {
+   "df": null,
+   "text": "Outstanding (unpaid) amount for Intermarche Heusy is €4,668 across 1 invoice row(s)."
+  },
+  "get_outstanding_amount/year": {
+   "df": null,
+   "text": "Outstanding (unpaid) amount for the selected filters is €1,140 across 1 invoice row(s)."
+  },
+  "get_paid_amount/all": {
+   "df": null,
+   "text": "Paid amount for the selected filters is €14,955 across 7 invoice row(s). €28,914 across 12 invoice row(s) is still outstanding — NOT fully paid."
+  },
+  "get_paid_amount/country": {
+   "df": null,
+   "text": "Paid amount for Bel is €11,830 across 5 invoice row(s). €16,887 across 7 invoice row(s) is still outstanding — NOT fully paid."
+  },
+  "get_paid_amount/nothing": {
+   "df": null,
+   "text": "Paid amount for Plus Zeta is €0 across 0 invoice row(s). €1,912 across 2 invoice row(s) is still outstanding — NOT fully paid."
+  },
+  "get_paid_amount/paid_year": {
+   "df": null,
+   "text": "Paid amount for the selected filters is €7,726 across 3 invoice row(s). €28,914 across 12 invoice row(s) is still outstanding — NOT fully paid."
+  },
+  "get_paid_amount/project_fully_paid": {
+   "df": null,
+   "text": "Paid amount for AD Theta is €5,446 across 1 invoice row(s). No outstanding balance remains — fully paid."
+  },
+  "get_paid_amount/project_partial": {
+   "df": null,
+   "text": "Paid amount for AD Beta is €3,648 across 2 invoice row(s). €5,016 across 1 invoice row(s) is still outstanding — NOT fully paid."
+  },
+  "get_paid_amount/year": {
+   "df": null,
+   "text": "Paid amount for the selected filters is €7,229 across 4 invoice row(s). €26,768 across 9 invoice row(s) is still outstanding — NOT fully paid."
+  },
+  "get_project/found": {
+   "df": {
+    "columns": [
+     "Project",
+     "Country",
+     "# Cams",
+     "Payment Month",
+     "Install Year",
+     "Status"
+    ],
+    "records": [
+     {
+      "# Cams": 10,
+      "Country": "Bel",
+      "Install Year": 2024,
+      "Payment Month": "March",
+      "Project": "AD Alpha",
+      "Status": "Active"
+     }
+    ]
+   },
+   "text": "Here are the project details for AD Alpha."
+  },
+  "get_project/missing": {
+   "df": null,
+   "text": "I could not find project details for Nope."
+  },
+  "get_projects/country": {
+   "df": {
+    "columns": [
+     "Project",
+     "Country",
+     "# Cams",
+     "Payment Month",
+     "Status"
+    ],
+    "records": [
+     {
+      "# Cams": 10,
+      "Country": "Bel",
+      "Payment Month": "March",
+      "Project": "AD Alpha",
+      "Status": "Active"
+     },
+     {
+      "# Cams": 8,
+      "Country": "Bel",
+      "Payment Month": "April",
+      "Project": "AD Beta",
+      "Status": "Active"
+     },
+     {
+      "# Cams": 6,
+      "Country": "Bel",
+      "Payment Month": "",
+      "Project": "Intermarche Heusy",
+      "Status": "Active"
+     },
+     {
+      "# Cams": 7,
+      "Country": "Bel",
+      "Payment Month": "Foo",
+      "Project": "AD Theta",
+      "Status": "active"
+     }
+    ]
+   },
+   "text": "Found 4 active project(s)."
+  },
+  "get_projects/default_active": {
+   "df": {
+    "columns": [
+     "Project",
+     "Country",
+     "# Cams",
+     "Payment Month",
+     "Status"
+    ],
+    "records": [
+     {
+      "# Cams": 10,
+      "Country": "Bel",
+      "Payment Month": "March",
+      "Project": "AD Alpha",
+      "Status": "Active"
+     },
+     {
+      "# Cams": 8,
+      "Country": "Bel",
+      "Payment Month": "April",
+      "Project": "AD Beta",
+      "Status": "Active"
+     },
+     {
+      "# Cams": 12,
+      "Country": "Ger",
+      "Payment Month": "June",
+      "Project": "Edeka Epsilon - Town",
+      "Status": "Active"
+     },
+     {
+      "# Cams": 4,
+      "Country": "Hol",
+      "Payment Month": "November",
+      "Project": "Plus Zeta",
+      "Status": "Installed"
+     },
+     {
+      "# Cams": 6,
+      "Country": "Bel",
+      "Payment Month": "",
+      "Project": "Intermarche Heusy",
+      "Status": "Active"
+     },
+     {
+      "# Cams": 7,
+      "Country": "Bel",
+      "Payment Month": "Foo",
+      "Project": "AD Theta",
+      "Status": "active"
+     }
+    ]
+   },
+   "text": "Found 6 active project(s)."
+  },
+  "get_projects/empty": {
+   "df": null,
+   "text": "No projects match that question."
+  },
+  "get_projects/min_cameras": {
+   "df": {
+    "columns": [
+     "Project",
+     "Country",
+     "# Cams",
+     "Payment Month",
+     "Status"
+    ],
+    "records": [
+     {
+      "# Cams": 10,
+      "Country": "Bel",
+      "Payment Month": "March",
+      "Project": "AD Alpha",
+      "Status": "Active"
+     },
+     {
+      "# Cams": 8,
+      "Country": "Bel",
+      "Payment Month": "April",
+      "Project": "AD Beta",
+      "Status": "Active"
+     },
+     {
+      "# Cams": 12,
+      "Country": "Ger",
+      "Payment Month": "June",
+      "Project": "Edeka Epsilon - Town",
+      "Status": "Active"
+     },
+     {
+      "# Cams": 6,
+      "Country": "Bel",
+      "Payment Month": "",
+      "Project": "Intermarche Heusy",
+      "Status": "Active"
+     },
+     {
+      "# Cams": 7,
+      "Country": "Bel",
+      "Payment Month": "Foo",
+      "Project": "AD Theta",
+      "Status": "active"
+     }
+    ]
+   },
+   "text": "Found 5 active project(s)."
+  },
+  "get_projects/month_filter_latent_bug": {
+   "exception": "NameError",
+   "message": "name 'get_projects_for_month' is not defined"
+  },
+  "get_projects/status_all": {
+   "df": {
+    "columns": [
+     "Project",
+     "Country",
+     "# Cams",
+     "Payment Month",
+     "Status"
+    ],
+    "records": [
+     {
+      "# Cams": 10,
+      "Country": "Bel",
+      "Payment Month": "March",
+      "Project": "AD Alpha",
+      "Status": "Active"
+     },
+     {
+      "# Cams": 8,
+      "Country": "Bel",
+      "Payment Month": "April",
+      "Project": "AD Beta",
+      "Status": "Active"
+     },
+     {
+      "# Cams": 5,
+      "Country": "Bel",
+      "Payment Month": "May",
+      "Project": "CM Gamma",
+      "Status": "Offline"
+     },
+     {
+      "# Cams": 3,
+      "Country": "Bel",
+      "Payment Month": "June",
+      "Project": "Proxy Delta",
+      "Status": "Cancelled"
+     },
+     {
+      "# Cams": 12,
+      "Country": "Ger",
+      "Payment Month": "June",
+      "Project": "Edeka Epsilon - Town",
+      "Status": "Active"
+     },
+     {
+      "# Cams": 4,
+      "Country": "Hol",
+      "Payment Month": "November",
+      "Project": "Plus Zeta",
+      "Status": "Installed"
+     },
+     {
+      "# Cams": 2,
+      "Country": "Lux",
+      "Payment Month": "",
+      "Project": "Spar Eta",
+      "Status": "Trial"
+     },
+     {
+      "# Cams": 6,
+      "Country": "Bel",
+      "Payment Month": "",
+      "Project": "Intermarche Heusy",
+      "Status": "Active"
+     },
+     {
+      "# Cams": 7,
+      "Country": "Bel",
+      "Payment Month": "Foo",
+      "Project": "AD Theta",
+      "Status": "active"
+     }
+    ]
+   },
+   "text": "Found 9 project(s)."
+  },
+  "get_projects/status_offline": {
+   "df": {
+    "columns": [
+     "Project",
+     "Country",
+     "# Cams",
+     "Payment Month",
+     "Status"
+    ],
+    "records": [
+     {
+      "# Cams": 5,
+      "Country": "Bel",
+      "Payment Month": "May",
+      "Project": "CM Gamma",
+      "Status": "Offline"
+     }
+    ]
+   },
+   "text": "Found 1 project(s)."
+  },
+  "get_sent_invoices/all": {
+   "df": {
+    "columns": [
+     "Sent At",
+     "Invoice #",
+     "Month",
+     "Year",
+     "PDF",
+     "To"
+    ],
+    "records": [
+     {
+      "Invoice #": 8003,
+      "Month": "January",
+      "PDF": "c.pdf",
+      "Sent At": "2025-01-14 08:58:25",
+      "To": "",
+      "Year": 2025
+     },
+     {
+      "Invoice #": 8002,
+      "Month": "June",
+      "PDF": "b.pdf",
+      "Sent At": "2026-06-14 08:58:25",
+      "To": "a@example.com, b@example.com",
+      "Year": 2026
+     },
+     {
+      "Invoice #": 8001,
+      "Month": "May",
+      "PDF": "a.pdf",
+      "Sent At": "2026-05-14 08:58:25",
+      "To": "a@example.com",
+      "Year": 2026
+     }
+    ]
+   },
+   "text": "Found 3 sent PDF invoice record(s)."
+  },
+  "get_sent_invoices/empty": {
+   "df": null,
+   "text": "No sent PDF invoices match that question."
+  },
+  "get_sent_invoices/number": {
+   "df": {
+    "columns": [
+     "Sent At",
+     "Invoice #",
+     "Month",
+     "Year",
+     "PDF",
+     "To"
+    ],
+    "records": [
+     {
+      "Invoice #": 8001,
+      "Month": "May",
+      "PDF": "a.pdf",
+      "Sent At": "2026-05-14 08:58:25",
+      "To": "a@example.com",
+      "Year": 2026
+     }
+    ]
+   },
+   "text": "Found 1 sent PDF invoice record(s)."
+  },
+  "get_sent_invoices/project": {
+   "df": {
+    "columns": [
+     "Sent At",
+     "Invoice #",
+     "Month",
+     "Year",
+     "PDF",
+     "To"
+    ],
+    "records": [
+     {
+      "Invoice #": 8001,
+      "Month": "May",
+      "PDF": "a.pdf",
+      "Sent At": "2026-05-14 08:58:25",
+      "To": "a@example.com",
+      "Year": 2026
+     }
+    ]
+   },
+   "text": "Found 1 sent PDF invoice record(s)."
+  },
+  "get_sent_invoices/year": {
+   "df": {
+    "columns": [
+     "Sent At",
+     "Invoice #",
+     "Month",
+     "Year",
+     "PDF",
+     "To"
+    ],
+    "records": [
+     {
+      "Invoice #": 8002,
+      "Month": "June",
+      "PDF": "b.pdf",
+      "Sent At": "2026-06-14 08:58:25",
+      "To": "a@example.com, b@example.com",
+      "Year": 2026
+     },
+     {
+      "Invoice #": 8001,
+      "Month": "May",
+      "PDF": "a.pdf",
+      "Sent At": "2026-05-14 08:58:25",
+      "To": "a@example.com",
+      "Year": 2026
+     }
+    ]
+   },
+   "text": "Found 2 sent PDF invoice record(s)."
+  },
+  "get_top_debt_projects/default": {
+   "df": {
+    "columns": [
+     "Project",
+     "Debt (€)"
+    ],
+    "records": [
+     {
+      "Debt (€)": 5057.0,
+      "Project": "AD Alpha"
+     },
+     {
+      "Debt (€)": 5016.0,
+      "Project": "AD Beta"
+     },
+     {
+      "Debt (€)": 4668.0,
+      "Project": "Intermarche Heusy"
+     },
+     {
+      "Debt (€)": 3890.0,
+      "Project": "Edeka Epsilon - Town"
+     },
+     {
+      "Debt (€)": 3112.0,
+      "Project": "intermarche heusy"
+     },
+     {
+      "Debt (€)": 3112.0,
+      "Project": "CM Essen (coplementary)"
+     },
+     {
+      "Debt (€)": 1912.5,
+      "Project": "Plus Zeta"
+     },
+     {
+      "Debt (€)": 1368.0,
+      "Project": "CM Gamma"
+     },
+     {
+      "Debt (€)": 778.0,
+      "Project": "AD Theta"
+     }
+    ]
+   },
+   "text": "Here are the top 9 debt project(s)."
+  },
+  "get_top_debt_projects/empty": {
+   "df": null,
+   "text": "No unpaid debt rows match that question."
+  },
+  "get_top_debt_projects/limit0": {
+   "df": {
+    "columns": [
+     "Project",
+     "Debt (€)"
+    ],
+    "records": [
+     {
+      "Debt (€)": 5057.0,
+      "Project": "AD Alpha"
+     },
+     {
+      "Debt (€)": 5016.0,
+      "Project": "AD Beta"
+     },
+     {
+      "Debt (€)": 4668.0,
+      "Project": "Intermarche Heusy"
+     },
+     {
+      "Debt (€)": 3890.0,
+      "Project": "Edeka Epsilon - Town"
+     },
+     {
+      "Debt (€)": 3112.0,
+      "Project": "intermarche heusy"
+     },
+     {
+      "Debt (€)": 3112.0,
+      "Project": "CM Essen (coplementary)"
+     },
+     {
+      "Debt (€)": 1912.5,
+      "Project": "Plus Zeta"
+     },
+     {
+      "Debt (€)": 1368.0,
+      "Project": "CM Gamma"
+     },
+     {
+      "Debt (€)": 778.0,
+      "Project": "AD Theta"
+     }
+    ]
+   },
+   "text": "Here are the top 9 debt project(s)."
+  },
+  "get_top_debt_projects/limit2": {
+   "df": {
+    "columns": [
+     "Project",
+     "Debt (€)"
+    ],
+    "records": [
+     {
+      "Debt (€)": 5057.0,
+      "Project": "AD Alpha"
+     },
+     {
+      "Debt (€)": 5016.0,
+      "Project": "AD Beta"
+     }
+    ]
+   },
+   "text": "Here are the top 2 debt project(s)."
+  },
+  "get_top_debt_projects/year": {
+   "df": {
+    "columns": [
+     "Project",
+     "Debt (€)"
+    ],
+    "records": [
+     {
+      "Debt (€)": 5057.0,
+      "Project": "AD Alpha"
+     },
+     {
+      "Debt (€)": 5016.0,
+      "Project": "AD Beta"
+     },
+     {
+      "Debt (€)": 4668.0,
+      "Project": "Intermarche Heusy"
+     },
+     {
+      "Debt (€)": 3890.0,
+      "Project": "Edeka Epsilon - Town"
+     },
+     {
+      "Debt (€)": 3112.0,
+      "Project": "intermarche heusy"
+     },
+     {
+      "Debt (€)": 3112.0,
+      "Project": "CM Essen (coplementary)"
+     },
+     {
+      "Debt (€)": 1912.5,
+      "Project": "Plus Zeta"
+     }
+    ]
+   },
+   "text": "Here are the top 7 debt project(s)."
+  },
+  "get_unpaid_invoices/all": {
+   "df": {
+    "columns": [
+     "Invoice #",
+     "Project",
+     "Country",
+     "Maint. Year",
+     "Amount (€)",
+     "Paid",
+     "Payment Date",
+     "Year"
+    ],
+    "records": [
+     {
+      "Amount (€)": 7780.0,
+      "Country": "Bel",
+      "Invoice #": "8001",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Alpha",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 3890.0,
+      "Country": "Ger",
+      "Invoice #": "8001",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "Edeka Epsilon - Town",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 1140.0,
+      "Country": "Bel",
+      "Invoice #": "8004",
+      "Maint. Year": "Y2",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "CM Gamma",
+      "Year": 2025
+     },
+     {
+      "Amount (€)": 912.0,
+      "Country": "Hol",
+      "Invoice #": "8006",
+      "Maint. Year": "Y6",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "Plus Zeta",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 1000.5,
+      "Country": "Hol",
+      "Invoice #": "8006",
+      "Maint. Year": "Y6",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "Plus Zeta",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 4668.0,
+      "Country": "Bel",
+      "Invoice #": "8008",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "Intermarche Heusy",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 3112.0,
+      "Country": "Bel",
+      "Invoice #": "8009",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "intermarche heusy",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 3112.0,
+      "Country": "",
+      "Invoice #": "8010",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "CM Essen (coplementary)",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 778.0,
+      "Country": "Bel",
+      "Invoice #": "8012",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Theta",
+      "Year": 2024
+     },
+     {
+      "Amount (€)": -2723.0,
+      "Country": "Bel",
+      "Invoice #": "8013",
+      "Maint. Year": "Credit",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Alpha",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 228.0,
+      "Country": "Bel",
+      "Invoice #": "—",
+      "Maint. Year": "Y3",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "CM Gamma",
+      "Year": ""
+     },
+     {
+      "Amount (€)": 5016.0,
+      "Country": "Bel",
+      "Invoice #": "8016",
+      "Maint. Year": "Y2",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Beta",
+      "Year": 2026
+     }
+    ]
+   },
+   "text": "Found 12 unpaid invoice row(s) totaling €28,914."
+  },
+  "get_unpaid_invoices/country_year": {
+   "df": {
+    "columns": [
+     "Invoice #",
+     "Project",
+     "Country",
+     "Maint. Year",
+     "Amount (€)",
+     "Paid",
+     "Payment Date",
+     "Year"
+    ],
+    "records": [
+     {
+      "Amount (€)": 7780.0,
+      "Country": "Bel",
+      "Invoice #": "8001",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Alpha",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 4668.0,
+      "Country": "Bel",
+      "Invoice #": "8008",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "Intermarche Heusy",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": -2723.0,
+      "Country": "Bel",
+      "Invoice #": "8013",
+      "Maint. Year": "Credit",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Alpha",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 5016.0,
+      "Country": "Bel",
+      "Invoice #": "8016",
+      "Maint. Year": "Y2",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Beta",
+      "Year": 2026
+     }
+    ]
+   },
+   "text": "Found 4 unpaid invoice row(s) totaling €14,741."
+  },
+  "get_unpaid_invoices/project": {
+   "df": {
+    "columns": [
+     "Invoice #",
+     "Project",
+     "Country",
+     "Maint. Year",
+     "Amount (€)",
+     "Paid",
+     "Payment Date",
+     "Year"
+    ],
+    "records": [
+     {
+      "Amount (€)": 912.0,
+      "Country": "Hol",
+      "Invoice #": "8006",
+      "Maint. Year": "Y6",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "Plus Zeta",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 1000.5,
+      "Country": "Hol",
+      "Invoice #": "8006",
+      "Maint. Year": "Y6",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "Plus Zeta",
+      "Year": 2026
+     }
+    ]
+   },
+   "text": "Found 2 unpaid invoice row(s) totaling €1,912."
+  },
+  "get_unpaid_invoices/trial": {
+   "df": null,
+   "text": "No invoices match that question."
+  },
+  "get_unpaid_invoices/y1": {
+   "df": {
+    "columns": [
+     "Invoice #",
+     "Project",
+     "Country",
+     "Maint. Year",
+     "Amount (€)",
+     "Paid",
+     "Payment Date",
+     "Year"
+    ],
+    "records": [
+     {
+      "Amount (€)": 7780.0,
+      "Country": "Bel",
+      "Invoice #": "8001",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Alpha",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 3890.0,
+      "Country": "Ger",
+      "Invoice #": "8001",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "Edeka Epsilon - Town",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 4668.0,
+      "Country": "Bel",
+      "Invoice #": "8008",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "Intermarche Heusy",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 3112.0,
+      "Country": "Bel",
+      "Invoice #": "8009",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "intermarche heusy",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 3112.0,
+      "Country": "",
+      "Invoice #": "8010",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "CM Essen (coplementary)",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 778.0,
+      "Country": "Bel",
+      "Invoice #": "8012",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Theta",
+      "Year": 2024
+     },
+     {
+      "Amount (€)": -2723.0,
+      "Country": "Bel",
+      "Invoice #": "8013",
+      "Maint. Year": "Credit",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Alpha",
+      "Year": 2026
+     }
+    ]
+   },
+   "text": "Found 7 unpaid invoice row(s) totaling €20,617."
+  },
+  "get_unpaid_invoices/y2plus": {
+   "df": {
+    "columns": [
+     "Invoice #",
+     "Project",
+     "Country",
+     "Maint. Year",
+     "Amount (€)",
+     "Paid",
+     "Payment Date",
+     "Year"
+    ],
+    "records": [
+     {
+      "Amount (€)": 1140.0,
+      "Country": "Bel",
+      "Invoice #": "8004",
+      "Maint. Year": "Y2",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "CM Gamma",
+      "Year": 2025
+     },
+     {
+      "Amount (€)": 912.0,
+      "Country": "Hol",
+      "Invoice #": "8006",
+      "Maint. Year": "Y6",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "Plus Zeta",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 1000.5,
+      "Country": "Hol",
+      "Invoice #": "8006",
+      "Maint. Year": "Y6",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "Plus Zeta",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 228.0,
+      "Country": "Bel",
+      "Invoice #": "—",
+      "Maint. Year": "Y3",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "CM Gamma",
+      "Year": ""
+     },
+     {
+      "Amount (€)": 5016.0,
+      "Country": "Bel",
+      "Invoice #": "8016",
+      "Maint. Year": "Y2",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Beta",
+      "Year": 2026
+     }
+    ]
+   },
+   "text": "Found 5 unpaid invoice row(s) totaling €8,296."
+  },
+  "unknown_tool": {
+   "df": null,
+   "text": "I could not execute that tool."
+  }
+ },
+ "validation": {
+  "arguments_none": {
+   "cleaned": {
+    "category": null,
+    "country": null,
+    "project": null,
+    "year": null
+   },
+   "error": null,
+   "tool": "get_debt"
+  },
+  "arguments_not_dict": {
+   "cleaned": {},
+   "error": "Tool 'arguments' was not a JSON object.",
+   "tool": null
+  },
+  "camera_enums": {
+   "cleaned": {
+    "aggregation": "group_by_country",
+    "camera_type": "TopDown",
+    "country": null,
+    "status": null
+   },
+   "error": null,
+   "tool": "get_camera_statistics"
+  },
+  "category_enum": {
+   "cleaned": {
+    "category": "y2plus",
+    "country": null,
+    "project": null,
+    "year": null
+   },
+   "error": null,
+   "tool": "get_debt"
+  },
+  "combined_license_filters": {
+   "cleaned": {
+    "country": "Bel",
+    "eop_date": null,
+    "eop_month": null,
+    "eop_year": null,
+    "license_status": "Expired",
+    "project": null,
+    "project_status": "Active"
+   },
+   "error": null,
+   "tool": "get_licenses"
+  },
+  "country_code": {
+   "cleaned": {
+    "category": null,
+    "country": "Bel",
+    "project": null,
+    "year": null
+   },
+   "error": null,
+   "tool": "get_debt"
+  },
+  "country_full_name": {
+   "cleaned": {
+    "category": null,
+    "country": "Bel",
+    "project": null,
+    "year": null
+   },
+   "error": null,
+   "tool": "get_debt"
+  },
+  "country_typo": {
+   "cleaned": {
+    "category": null,
+    "country": "Bel",
+    "project": null,
+    "year": null
+   },
+   "error": null,
+   "tool": "get_debt"
+  },
+  "country_unknown": {
+   "cleaned": {},
+   "error": "Could not validate argument 'country'='Atlantis' for tool 'get_debt'.",
+   "tool": null
+  },
+  "date_bad": {
+   "cleaned": {},
+   "error": "Could not validate argument 'eop_date'='01/10/2026' for tool 'get_licenses'.",
+   "tool": null
+  },
+  "date_ok": {
+   "cleaned": {
+    "country": null,
+    "eop_date": "2026-10-01",
+    "eop_month": null,
+    "eop_year": null,
+    "license_status": null,
+    "project": null,
+    "project_status": null
+   },
+   "error": null,
+   "tool": "get_licenses"
+  },
+  "date_with_time": {
+   "cleaned": {
+    "country": null,
+    "eop_date": "2026-10-01",
+    "eop_month": null,
+    "eop_year": null,
+    "license_status": null,
+    "project": null,
+    "project_status": null
+   },
+   "error": null,
+   "tool": "get_licenses"
+  },
+  "enum_case_insensitive": {
+   "cleaned": {
+    "country": null,
+    "paid": "yes",
+    "paid_year": null,
+    "project": null,
+    "year": null
+   },
+   "error": null,
+   "tool": "get_invoices"
+  },
+  "enum_invalid": {
+   "cleaned": {},
+   "error": "Could not validate argument 'paid'='maybe' for tool 'get_invoices'.",
+   "tool": null
+  },
+  "int_bad": {
+   "cleaned": {},
+   "error": "Could not validate argument 'invoice_number'='abc' for tool 'get_invoice'.",
+   "tool": null
+  },
+  "int_float": {
+   "cleaned": {
+    "limit": 3,
+    "year": null
+   },
+   "error": null,
+   "tool": "get_top_debt_projects"
+  },
+  "int_string": {
+   "cleaned": {
+    "invoice_number": 8001,
+    "year": 2026
+   },
+   "error": null,
+   "tool": "get_invoice"
+  },
+  "license_status_enum": {
+   "cleaned": {
+    "country": null,
+    "eop_date": null,
+    "eop_month": null,
+    "eop_year": null,
+    "license_status": "Update Next Month",
+    "project": null,
+    "project_status": null
+   },
+   "error": null,
+   "tool": "get_licenses"
+  },
+  "missing_tool": {
+   "cleaned": {},
+   "error": "Unknown or missing tool name: ''.",
+   "tool": null
+  },
+  "month_bad": {
+   "cleaned": {},
+   "error": "Could not validate argument 'month'='Smarch' for tool 'get_projects'.",
+   "tool": null
+  },
+  "month_full_lower": {
+   "cleaned": {
+    "country": null,
+    "eop_date": null,
+    "eop_month": "October",
+    "eop_year": null,
+    "license_status": null,
+    "project": null,
+    "project_status": null
+   },
+   "error": null,
+   "tool": "get_licenses"
+  },
+  "month_short": {
+   "cleaned": {
+    "country": null,
+    "min_cameras": null,
+    "month": "April",
+    "status": null
+   },
+   "error": null,
+   "tool": "get_projects"
+  },
+  "no_arguments_key": {
+   "cleaned": {},
+   "error": null,
+   "tool": "get_next_invoice_number"
+  },
+  "none": {
+   "cleaned": {},
+   "error": "LLM response was not a JSON object.",
+   "tool": null
+  },
+  "not_a_dict": {
+   "cleaned": {},
+   "error": "LLM response was not a JSON object.",
+   "tool": null
+  },
+  "project_exact": {
+   "cleaned": {
+    "category": null,
+    "country": null,
+    "project": "AD Alpha",
+    "year": null
+   },
+   "error": null,
+   "tool": "get_debt"
+  },
+  "project_fuzzy_case_punct": {
+   "cleaned": {
+    "category": null,
+    "country": null,
+    "project": "AD Alpha",
+    "year": null
+   },
+   "error": null,
+   "tool": "get_debt"
+  },
+  "project_required_missing": {
+   "cleaned": {},
+   "error": "Missing required argument 'project' for tool 'get_project'.",
+   "tool": null
+  },
+  "project_required_ok": {
+   "cleaned": {
+    "project": "Plus Zeta"
+   },
+   "error": null,
+   "tool": "get_project"
+  },
+  "project_substring": {
+   "cleaned": {
+    "category": null,
+    "country": null,
+    "project": "Edeka Epsilon - Town",
+    "year": null
+   },
+   "error": null,
+   "tool": "get_debt"
+  },
+  "project_unknown": {
+   "cleaned": {},
+   "error": "Could not validate argument 'project'='Zzzzzz Qqqq' for tool 'get_debt'.",
+   "tool": null
+  },
+  "reconciliation_args": {
+   "cleaned": {
+    "country": null,
+    "needs_update": "yes",
+    "paid_year": 2,
+    "project": null,
+    "project_status": null
+   },
+   "error": null,
+   "tool": "get_license_eop_reconciliation"
+  },
+  "required_int_missing": {
+   "cleaned": {},
+   "error": "Missing required argument 'invoice_number' for tool 'get_invoice'.",
+   "tool": null
+  },
+  "status_all": {
+   "cleaned": {
+    "country": null,
+    "min_cameras": null,
+    "month": null,
+    "status": "All"
+   },
+   "error": null,
+   "tool": "get_projects"
+  },
+  "status_known_case": {
+   "cleaned": {
+    "country": null,
+    "min_cameras": null,
+    "month": null,
+    "status": "Offline"
+   },
+   "error": null,
+   "tool": "get_projects"
+  },
+  "status_unknown": {
+   "cleaned": {},
+   "error": "Could not validate argument 'status'='retired' for tool 'get_projects'.",
+   "tool": null
+  },
+  "tool_with_spaces": {
+   "cleaned": {
+    "category": null,
+    "country": "Bel",
+    "project": null,
+    "year": null
+   },
+   "error": null,
+   "tool": "get_debt"
+  },
+  "unknown_keys_ignored": {
+   "cleaned": {
+    "category": null,
+    "country": "Bel",
+    "project": null,
+    "year": null
+   },
+   "error": null,
+   "tool": "get_debt"
+  },
+  "unknown_tool": {
+   "cleaned": {},
+   "error": "Unknown or missing tool name: 'drop_table'.",
+   "tool": null
+  }
+ }
+}
