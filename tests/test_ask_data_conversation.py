@@ -94,7 +94,7 @@ class TestConversationContextMerge(unittest.TestCase):
     def test_merge_inherits_unset_and_lets_new_explicit_values_override(self):
         ctx = ConversationContext(filters={"country": "Bel", "year": 2026})
         merged = ctx.merge("get_debt", {"project": None, "year": None, "country": None, "category": "y1"})
-        self.assertEqual(merged, {"project": None, "year": 2026, "country": "Bel", "category": "y1"})
+        self.assertEqual(merged, {"project": None, "network": None, "year": 2026, "country": "Bel", "category": "y1"})
         overridden = ctx.merge("get_debt", {"project": None, "year": None, "country": "Ger", "category": None})
         self.assertEqual(overridden["country"], "Ger")                 # explicit new value always wins
 
@@ -249,8 +249,11 @@ class TestFollowUps(unittest.TestCase):
 
 class TestClarificationState(unittest.TestCase):
     def test_ambiguous_project_then_a_short_reply_resolves_it_without_calling_gemini(self):
+        # get_last_bank_payment has no 'network' argument, so "Edeka" alone is still plain project
+        # ambiguity here (get_debt would instead resolve it to network="Edeka" -- see
+        # test_ask_data_network_resolver.py).
         ctx = ConversationContext()
-        t1 = run_turn("debt for Edeka", '{"tool": "get_debt", "arguments": {"project": "Edeka"}}', ctx, data=make_data())
+        t1 = run_turn("last bank payment for Edeka", '{"tool": "get_last_bank_payment", "arguments": {"project": "Edeka"}}', ctx, data=make_data())
         self.assertEqual(t1.kind, "clarification")
         self.assertIn("Edeka Herweg", t1.text)
         self.assertIn("Edeka Peipp Rostal", t1.text)
@@ -265,7 +268,7 @@ class TestClarificationState(unittest.TestCase):
         data = make_data()
         total, _count = expected_unpaid(*data)
         ctx = ConversationContext()
-        run_turn("debt for Edeka", '{"tool": "get_debt", "arguments": {"project": "Edeka"}}', ctx, data=data)
+        run_turn("last bank payment for Edeka", '{"tool": "get_last_bank_payment", "arguments": {"project": "Edeka"}}', ctx, data=data)
         self.assertIsNotNone(ctx.clarification)
         t2 = run_turn("How much debt in total?", '{"tool": "get_debt", "arguments": {}}', ctx, data=data)
         self.assertIsNone(ctx.clarification)
@@ -455,8 +458,11 @@ class TestHistoricalQuestionsAreNotMisrouted(unittest.TestCase):
         self.assertEqual(ctx.filters, previous_filters)
 
     def test_abandons_a_pending_clarification_instead_of_trying_to_resolve_it_as_a_reply(self):
+        # get_last_bank_payment has no 'network' argument, so "Edeka" alone is still plain project
+        # ambiguity here (a network-aware tool like get_debt would instead resolve it to network="Edeka" --
+        # see test_ask_data_network_resolver.py).
         ctx = ConversationContext()
-        run_turn("debt for Edeka", '{"tool": "get_debt", "arguments": {"project": "Edeka"}}', ctx, data=make_data())
+        run_turn("last bank payment for Edeka", '{"tool": "get_last_bank_payment", "arguments": {"project": "Edeka"}}', ctx, data=make_data())
         self.assertIsNotNone(ctx.clarification)
         outcome = run_turn("What changed since September 1?", None, ctx, data=make_data())
         self.assertEqual(outcome.kind, "historical_unsupported")

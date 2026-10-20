@@ -24,6 +24,8 @@ from config.ask_data_aliases import (
     COUNTRY_SYNONYMS,
     HEBREW_PREFIXES,
     HEBREW_TERMS,
+    NETWORK_ALIASES,
+    NETWORK_PROJECT_TOKENS,
     PROJECT_ALIASES,
     SPELLING_VARIANTS,
 )
@@ -234,6 +236,27 @@ def resolve_country(text: object, known_codes: Iterable[str], full_name: Optiona
     return Resolution(NOT_FOUND, None, top, (), "no_match")
 
 
+# ── networks (supermarket chains/groups) ────────────────────────────────────────────────────────
+def resolve_network(text: object, aliases: Optional[dict] = None) -> Resolution:
+    """Resolve free-text to a canonical network name (e.g. "Edeka", "AD", "Delhaize" -> "AD"). EXACT alias
+    match ONLY -- never fuzzy. A generic network/chain name must never be allowed to fuzzy-collapse onto one
+    specific project (e.g. "Edeka" must never silently become "Edeka Herweg"); see NetworkIndex for how a
+    project/ledger row maps to its network, which is also deterministic and never fuzzy."""
+    table = NETWORK_ALIASES if aliases is None else aliases
+    key = compact_key(text)
+    if not key:
+        return Resolution(NOT_FOUND, reason="empty")
+    by_key: dict[str, set[str]] = {}
+    for alias, canonical in table.items():
+        by_key.setdefault(compact_key(alias), set()).add(canonical)
+    hits = by_key.get(key)
+    if not hits:
+        return Resolution(NOT_FOUND, None, 0.0, (), "no_match")
+    if len(hits) == 1:
+        return Resolution(ACCEPTED, next(iter(hits)), 1.0, (), "alias")
+    return Resolution(AMBIGUOUS, None, 1.0, tuple(sorted(hits)[:MAX_CANDIDATES]), "duplicate_alias")
+
+
 # ── months ───────────────────────────────────────────────────────────────────────────────────────
 def resolve_month(text: object, months: Iterable[str]) -> Optional[str]:
     """English full/3-letter names (as before), plus 'sept' and Hebrew month names. None when not a month."""
@@ -282,3 +305,42 @@ class ProjectIndex:
     def country(self, ledger_name: object) -> Optional[str]:
         project = self.project(ledger_name)
         return (project.country or None) if project is not None else None
+
+
+class NetworkIndex:
+    """Maps a project's own name to its canonical network (e.g. every "Edeka ..." project -> "Edeka") via the
+    normalised LEADING WORD(S) of the project's own name matching a configured token (single-word, like "ad",
+    or multi-word, like "albert heijn"). Deterministic, never fuzzy -- exactly like `ProjectIndex` for
+    country, so a generic network query can never silently attribute the wrong project (goal 1 + 2).
+
+    Resolving a USER's free-text network reference (e.g. "Edeka", "Delhaize") is a separate job: see
+    `resolve_network()`, which is also exact-only, never fuzzy.
+    """
+
+    def __init__(self, projects, network_tokens: Optional[dict] = None):
+        tokens = NETWORK_PROJECT_TOKENS if network_tokens is None else network_tokens
+        # (token words, network) pairs, longest token first so a more specific multi-word token (e.g.
+        # "albert heijn") is tried before any shorter one that might otherwise match a prefix of it.
+        token_pairs: list[tuple[list[str], str]] = []
+        for network, words in tokens.items():
+            for word in words:
+                token_key = normalize_text(word)
+                if token_key:
+                    token_pairs.append((token_key.split(" "), network))
+        token_pairs.sort(key=lambda tn: -len(tn[0]))
+        self._by_project_key: dict[str, Optional[str]] = {}
+        for project in projects:
+            name = getattr(project, "project_name", None)
+            if not name:
+                continue
+            normalized = normalize_text(name)
+            words = normalized.split(" ") if normalized else []
+            network = None
+            for token_words, candidate_network in token_pairs:
+                if words[:len(token_words)] == token_words:
+                    network = candidate_network
+                    break
+            self._by_project_key[compact_key(name)] = network
+
+    def network_of(self, project_name: object) -> Optional[str]:
+        return self._by_project_key.get(compact_key(project_name))

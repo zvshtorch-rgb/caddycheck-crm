@@ -238,7 +238,7 @@ class TestGrounding(unittest.TestCase):
         self.assertNotIn("123,456", text)
         self.assertEqual(state["_ask_data_last_result"].ungrounded_amounts(text), [])
         self.assertEqual(state["_ask_data_last_result"].value, D("11942.00"))
-        self.assertEqual(state["_ask_data_llm_tool_call"]["arguments"], {"project": None, "year": None, "country": "Bel", "category": None})
+        self.assertEqual(state["_ask_data_llm_tool_call"]["arguments"], {"project": None, "network": None, "year": None, "country": "Bel", "category": None})
 
 
 class TestDebtByCountryTool(unittest.TestCase):

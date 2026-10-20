@@ -20,7 +20,7 @@ from config.settings import MONTH_ORDER, load_sent_invoices_log
 from services.ask_data import data_clock
 from services.ask_data.breakdown import UNASSIGNED_LABEL, debt_by_country
 from services.ask_data.money import ZERO, fmt_eur, fmt_percent, percent, sum_money, to_money
-from services.ask_data.resolver import ProjectIndex
+from services.ask_data.resolver import NetworkIndex, ProjectIndex
 from services.ask_data.tool_result import Component, ToolResult, new_result_id
 from services.excel_service import get_projects_for_month
 from services.ask_data.helpers import (
@@ -61,11 +61,14 @@ def _filter_invoices_for_debt_tools(invoices, projects, args: dict, paid_predica
         rows = [inv for inv in rows if inv.year == args["year"]]
     if args.get("paid_year") is not None:
         rows = [inv for inv in rows if inv.payment_date and inv.payment_date.year == args["paid_year"]]
-    index = ProjectIndex(projects) if (args.get("country") or args.get("project")) else None
+    index = ProjectIndex(projects) if (args.get("country") or args.get("project") or args.get("network")) else None
     if args.get("country"):
         rows = [inv for inv in rows if index.country(inv.project_name) == args["country"]]
     if args.get("project"):
         rows = [inv for inv in rows if index.canonical_name(inv.project_name) == args["project"]]
+    if args.get("network"):
+        network_index = NetworkIndex(projects)
+        rows = [inv for inv in rows if _ledger_row_network(inv, index, network_index) == args["network"]]
     category = args.get("category")
     if category == "trial":
         rows = [inv for inv in rows if _is_paid_trial_category(inv)]
@@ -76,12 +79,21 @@ def _filter_invoices_for_debt_tools(invoices, projects, args: dict, paid_predica
     return rows
 
 
+def _ledger_row_network(inv, project_index: ProjectIndex, network_index: NetworkIndex):
+    """A ledger row's network, via its already-resolved canonical project (never fuzzy; goal 1 + 2)."""
+    canonical = project_index.canonical_name(inv.project_name)
+    return network_index.network_of(canonical) if canonical else None
+
+
 def _filter_license_entries(projects, args: dict) -> list:
     """Shared by get_licenses and get_license_payment_status: filter/sort (project, eop_date, status) triples."""
     today = datetime.date.today()
     entries = [(p, _project_license_date(p), _license_status(p, today)) for p in projects]
     if args.get("project"):
         entries = [e for e in entries if e[0].project_name == args["project"]]
+    if args.get("network"):
+        network_index = NetworkIndex(projects)
+        entries = [e for e in entries if network_index.network_of(e[0].project_name) == args["network"]]
     if args.get("country"):
         entries = [e for e in entries if e[0].country == args["country"]]
     if args.get("license_status"):
@@ -375,7 +387,7 @@ def _dispatch_tool(
             rows = [inv for inv in rows if inv.is_unpaid()]
         elif args.get("paid") == "cancelled":
             rows = [inv for inv in rows if inv.is_cancelled()]
-        index = ProjectIndex(projects) if (args.get("country") or args.get("project")) else None
+        index = ProjectIndex(projects) if (args.get("country") or args.get("project") or args.get("network")) else None
         if args.get("project"):
             rows = [inv for inv in rows if index.canonical_name(inv.project_name) == args["project"]]
         if args.get("year") is not None:
@@ -384,6 +396,9 @@ def _dispatch_tool(
             rows = [inv for inv in rows if inv.payment_date and inv.payment_date.year == args["paid_year"]]
         if args.get("country"):
             rows = [inv for inv in rows if index.country(inv.project_name) == args["country"]]
+        if args.get("network"):
+            network_index = NetworkIndex(projects)
+            rows = [inv for inv in rows if _ledger_row_network(inv, index, network_index) == args["network"]]
         category = args.get("category")
         if category == "trial":
             rows = [inv for inv in rows if _is_paid_trial_category(inv)]
@@ -425,6 +440,9 @@ def _dispatch_tool(
             status_scope = "active "
         if args.get("country"):
             rows = [p for p in rows if p.country == args["country"]]
+        if args.get("network"):
+            network_index = NetworkIndex(rows)
+            rows = [p for p in rows if network_index.network_of(p.project_name) == args["network"]]
         if args.get("month"):
             rows = get_projects_for_month(rows, args["month"])
         if args.get("min_cameras") is not None:
@@ -433,6 +451,8 @@ def _dispatch_tool(
             qualifiers = []
             if status_arg and status_arg != "All":
                 qualifiers.append(f"with status {status_arg}")
+            if args.get("network"):
+                qualifiers.append(f"in network {args['network']}")
             if args.get("country"):
                 qualifiers.append(f"in {args['country']}")
             suffix = (" " + " ".join(qualifiers)) if qualifiers else ""
@@ -452,7 +472,7 @@ def _dispatch_tool(
     if tool_name == "get_outstanding_amount":
         rows = _filter_invoices_for_debt_tools(invoices, projects, args, lambda inv: inv.is_unpaid())
         total = sum_money(inv.payment_amount for inv in rows)
-        subject = args.get("project") or args.get("country") or "the selected filters"
+        subject = args.get("project") or args.get("network") or args.get("country") or "the selected filters"
         return _financial_result(
             tool_name, args, projects,
             f"Outstanding (unpaid) amount for {subject} is {fmt_eur(total)} across {len(rows)} invoice row(s).", rows, noun="unpaid invoice")
@@ -460,7 +480,7 @@ def _dispatch_tool(
     if tool_name == "get_paid_amount":
         rows = _filter_invoices_for_debt_tools(invoices, projects, args, lambda inv: inv.is_paid())
         total = sum_money(inv.payment_amount for inv in rows)
-        subject = args.get("project") or args.get("country") or "the selected filters"
+        subject = args.get("project") or args.get("network") or args.get("country") or "the selected filters"
         # Also report the outstanding balance so "is X fully paid?" can never be answered with
         # just a paid-amount figure that silently omits money still owed (paid_year is dropped
         # here since it's a payment-date filter and unpaid invoices have no payment_date).
@@ -693,6 +713,9 @@ def _dispatch_tool(
             status_scope = "active "
         if args.get("country"):
             rows = [p for p in rows if p.country == args["country"]]
+        if args.get("network"):
+            network_index = NetworkIndex(rows)
+            rows = [p for p in rows if network_index.network_of(p.project_name) == args["network"]]
         camera_type = args.get("camera_type") or "all"
         aggregation = args.get("aggregation") or "sum"
         metric_label = "camera" if camera_type == "all" else camera_type
@@ -726,13 +749,14 @@ def _dispatch_tool(
             return f"Found {len(rows)} {status_scope}project(s).", df
 
         total = sum(_camera_metric_for_project(p, camera_type) for p in rows)
+        network_txt = f" in network {args['network']}" if args.get("network") else ""
         country_txt = f" in {args['country']}" if args.get("country") else ""
         if aggregation == "count_projects":
-            return f"There are {len(rows)} {status_scope}project(s){country_txt}.", None
+            return f"There are {len(rows)} {status_scope}project(s){network_txt}{country_txt}.", None
         if aggregation == "average_per_project":
             avg = (total / len(rows)) if rows else 0.0
             return f"Average {metric_label} cameras per {status_scope}project is {avg:.1f} (across {len(rows)} project(s)).", None
-        return f"There are {total} {metric_label} camera(s) across {len(rows)} {status_scope}project(s){country_txt}.", None
+        return f"There are {total} {metric_label} camera(s) across {len(rows)} {status_scope}project(s){network_txt}{country_txt}.", None
 
     if tool_name == "debt_by_country":
         return _debt_by_country_result(tool_name, args, projects, invoices)

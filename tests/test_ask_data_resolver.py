@@ -249,7 +249,10 @@ class TestValidatorClarification(unittest.TestCase):
         self.projects, self.invoices = make_data()
 
     def test_ambiguous_project_returns_a_clarification_and_no_tool(self):
-        result = validate_tool_call({"tool": "get_debt", "arguments": {"project": "Edeka"}}, self.projects)
+        # get_last_bank_payment has no 'network' argument, so this exercises plain project-ambiguity
+        # clarification unaffected by network redirection (see test_ask_data_network_resolver.py for how a
+        # network-aware tool resolves the SAME bare "Edeka" text to network="Edeka" instead).
+        result = validate_tool_call({"tool": "get_last_bank_payment", "arguments": {"project": "Edeka"}}, self.projects)
         self.assertIsNone(result.tool)
         self.assertEqual(result.clarification["arg"], "project")
         self.assertEqual(set(result.clarification["candidates"]), {"Edeka Herweg", "Edeka Peipp Rostal"})
@@ -276,12 +279,13 @@ class TestValidatorClarification(unittest.TestCase):
         self.assertEqual(result.arguments["month"], "April")
 
     def test_router_asks_one_question_and_neither_executes_nor_falls_back(self):
+        # get_last_bank_payment has no 'network' argument -- see the class docstring note above.
         projects, invoices = self.projects, self.invoices
         legacy_calls, posts = [], []
-        payload = '{"tool": "get_debt", "arguments": {"project": "Edeka"}}'
+        payload = '{"tool": "get_last_bank_payment", "arguments": {"project": "Edeka"}}'
         with fake_streamlit() as state, NewImpl().env(cfg=BASE_CFG), mock.patch("requests.post", _make_post([_gemini_ok(payload)], posts)):
             text, df = NewImpl().smart(
-                "debt of edeka", projects, invoices,
+                "last bank payment for edeka", projects, invoices,
                 lambda q: legacy_calls.append(("normalize", q)), lambda q, p, i, d: legacy_calls.append(("answer", q)),
             )
         self.assertIsNone(df)

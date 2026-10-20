@@ -20,6 +20,7 @@ from services.ask_data.resolver import (
     AMBIGUOUS,
     resolve_country,
     resolve_month,
+    resolve_network,
     resolve_project,
 )
 from services.ask_data.tool_specs import _ASK_DATA_TOOL_SPECS
@@ -34,8 +35,8 @@ class ValidationResult:
 
 
 def clarification_question(clarification: dict) -> str:
-    """One short question; candidates are real project/country names, never invented."""
-    kind = "country" if clarification["kind"] == "country" else "project"
+    """One short question; candidates are real project/country/network names, never invented."""
+    kind = clarification["kind"] if clarification["kind"] in ("country", "network") else "project"
     options = list(clarification["candidates"])
     if not options:
         return f"I couldn't tell which {kind} you meant by '{clarification['value']}'. Which one did you mean?"
@@ -72,13 +73,51 @@ def _resolve_single_country(value: object, projects) -> Optional[str]:
     return resolution.value if resolution.status == ACCEPTED else None
 
 
+def _resolve_single_network(value: object) -> Optional[str]:
+    """Resolve a free-text network/chain reference (e.g. "Edeka", "Delhaize") to a canonical network name;
+    EXACT alias match only -- never fuzzy (goal 2)."""
+    text = _safe_str(value).strip()
+    if not text:
+        return None
+    resolution = resolve_network(text)
+    return resolution.value if resolution.status == ACCEPTED else None
+
+
+def _redirect_network_text(raw_args: dict, spec: dict) -> dict:
+    """Goal 2: a bare network name ("Edeka", "AD", "Delhaize", ...) must never fuzzy-collapse onto one
+    specific project, regardless of which argument key the planner used for it (it will often put a bare
+    chain name into 'project', since that is the only one it knew about before this tool supported
+    'network'). For any tool that declares a 'network' argument, if the text supplied for 'network' or
+    'project' is an EXACT network alias, treat it as the network filter and clear 'project' so normal
+    (possibly fuzzy) project resolution never runs on that text."""
+    if "network" not in spec:
+        return raw_args
+    raw_args = dict(raw_args)
+    for key in ("network", "project"):
+        text = _safe_str(raw_args.get(key)).strip()
+        if not text:
+            continue
+        resolution = resolve_network(text)
+        if resolution.status == ACCEPTED:
+            raw_args["network"] = resolution.value
+            if key != "network":
+                raw_args[key] = None
+            return raw_args
+    return raw_args
+
+
 def _resolve_arg_ex(kind: str, value: object, projects) -> tuple[bool, object, Optional[dict]]:
     """Validate + resolve one tool argument. Returns (ok, resolved_value, clarification)."""
     if value is None:
         return True, None, None
-    if kind in ("project", "country"):
+    if kind in ("project", "country", "network"):
         text = _safe_str(value).strip()
-        resolution = _project_resolution(text, projects) if kind == "project" else _country_resolution(text, projects)
+        if kind == "project":
+            resolution = _project_resolution(text, projects)
+        elif kind == "country":
+            resolution = _country_resolution(text, projects)
+        else:
+            resolution = resolve_network(text)
         if text and resolution.status == ACCEPTED:
             return True, resolution.value, None
         if text and resolution.status == AMBIGUOUS:
@@ -108,6 +147,9 @@ def _resolve_ask_data_arg(kind: str, value: object, projects) -> tuple[bool, obj
         return (True, resolved) if resolved else (False, None)
     if kind == "country":
         resolved = _resolve_single_country(value, projects)
+        return (True, resolved) if resolved else (False, None)
+    if kind == "network":
+        resolved = _resolve_single_network(value)
         return (True, resolved) if resolved else (False, None)
     if kind == "status":
         text = _safe_str(value).strip()
@@ -150,6 +192,7 @@ def validate_tool_call(parsed: object, projects) -> ValidationResult:
         return ValidationResult(None, {}, "Tool 'arguments' was not a JSON object.")
 
     spec = _ASK_DATA_TOOL_SPECS[tool_name]
+    raw_args = _redirect_network_text(raw_args, spec)
     cleaned: dict = {}
     for arg_name, (kind, required) in spec.items():
         raw_value = raw_args.get(arg_name)
