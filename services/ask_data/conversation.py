@@ -98,6 +98,21 @@ def rows_table_for_result(result: ToolResult, store: ResultStore) -> tuple[str, 
     return f"Here are the {rows.row_count} row(s) behind that figure, totalling €{rows.total:,.2f}.", rows.dataframe
 
 
+def reset_conversation(context: ConversationContext) -> ResultStore:
+    """Full "New conversation" reset: clears `context` in place (intent, filters -- including any carried
+    period/at_date/date_a/date_b/country/network/etc. -- previous_result_id, pending clarification,
+    turn_count) AND returns a brand-new, empty `ResultStore`.
+
+    A fresh `ResultStore` is required, not merely optional hygiene: even though every drill-down lookup is
+    by exact result_id (so a stale entry left in an old, unreset store can never silently be picked as "the
+    latest" one), a genuine "start over" must leave NO reachable trace of the previous conversation's
+    results -- the caller (streamlit_app.py's "New conversation" button) MUST replace
+    `st.session_state["_ask_data_v3_result_store"]` with this return value, not keep reusing the old store.
+    """
+    context.reset()
+    return ResultStore()
+
+
 def breakdown_table_for_result(result: ToolResult) -> tuple[str, Optional[pd.DataFrame]]:
     """"Show breakdown": the named components of `result` (e.g. countries, or charges/credits) as a table."""
     if not result.components:
