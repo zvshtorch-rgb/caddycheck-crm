@@ -14,7 +14,7 @@ from services.ask_data.money import amounts_in_text, fmt_eur, fmt_percent, perce
 from services.ask_data.tool_result import (
     Component, ResultStore, ToolResult, UnknownResultError, get_result_rows,
 )
-from services.ask_data.tool_specs import TOOL_SPECS
+from services.ask_data.tool_specs import TOOL_SPECS, HISTORY_TOOL_NAMES
 from services.ask_data.validation import validate_tool_call
 from tests._ask_data_harness import (
     BASE_CFG, FIXED_LOADED_AT, NewImpl, OracleImpl, TOOL_CASES, _gemini_ok, _make_post, build_fixture, fake_streamlit,
@@ -457,14 +457,29 @@ class TestDrillDown(unittest.TestCase):
 
 
 class TestOutOfScopeStaysOutOfScope(unittest.TestCase):
-    def test_no_chat_memory_party_network_trend_or_snapshot_tools_were_added(self):
-        self.assertEqual(sorted(set(TOOL_SPECS) - {
-            "get_invoice", "get_invoices", "get_unpaid_invoices", "get_project", "get_projects", "count_projects", "get_debt",
-            "get_paid_amount", "get_outstanding_amount", "get_top_debt_projects", "get_sent_invoices", "get_next_invoice_number",
-            "get_camera_statistics", "get_last_bank_payment", "get_licenses", "get_license_payment_status",
-            "get_license_eop_reconciliation"}), ["debt_by_country"])
+    """Phase 3/4 guard: no chat-memory/party-alias/network/trend/snapshot tool was added beyond what was
+    explicitly approved. Ask Data Phase 5 (approved) added exactly 6 new historical/trend tools
+    (HISTORY_TOOL_NAMES) plus the invoice_snapshots/invoice_change_log history layer -- this test is
+    updated to pin exactly that approved addition (the original, narrower pre-Phase-5 claim this test
+    pinned through Phase 4 is superseded, not silently dropped)."""
+
+    PRE_PHASE5_TOOLS = {
+        "get_invoice", "get_invoices", "get_unpaid_invoices", "get_project", "get_projects", "count_projects", "get_debt",
+        "get_paid_amount", "get_outstanding_amount", "get_top_debt_projects", "get_sent_invoices", "get_next_invoice_number",
+        "get_camera_statistics", "get_last_bank_payment", "get_licenses", "get_license_payment_status",
+        "get_license_eop_reconciliation", "debt_by_country",
+    }
+
+    def test_tool_specs_match_pre_phase5_plus_exactly_the_approved_phase5_history_tools(self):
+        self.assertEqual(set(TOOL_SPECS), self.PRE_PHASE5_TOOLS | set(HISTORY_TOOL_NAMES))
+
+    def test_no_further_out_of_scope_concepts_were_added(self):
+        """conversation_memory (persisted beyond a session) and pps_accepted (the separate PPS-accepted/
+        reconciled commercial balance) remain genuinely out of scope -- Phase 5 did not touch either.
+        'invoice_snapshots' is now an approved Phase 5 concept and is intentionally excluded from this
+        guard (it appears throughout services/ask_data/history.py, tool_specs.py, etc.)."""
         sources = "".join(p.read_text(encoding="utf-8").lower() for p in (ROOT / "services" / "ask_data").glob("*.py"))
-        for word in ("invoice_snapshots", "conversation_memory", "pps_accepted"):
+        for word in ("conversation_memory", "pps_accepted"):
             self.assertNotIn(word, sources)
 
     def test_drill_down_is_not_exposed_to_the_model(self):

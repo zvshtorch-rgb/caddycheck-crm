@@ -60,7 +60,7 @@ def expected_unpaid(projects, invoices, *, country=None, project=None, category=
 _TEST_STORES = {}    # id(ConversationContext) -> ResultStore; mimics st.session_state persisting across reruns
 
 
-def run_turn(question, payload, context, *, data=None, posts=None, cfg=BASE_CFG):
+def run_turn(question, payload, context, *, data=None, posts=None, cfg=BASE_CFG, history_enabled=False):
     """One chat turn with Gemini mocked to return `payload` (a raw JSON string) or, if payload is None, with
     Gemini never expected to be called at all (any request raises).
 
@@ -81,6 +81,7 @@ def run_turn(question, payload, context, *, data=None, posts=None, cfg=BASE_CFG)
         return answer_turn(
             question, projects, invoices, [], context,
             legacy_normalize_question=legacy_normalize, legacy_answer=legacy_answer, result_store=store,
+            history_enabled=history_enabled,
         )
 
 
@@ -111,7 +112,8 @@ class TestConversationContextMerge(unittest.TestCase):
         self.assertEqual(ctx.previous_result_id, "abc")
         ctx.record("get_debt", {"country": "Bel", "year": 2026, "project": None, "category": None}, result_id="def")
         self.assertEqual(ctx.filters, {"country": "Bel", "year": 2026})
-        self.assertEqual(set(CARRYABLE_FILTER_KEYS), {"project", "country", "compare_country", "year", "paid_year", "category", "paid"})
+        self.assertEqual(set(CARRYABLE_FILTER_KEYS), {"project", "country", "compare_country", "year", "paid_year",
+                                                       "category", "paid", "period", "at_date", "date_a", "date_b"})
 
     def test_planner_hint_contains_only_tool_and_filter_values_never_amounts(self):
         ctx = ConversationContext()
@@ -467,6 +469,112 @@ class TestHistoricalQuestionsAreNotMisrouted(unittest.TestCase):
         outcome = run_turn("What changed since September 1?", None, ctx, data=make_data())
         self.assertEqual(outcome.kind, "historical_unsupported")
         self.assertIsNone(ctx.clarification)
+
+    def test_flag_off_explicitly_still_shows_the_limitation_text(self):
+        """Same as the defaults above, but with `history_enabled=False` passed explicitly, to directly pin
+        the gate variable itself (not just its default) -- this is the single most important Phase 5
+        guarantee: behavior is unchanged unless the flag is explicitly turned on."""
+        ctx = ConversationContext()
+        outcome = run_turn("What changed since September 1?", None, ctx, history_enabled=False)
+        self.assertEqual(outcome.kind, "historical_unsupported")
+        self.assertEqual(outcome.text, HISTORICAL_LIMITATION_TEXT)
+
+
+def _history_patches(runs, snapshots):
+    return [
+        mock.patch("services.supabase_service.load_invoice_snapshot_runs", lambda: runs),
+        mock.patch("services.supabase_service.load_invoice_snapshot", lambda d: snapshots.get(d.isoformat(), [])),
+        mock.patch("services.supabase_service.load_invoice_change_log", lambda *a, **k: []),
+        mock.patch("services.supabase_service.load_bank_payments", lambda: []),
+        mock.patch("services.supabase_service.load_bank_payment_allocations", lambda *a, **k: []),
+        mock.patch("config.settings.load_sent_invoices_log", lambda: []),
+    ]
+
+
+class TestHistoryFlagOnRouting(unittest.TestCase):
+    """Ask Data Phase 5: with `ask_data_history` on, a historical question flows through the normal
+    planner -> validator -> executor pipeline instead of the fixed limitation message, follow-ups keep the
+    same resolved period, and drill-down works on the resulting bridge exactly like any other tool."""
+
+    def setUp(self):
+        real_today = datetime.date.today()
+        self.runs = [
+            {"snapshot_date": "2026-09-01", "status": "success", "started_at": "2026-09-01T02:00:00+00:00",
+             "completed_at": "2026-09-01T02:01:00+00:00", "row_count": 1},
+            {"snapshot_date": real_today.isoformat(), "status": "success",
+             "started_at": real_today.isoformat() + "T02:00:00+00:00",
+             "completed_at": real_today.isoformat() + "T02:01:00+00:00", "row_count": 1},
+        ]
+        self.snapshots = {
+            "2026-09-01": [{"invoice_row_id": 1, "invoice_number": 8001, "project_name": "AD Alpha",
+                            "payment_amount": 7780.0, "paid": "No", "year": 2026, "maintenance_year": "Y1"}],
+            real_today.isoformat(): [{"invoice_row_id": 1, "invoice_number": 8001, "project_name": "AD Alpha",
+                                      "payment_amount": 7780.0, "paid": "No", "year": 2026, "maintenance_year": "Y1"}],
+        }
+
+    def _run(self, question, payload, context, **kwargs):
+        patches = _history_patches(self.runs, self.snapshots)
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+            return run_turn(question, payload, context, history_enabled=True, **kwargs)
+
+    def test_flag_on_executes_a_historical_tool_instead_of_the_limitation_message(self):
+        ctx = ConversationContext()
+        outcome = self._run(
+            "How much has debt increased this month?",
+            '{"tool": "get_debt_change", "arguments": {"period": "this month"}}', ctx,
+        )
+        self.assertEqual(outcome.kind, "tool")
+        self.assertEqual(outcome.tool, "get_debt_change")
+        self.assertTrue(outcome.result.financial)
+
+    def test_hebrew_historical_question_with_flag_on_also_executes_a_tool(self):
+        ctx = ConversationContext()
+        outcome = self._run(
+            "כמה החוב השתנה מתחילת החודש?",
+            '{"tool": "get_debt_change", "arguments": {"period": "this month"}}', ctx,
+        )
+        self.assertEqual(outcome.kind, "tool")
+
+    def test_period_carries_over_to_a_country_refinement_follow_up(self):
+        ctx = ConversationContext()
+        self._run(
+            "How much has debt increased this month?",
+            '{"tool": "get_debt_change", "arguments": {"period": "this month"}}', ctx,
+        )
+        first_period = ctx.filters.get("period")
+        self.assertIsNotNone(first_period)
+        outcome = self._run(
+            "Only Belgium?",
+            '{"tool": "get_debt_change", "arguments": {"country": "Bel"}}', ctx,
+        )
+        self.assertEqual(outcome.kind, "tool")
+        # The SAME period object is reused -- never re-derived/guessed by the model on the follow-up.
+        self.assertIs(ctx.filters.get("period"), first_period)
+        self.assertEqual(outcome.result.filters.get("country"), "Bel")
+
+    def test_show_invoices_works_after_a_historical_bridge_answer(self):
+        ctx = ConversationContext()
+        self._run(
+            "How much has debt increased this month?",
+            '{"tool": "get_debt_change", "arguments": {"period": "this month"}}', ctx,
+        )
+        outcome = self._run(HE_ROWS, None, ctx)   # drill-down never calls the model
+        self.assertEqual(outcome.kind, "drilldown")
+
+    def test_switching_hebrew_to_english_and_back_keeps_the_same_period(self):
+        ctx = ConversationContext()
+        self._run("כמה החוב השתנה מתחילת החודש?", '{"tool": "get_debt_change", "arguments": {"period": "this month"}}', ctx)
+        period_after_he = ctx.filters.get("period")
+        outcome = self._run("Only Belgium?", '{"tool": "get_debt_change", "arguments": {"country": "Bel"}}', ctx)
+        self.assertEqual(outcome.kind, "tool")
+        self.assertIs(ctx.filters.get("period"), period_after_he)
+
+    def test_reset_phrase_clears_the_carried_period(self):
+        ctx = ConversationContext()
+        self._run("How much has debt increased this month?", '{"tool": "get_debt_change", "arguments": {"period": "this month"}}', ctx)
+        self.assertIn("period", ctx.filters)
+        self._run("start over", None, ctx)   # reset is detected before any tool/model call
+        self.assertEqual(ctx.filters, {})
 
 
 class TestFeatureFlag(unittest.TestCase):

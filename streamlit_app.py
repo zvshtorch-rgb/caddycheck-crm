@@ -243,6 +243,13 @@ except ImportError:  # pragma: no cover - only hit mid-redeploy before a full re
         return False
 
 
+try:  # Ask Data Phase 5 flag; same stale-module safety net as get_ask_data_v3_enabled above
+    from config.settings import get_ask_data_history_enabled
+except ImportError:  # pragma: no cover - only hit mid-redeploy before a full reboot
+    def get_ask_data_history_enabled() -> bool:
+        return False
+
+
 try:
     from config.settings import load_project_change_log, append_project_change_log, save_project_change_log
 except Exception:
@@ -1475,6 +1482,7 @@ def _answer_data_turn_v3(question: str, context: ConversationContext, projects, 
         legacy_normalize_question=_llm_normalize_question,
         legacy_answer=_answer_data_question,
         next_invoice_number=lambda: _get_next_invoice_number(invoices, _data_path),
+        history_enabled=get_ask_data_history_enabled(),
     )
 
 
@@ -1511,6 +1519,7 @@ def _ask_data_shadow_v3_summary(question: str, projects, invoices, debt_summarie
             legacy_answer=_answer_data_question,
             next_invoice_number=lambda: _get_next_invoice_number(invoices, _data_path),
             result_store=shadow_store,
+            history_enabled=get_ask_data_history_enabled(),
         )
         if outcome.kind == "clarification":
             return ShadowSummary.from_clarification()

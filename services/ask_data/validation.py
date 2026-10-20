@@ -15,6 +15,11 @@ from services.ask_data.helpers import (
     _normalize_country,
     _safe_str,
 )
+from services.ask_data.history_dates import (
+    ACCEPTED as DATE_PHRASE_ACCEPTED,
+    resolve_period_phrase,
+    resolve_single_date_phrase,
+)
 from services.ask_data.resolver import (
     ACCEPTED,
     AMBIGUOUS,
@@ -142,6 +147,23 @@ def _resolve_ask_data_arg(kind: str, value: object, projects) -> tuple[bool, obj
             return True, datetime.date.fromisoformat(text[:10])
         except Exception:
             return False, None
+    if kind == "at_date":
+        # Ask Data Phase 5: `value` is the planner's VERBATIM date phrase copied from the question (e.g.
+        # "today", "30 September", "a week ago") -- never a date the model computed itself. The actual
+        # calendar math happens here, deterministically, anchored on the real wall-clock date.
+        text = _safe_str(value).strip()
+        if not text:
+            return False, None
+        resolution = resolve_single_date_phrase(text, datetime.date.today())
+        return (True, resolution.value) if resolution.status == DATE_PHRASE_ACCEPTED else (False, None)
+    if kind == "period":
+        # Same principle as "at_date", but resolves to a (date_from, date_to) range -- see
+        # services/ask_data/history_dates.py's PeriodResolution.
+        text = _safe_str(value).strip()
+        if not text:
+            return False, None
+        resolution = resolve_period_phrase(text, datetime.date.today())
+        return (True, resolution) if resolution.status == DATE_PHRASE_ACCEPTED else (False, None)
     if kind == "project":
         resolved = _resolve_project_arg(value, projects)
         return (True, resolved) if resolved else (False, None)
@@ -201,6 +223,13 @@ def validate_tool_call(parsed: object, projects) -> ValidationResult:
             clarification = {"arg": arg_name, "tool": tool_name, "raw_arguments": dict(raw_args), **clarification}
             return ValidationResult(None, {}, f"Ambiguous argument '{arg_name}'={raw_value!r} for tool '{tool_name}'.", clarification)
         if not ok:
+            if kind in ("at_date", "period") and raw_value not in (None, ""):
+                return ValidationResult(
+                    None, {},
+                    f"I couldn't determine which date(s) you mean by {raw_value!r} for '{tool_name}'. Try a "
+                    "phrase like 'today', 'yesterday', 'this month', 'last month', 'since October 1', "
+                    "'past 30 days', or an explicit date like '30 September'.",
+                )
             return ValidationResult(None, {}, f"Could not validate argument '{arg_name}'={raw_value!r} for tool '{tool_name}'.")
         if required and resolved is None:
             return ValidationResult(None, {}, f"Missing required argument '{arg_name}' for tool '{tool_name}'.")

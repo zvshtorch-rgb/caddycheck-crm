@@ -322,6 +322,32 @@ def get_ask_data_v3_enabled() -> bool:
     return False
 
 
+def get_ask_data_history_enabled() -> bool:
+    """Feature flag: Ask Data Phase 5 historical/trend tools (get_debt_at, get_debt_change, etc.).
+
+    Checked, in order: st.secrets["ask_data"]["history"], then the ASK_DATA_HISTORY env var. Defaults to
+    OFF -- while off, the v3 planner prompt/catalog and conversation routing are byte-identical to
+    pre-Phase-5 (see services/ask_data/conversation.py's is_historical_question() fork and
+    planner.py's history_enabled parameter). Same truthy parsing as get_ask_data_v3_enabled().
+    """
+    def _truthy(value) -> bool:
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+    try:
+        import streamlit as st
+        ask_data_secrets = st.secrets.get("ask_data", {})
+        if ask_data_secrets and "history" in ask_data_secrets:
+            return _truthy(ask_data_secrets.get("history"))
+    except Exception:
+        pass
+    env_value = os.environ.get("ASK_DATA_HISTORY", "").strip()
+    if env_value:
+        return _truthy(env_value)
+    return False
+
+
 def get_project_overrides() -> dict:
     """
     Load per-project rate overrides from file.

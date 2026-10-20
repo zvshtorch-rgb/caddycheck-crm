@@ -22,8 +22,13 @@ from services.ask_data.resolver import ACCEPTED, resolve_country, resolve_projec
 from services.ask_data.tool_specs import TOOL_SPECS
 
 # Conceptual filter slots carried across turns (goal 4): resolved project, country (+ compare_country for
-# debt_by_country), year, Y1/Y2+/trial category, paid_year, and paid/unpaid/cancelled scope.
-CARRYABLE_FILTER_KEYS = ("project", "country", "compare_country", "year", "paid_year", "category", "paid")
+# debt_by_country), year, Y1/Y2+/trial category, paid_year, paid/unpaid/cancelled scope, and (Ask Data
+# Phase 5) the resolved historical period/at_date so "only Belgium?" after a historical answer keeps the
+# same date range. `network` is intentionally NOT carried yet (a pre-existing, documented gap predating
+# Phase 5 -- the Network Resolver phase only added network to the tools themselves, not to follow-up
+# context; out of scope here).
+CARRYABLE_FILTER_KEYS = ("project", "country", "compare_country", "year", "paid_year", "category", "paid",
+                        "period", "at_date", "date_a", "date_b")
 
 # Phrases that explicitly start a new question / clear all carried-over filters (goal 10: "clearing context").
 _RESET_PHRASES_EN = (
@@ -103,10 +108,19 @@ class ConversationContext:
 
     def planner_hint(self) -> Optional[dict]:
         """What is safe to tell the planner about the previous turn: tool name + already-resolved filter
-        values only (country codes, canonical project names, years, categories) -- never amounts or rows."""
+        values only (country codes, canonical project names, years, categories, resolved dates/periods as
+        plain ISO strings/labels) -- never amounts or rows. Internal storage (`self.filters`) keeps the
+        native date/PeriodResolution objects so `merge()` can hand them straight to the executor; only this
+        JSON-safe copy goes to the model."""
         if self.intent is None:
             return None
-        return {"tool": self.intent, "arguments": dict(self.filters)}
+        safe_filters = {}
+        for key, value in self.filters.items():
+            if hasattr(value, "isoformat"):
+                safe_filters[key] = value.isoformat()
+            else:
+                safe_filters[key] = str(value) if hasattr(value, "date_from") else value
+        return {"tool": self.intent, "arguments": safe_filters}
 
     def record(self, tool_name: str, final_args: dict, result_id: Optional[str]) -> None:
         """Called after a tool actually executed successfully: remember the carryable filters it used."""

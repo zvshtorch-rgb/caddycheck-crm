@@ -69,17 +69,18 @@ EXPECTED_DEVIATIONS = {
     "_answer_data_question_smart": "Phase 1: injected legacy fallbacks; Phase 2: validate_tool_call + one-question clarification",
     # Phase 2 (approved scope only)
     "_build_invoice_answer_df": "Phase 2: Country via canonical ProjectIndex; Phase 3: Amount (€) as exact Decimal",
-    "_ASK_DATA_TOOL_SPECS": "Phase 3: adds the whitelisted debt_by_country tool (appended last); Network Resolver: adds a `network` arg to get_projects/count_projects/get_debt/get_unpaid_invoices/get_paid_amount/get_outstanding_amount/get_camera_statistics/get_licenses",
-    "_ASK_DATA_TOOL_DESCRIPTIONS": "Phase 3: adds the debt_by_country description (appended last)",
+    "_ASK_DATA_TOOL_SPECS": "Phase 3: adds the whitelisted debt_by_country tool (appended last); Network Resolver: adds a `network` arg to get_projects/count_projects/get_debt/get_unpaid_invoices/get_paid_amount/get_outstanding_amount/get_camera_statistics/get_licenses; Phase 5: adds 6 historical tools (get_debt_at, compare_debt_dates, get_debt_change, get_invoice_changes, get_payments_in_period, get_new_invoices_in_period), always registered for validation but excluded from the catalog TEXT unless `include_history=True` (see _ask_data_tool_catalog_text)",
+    "_ASK_DATA_TOOL_DESCRIPTIONS": "Phase 3: adds the debt_by_country description (appended last); Phase 5: adds descriptions for the 6 new historical tools",
+    "_ask_data_tool_catalog_text": "Phase 5: adds an `include_history=False` keyword-only parameter that, when False (the default), renders byte-identical to the pre-Phase-5 catalog text by omitting the 6 new historical tools entirely",
     "_annual_license_payment_row": "Phase 3: all-time/period amounts computed with Decimal instead of float",
     "_resolve_project_arg": "Phase 2: canonical resolver, thresholds 0.90 / 0.60",
     "_resolve_single_country": "Phase 2: canonical resolver (accents, Hebrew, variants), thresholds 0.90 / 0.60",
-    "_resolve_ask_data_arg": "Phase 2: month resolved via resolve_month (Hebrew, 'sept'); project/country via the resolver; Network Resolver: adds the `network` kind",
+    "_resolve_ask_data_arg": "Phase 2: month resolved via resolve_month (Hebrew, 'sept'); project/country via the resolver; Network Resolver: adds the `network` kind; Phase 5: adds the `at_date`/`period` kinds (deterministic phrase resolution via history_dates.py)",
     "_validate_ask_data_tool_call": "Phase 2: thin wrapper over validate_tool_call (adds clarification)",
     "_filter_invoices_for_debt_tools": "Phase 2: country/project matched via ProjectIndex instead of exact project-name equality; Network Resolver: adds a `network` filter (NetworkIndex) for debt/paid/outstanding/unpaid-invoice tools",
     "_filter_license_entries": "Network Resolver: adds a `network` filter (NetworkIndex) to get_licenses/get_license_payment_status",
     # Phase 4 (approved scope only)
-    "_llm_parse_data_question": "Phase 4: added optional keyword-only `context` param for follow-up hints; prompt is byte-identical when context=None (pinned by test_no_context_prompt_is_byte_identical_to_pre_phase4); Network Resolver: added the 'network' prompt rule (pinned by TestNetworkResolverOnlyApprovedChanges)",
+    "_llm_parse_data_question": "Phase 4: added optional keyword-only `context` param for follow-up hints; prompt is byte-identical when context=None (pinned by test_no_context_prompt_is_byte_identical_to_pre_phase4); Network Resolver: added the 'network' prompt rule (pinned by TestNetworkResolverOnlyApprovedChanges); Phase 5: added a keyword-only `history_enabled=False` param; when False the prompt/catalog is byte-identical to pre-Phase-5 (pinned by TestHistoryFlagOffPromptUnchanged)",
 }
 
 
