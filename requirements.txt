@@ -17,3 +17,5 @@ qrcode[pil]>=7.4.2
 # proactively forcing a full rebuild again so the same known stale-module class of bug
 # cannot silently leave conversation.py/context.py/planner.py/tool_specs.py/executor.py on
 # their pre-Phase-5 cached versions.
+# touch: Ask Data v3 "New conversation" reset fix (conversation.py/context.py/streamlit_app.py) --
+# forcing another full rebuild for the same reason.
