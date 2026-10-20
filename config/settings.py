@@ -295,6 +295,31 @@ def get_gemini_config() -> dict:
     return defaults
 
 
+def get_ask_data_v3_enabled() -> bool:
+    """Feature flag: on (chat UI, Phase 4) vs off (the original one-shot Ask Data form, Phase 1-3).
+
+    Checked, in order: st.secrets["ask_data"]["v3"], then the ASK_DATA_V3 env var. Defaults to OFF so existing
+    deployments keep the current one-shot behavior until explicitly switched on. Accepts "1"/"true"/"yes" (case
+    insensitive) or a real bool from st.secrets.
+    """
+    def _truthy(value) -> bool:
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+    try:
+        import streamlit as st
+        ask_data_secrets = st.secrets.get("ask_data", {})
+        if ask_data_secrets and "v3" in ask_data_secrets:
+            return _truthy(ask_data_secrets.get("v3"))
+    except Exception:
+        pass
+    env_value = os.environ.get("ASK_DATA_V3", "").strip()
+    if env_value:
+        return _truthy(env_value)
+    return False
+
+
 def get_project_overrides() -> dict:
     """
     Load per-project rate overrides from file.

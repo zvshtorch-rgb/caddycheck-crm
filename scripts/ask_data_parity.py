@@ -77,6 +77,8 @@ EXPECTED_DEVIATIONS = {
     "_resolve_ask_data_arg": "Phase 2: month resolved via resolve_month (Hebrew, 'sept'); project/country via the resolver",
     "_validate_ask_data_tool_call": "Phase 2: thin wrapper over validate_tool_call (adds clarification)",
     "_filter_invoices_for_debt_tools": "Phase 2: country/project matched via ProjectIndex instead of exact project-name equality",
+    # Phase 4 (approved scope only)
+    "_llm_parse_data_question": "Phase 4: added optional keyword-only `context` param for follow-up hints; prompt is byte-identical when context=None (pinned by test_no_context_prompt_is_byte_identical_to_pre_phase4)",
 }
 
 

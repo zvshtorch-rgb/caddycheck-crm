@@ -9,19 +9,22 @@ from config.settings import get_gemini_config
 from services.ask_data.tool_specs import _ask_data_tool_catalog_text
 
 
-def _llm_parse_data_question(question: str) -> Optional[dict]:
+def _llm_parse_data_question(question: str, context: Optional[dict] = None) -> Optional[dict]:
     """
     Ask Gemini to translate a free-text question into ONE structured,
     read-only tool call: {"tool": "<name>", "arguments": {...}}.
 
-    Gemini only ever sees this prompt (the question + a fixed tool catalog)
-    — never any invoice/project/customer data — and only ever picks a tool
-    name + arguments. It cannot write SQL, cannot write Python, cannot select
-    a write/update/delete action (none exist in the catalog), and never
-    computes any number itself; `_execute_ask_data_tool` does that
-    deterministically in Python. Returns None on any failure (missing key,
-    network error, timeout, invalid JSON), so the caller falls back to the
-    legacy `_answer_data_question`.
+    Gemini only ever sees this prompt (the question + a fixed tool catalog, plus -- for a follow-up turn --
+    the previous turn's tool name and already-resolved filter values from `context`) — never any invoice/
+    project/customer data, never an amount, never a ledger row. It only ever picks a tool name + arguments.
+    It cannot write SQL, cannot write Python, cannot select a write/update/delete action (none exist in the
+    catalog), and never computes any number itself; `_execute_ask_data_tool` does that deterministically in
+    Python. Returns None on any failure (missing key, network error, timeout, invalid JSON), so the caller
+    falls back to the legacy `_answer_data_question`.
+
+    `context` is `None` for a standalone question (byte-identical prompt to before Phase 4) or
+    `{"tool": <previous tool name>, "arguments": {<already-resolved filter> -> <value>, ...}}` for a
+    follow-up turn (see services/ask_data/context.py's `ConversationContext.planner_hint`).
     """
     gemini_cfg = get_gemini_config()
     api_key = gemini_cfg.get("api_key", "")
@@ -114,7 +117,16 @@ def _llm_parse_data_question(question: str) -> Optional[dict]:
             "update' with no specific year -> needs_update='yes'. Add project/country/project_status "
             "only if the question names them. This tool is read-only.\n\n"
             f"Tool catalog:\n{_ask_data_tool_catalog_text()}\n\n"
-            f"Question: {question}"
+            + ("" if context is None else (
+                "This is a FOLLOW-UP to a previous turn. The previous turn resolved to this tool call "
+                f"(tool and already-resolved filter values only -- no amounts, no rows):\n{json.dumps(context)}\n\n"
+                "If the new question refines, narrows, or changes just one or two of those filters (e.g. "
+                "'only Belgium?', 'and Germany?', 'what about Y2+?'), reuse the previous tool and keep any "
+                "filter the new question does not mention or contradict; only change what the new question "
+                "actually asks to change. If the new question is unrelated, ignore the previous turn "
+                "entirely and answer it fresh.\n\n"
+            ))
+            + f"Question: {question}"
         )
         model = gemini_cfg.get("model", "gemini-flash-latest")
         request_body = {

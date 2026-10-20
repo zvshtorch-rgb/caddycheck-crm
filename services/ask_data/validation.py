@@ -30,7 +30,7 @@ class ValidationResult:
     tool: Optional[str]
     arguments: dict
     error: Optional[str]
-    clarification: Optional[dict] = None  # {"arg", "kind", "value", "candidates"} when the user must pick one
+    clarification: Optional[dict] = None  # {"arg", "kind", "value", "candidates", "tool", "raw_arguments"} when ambiguous
 
 
 def clarification_question(clarification: dict) -> str:
@@ -155,7 +155,7 @@ def validate_tool_call(parsed: object, projects) -> ValidationResult:
         raw_value = raw_args.get(arg_name)
         ok, resolved, clarification = _resolve_arg_ex(kind, raw_value, projects)
         if clarification is not None:
-            clarification = {"arg": arg_name, **clarification}
+            clarification = {"arg": arg_name, "tool": tool_name, "raw_arguments": dict(raw_args), **clarification}
             return ValidationResult(None, {}, f"Ambiguous argument '{arg_name}'={raw_value!r} for tool '{tool_name}'.", clarification)
         if not ok:
             return ValidationResult(None, {}, f"Could not validate argument '{arg_name}'={raw_value!r} for tool '{tool_name}'.")

@@ -235,6 +235,7 @@ from config.settings import (
     load_orders_records,
     save_orders_records,
     get_gemini_config,
+    get_ask_data_v3_enabled,
 )
 
 try:
@@ -1444,6 +1445,27 @@ def _answer_data_question_smart(question: str, projects, invoices, debt_summarie
     the legacy keyword matcher (still defined in this file) is injected as its fallback."""
     return _ask_data_answer_smart_core(
         question, projects, invoices, debt_summaries,
+        legacy_normalize_question=_llm_normalize_question,
+        legacy_answer=_answer_data_question,
+        next_invoice_number=lambda: _get_next_invoice_number(invoices, _data_path),
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Ask Data v3 (Phase 4): conversational chat UI, behind the `ask_data_v3` feature flag.
+# Same planner -> validator -> executor -> ToolResult pipeline as v2, plus a per-session
+# ConversationContext for follow-ups/drill-down (see services/ask_data/conversation.py).
+# v2 above is completely untouched and remains the default when the flag is off.
+# ══════════════════════════════════════════════════════════════════════════════
+
+from services.ask_data.context import ConversationContext  # noqa: E402
+from services.ask_data.conversation import answer_turn  # noqa: E402
+
+
+def _answer_data_turn_v3(question: str, context: ConversationContext, projects, invoices, debt_summaries):
+    """Thin wrapper: v3's turn orchestrator now lives in services/ask_data/conversation.py."""
+    return answer_turn(
+        question, projects, invoices, debt_summaries, context,
         legacy_normalize_question=_llm_normalize_question,
         legacy_answer=_answer_data_question,
         next_invoice_number=lambda: _get_next_invoice_number(invoices, _data_path),
@@ -3663,92 +3685,143 @@ elif page == "❓ Ask Data":
                 f"AD Sint-Kruis Brugge license_eop:   {_diag['ad_sint_kruis_brugge_license_eop']}",
                 language=None,
             )
-    _ask_data_llm_on = bool(get_gemini_config().get("api_key", ""))
-    if _ask_data_llm_on:
-        st.caption("Ask naturally about projects, invoices, debt, payments, licenses, or camera statistics.")
-    else:
-        st.caption("Ask questions about projects, invoices, debt, or sent PDF invoices.")
 
-    def _ask_data_answer(raw_question: str) -> tuple[str, Optional[pd.DataFrame]]:
+    if not get_ask_data_v3_enabled():
+        _ask_data_llm_on = bool(get_gemini_config().get("api_key", ""))
         if _ask_data_llm_on:
-            return _answer_data_question_smart(raw_question, projects, invoices, debt_summaries)
-        return _answer_data_question(raw_question, projects, invoices, debt_summaries)
+            st.caption("Ask naturally about projects, invoices, debt, payments, licenses, or camera statistics.")
+        else:
+            st.caption("Ask questions about projects, invoices, debt, or sent PDF invoices.")
 
-    def _remember_ask_data_question(raw_question: str) -> None:
-        text = _safe_str(raw_question).strip()
-        if not text:
-            return
-        history = st.session_state.get("ask_data_history", [])
-        history = [q for q in history if q != text]  # move to front if repeated
-        history.insert(0, text)
-        st.session_state["ask_data_history"] = history[:10]
+        def _ask_data_answer(raw_question: str) -> tuple[str, Optional[pd.DataFrame]]:
+            if _ask_data_llm_on:
+                return _answer_data_question_smart(raw_question, projects, invoices, debt_summaries)
+            return _answer_data_question(raw_question, projects, invoices, debt_summaries)
 
-    quick_question_cols = st.columns(4)
-    quick_questions = [
-        "How many cameras do we have in total?",
-        "How many TopDown cameras are in Belgium?",
-        "Which country has the most cameras?",
-        "How much Y1 debt do we have in 2026?",
-    ]
-    for idx, quick_question in enumerate(quick_questions):
-        if quick_question_cols[idx].button(quick_question, key=f"ask_quick_{idx}", use_container_width=True):
-            st.session_state["ask_data_question"] = quick_question
-            answer_text, answer_df = _ask_data_answer(quick_question)
-            _remember_ask_data_question(quick_question)
+        def _remember_ask_data_question(raw_question: str) -> None:
+            text = _safe_str(raw_question).strip()
+            if not text:
+                return
+            history = st.session_state.get("ask_data_history", [])
+            history = [q for q in history if q != text]  # move to front if repeated
+            history.insert(0, text)
+            st.session_state["ask_data_history"] = history[:10]
+
+        quick_question_cols = st.columns(4)
+        quick_questions = [
+            "How many cameras do we have in total?",
+            "How many TopDown cameras are in Belgium?",
+            "Which country has the most cameras?",
+            "How much Y1 debt do we have in 2026?",
+        ]
+        for idx, quick_question in enumerate(quick_questions):
+            if quick_question_cols[idx].button(quick_question, key=f"ask_quick_{idx}", use_container_width=True):
+                st.session_state["ask_data_question"] = quick_question
+                answer_text, answer_df = _ask_data_answer(quick_question)
+                _remember_ask_data_question(quick_question)
+                st.session_state["ask_data_answer_text"] = answer_text
+                st.session_state["ask_data_answer_df"] = answer_df.to_dict(orient="records") if answer_df is not None else None
+                st.rerun()
+
+        with st.form("ask_data_form"):
+            question = st.text_area(
+                "Question",
+                value=st.session_state.get("ask_data_question", ""),
+                height=100,
+                placeholder="Examples: How many cameras do we have in total? Show unpaid invoices for AD Anderlecht. Which country has the most cameras? Show invoice 8676.",
+            )
+            submitted = st.form_submit_button("Ask")
+
+        if submitted:
+            st.session_state["ask_data_question"] = question
+            answer_text, answer_df = _ask_data_answer(question)
+            _remember_ask_data_question(question)
             st.session_state["ask_data_answer_text"] = answer_text
             st.session_state["ask_data_answer_df"] = answer_df.to_dict(orient="records") if answer_df is not None else None
+
+        _ask_data_history = st.session_state.get("ask_data_history", [])
+        if _ask_data_history:
+            with st.expander(f"🕘 Recent questions ({len(_ask_data_history)})", expanded=False):
+                for _hist_idx, _hist_question in enumerate(_ask_data_history):
+                    if st.button(_hist_question, key=f"ask_history_{_hist_idx}", use_container_width=True):
+                        st.session_state["ask_data_question"] = _hist_question
+                        answer_text, answer_df = _ask_data_answer(_hist_question)
+                        _remember_ask_data_question(_hist_question)
+                        st.session_state["ask_data_answer_text"] = answer_text
+                        st.session_state["ask_data_answer_df"] = answer_df.to_dict(orient="records") if answer_df is not None else None
+                        st.rerun()
+
+        if CAN_EDIT and _ask_data_llm_on:
+            _llm_error = st.session_state.get("_ask_data_llm_error")
+            _llm_tool_call = st.session_state.get("_ask_data_llm_tool_call")
+            if _llm_tool_call:
+                st.caption(f"🤖 Tool call: `{_llm_tool_call['tool']}({_llm_tool_call['arguments']})`")
+            elif _llm_error:
+                st.caption(f"⚠️ LLM assist failed, used keyword matcher instead: {_llm_error}")
+
+        answer_text = st.session_state.get("ask_data_answer_text")
+        answer_rows = st.session_state.get("ask_data_answer_df")
+
+        if answer_text:
+            st.success(answer_text)
+        else:
+            st.info(
+                "Try: 'How many cameras do we have in total?', 'How many TopDown cameras are in Belgium?', "
+                "'Which country has the most cameras?', 'How much Y1 debt do we have in 2026?', "
+                "'Show unpaid invoices for AD Anderlecht', or 'Show invoice 8676'."
+            )
+
+        if answer_rows:
+            st.dataframe(pd.DataFrame(answer_rows), use_container_width=True, hide_index=True, height=420)
+
+    else:
+        # ── Ask Data v3: conversational chat UI (behind the ask_data_v3 flag) ───────────────────────────
+        st.caption(
+            "Chat naturally, in English or Hebrew, about projects, invoices, debt, payments, or licenses. "
+            "Ask a follow-up ('Only Belgium?', 'Which invoices make that up?') and I'll keep the context."
+        )
+
+        _v3_messages = st.session_state.setdefault("_ask_data_v3_messages", [])
+        _v3_context = st.session_state.setdefault("_ask_data_v3_context", ConversationContext())
+
+        if st.button("🧹 New conversation", key="ask_data_v3_reset"):
+            st.session_state["_ask_data_v3_messages"] = []
+            _v3_context.reset()
             st.rerun()
 
-    with st.form("ask_data_form"):
-        question = st.text_area(
-            "Question",
-            value=st.session_state.get("ask_data_question", ""),
-            height=100,
-            placeholder="Examples: How many cameras do we have in total? Show unpaid invoices for AD Anderlecht. Which country has the most cameras? Show invoice 8676.",
-        )
-        submitted = st.form_submit_button("Ask")
+        def _render_v3_message(msg: dict, *, show_drilldown_buttons: bool = False) -> None:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+                if msg.get("dataframe") is not None:
+                    st.dataframe(msg["dataframe"], use_container_width=True, hide_index=True, height=360)
+                if show_drilldown_buttons and msg.get("kind") == "tool":
+                    _col_rows, _col_breakdown = st.columns(2)
+                    if _col_rows.button("📄 Show invoices", key="ask_data_v3_drill_rows", use_container_width=True):
+                        _run_v3_turn("Show invoices")
+                        st.rerun()
+                    if _col_breakdown.button("📊 Show breakdown", key="ask_data_v3_drill_breakdown", use_container_width=True):
+                        _run_v3_turn("Show breakdown")
+                        st.rerun()
 
-    if submitted:
-        st.session_state["ask_data_question"] = question
-        answer_text, answer_df = _ask_data_answer(question)
-        _remember_ask_data_question(question)
-        st.session_state["ask_data_answer_text"] = answer_text
-        st.session_state["ask_data_answer_df"] = answer_df.to_dict(orient="records") if answer_df is not None else None
+        def _run_v3_turn(raw_question: str) -> None:
+            text = _safe_str(raw_question).strip()
+            if not text:
+                return
+            _v3_messages.append({"role": "user", "content": text})
+            outcome = _answer_data_turn_v3(text, _v3_context, projects, invoices, debt_summaries)
+            _v3_messages.append({
+                "role": "assistant", "content": outcome.text, "dataframe": outcome.dataframe, "kind": outcome.kind,
+            })
 
-    _ask_data_history = st.session_state.get("ask_data_history", [])
-    if _ask_data_history:
-        with st.expander(f"🕘 Recent questions ({len(_ask_data_history)})", expanded=False):
-            for _hist_idx, _hist_question in enumerate(_ask_data_history):
-                if st.button(_hist_question, key=f"ask_history_{_hist_idx}", use_container_width=True):
-                    st.session_state["ask_data_question"] = _hist_question
-                    answer_text, answer_df = _ask_data_answer(_hist_question)
-                    _remember_ask_data_question(_hist_question)
-                    st.session_state["ask_data_answer_text"] = answer_text
-                    st.session_state["ask_data_answer_df"] = answer_df.to_dict(orient="records") if answer_df is not None else None
-                    st.rerun()
+        for _msg_idx, _msg in enumerate(_v3_messages):
+            _is_last_assistant = _msg["role"] == "assistant" and _msg_idx == len(_v3_messages) - 1
+            _render_v3_message(_msg, show_drilldown_buttons=_is_last_assistant)
 
-    if CAN_EDIT and _ask_data_llm_on:
-        _llm_error = st.session_state.get("_ask_data_llm_error")
-        _llm_tool_call = st.session_state.get("_ask_data_llm_tool_call")
-        if _llm_tool_call:
-            st.caption(f"🤖 Tool call: `{_llm_tool_call['tool']}({_llm_tool_call['arguments']})`")
-        elif _llm_error:
-            st.caption(f"⚠️ LLM assist failed, used keyword matcher instead: {_llm_error}")
+        if _v3_prompt := st.chat_input("Ask about projects, invoices, debt, payments, or licenses…"):
+            _run_v3_turn(_v3_prompt)
+            st.rerun()
 
-    answer_text = st.session_state.get("ask_data_answer_text")
-    answer_rows = st.session_state.get("ask_data_answer_df")
 
-    if answer_text:
-        st.success(answer_text)
-    else:
-        st.info(
-            "Try: 'How many cameras do we have in total?', 'How many TopDown cameras are in Belgium?', "
-            "'Which country has the most cameras?', 'How much Y1 debt do we have in 2026?', "
-            "'Show unpaid invoices for AD Anderlecht', or 'Show invoice 8676'."
-        )
-
-    if answer_rows:
-        st.dataframe(pd.DataFrame(answer_rows), use_container_width=True, hide_index=True, height=420)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
