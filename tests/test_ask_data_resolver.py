@@ -281,7 +281,7 @@ class TestCountryTotalsReconcile(unittest.TestCase):
         frame = b.to_dataframe()
         self.assertIn(breakdown.UNASSIGNED_LABEL, list(frame["Country"]))
         self.assertEqual(list(frame["Country"])[-1], "Total")
-        self.assertEqual(frame.iloc[-1]["Amount (€)"], float(b.total))
+        self.assertEqual(frame.iloc[-1]["Amount (€)"], b.total)
 
     def test_an_alias_without_its_target_project_leaves_the_row_visibly_unassigned(self):
         projects = [p for p in self.projects if p.project_name != "CM Essen"]
@@ -323,7 +323,7 @@ class TestCountryTotalsReconcile(unittest.TestCase):
 
     def test_project_filter_uses_the_canonical_name(self):
         text, _ = _execute_ask_data_tool("get_outstanding_amount", {"project": "Intermarché Heusy"}, self.projects, self.invoices, [])
-        self.assertEqual(text, "Outstanding (unpaid) amount for Intermarché Heusy is €7,880 across 2 invoice row(s).")
+        self.assertEqual(text.split("\n\n")[0], "Outstanding (unpaid) amount for Intermarché Heusy is €7,880.00 across 2 invoice row(s).")
 
 
 class TestMonthQueries(unittest.TestCase):

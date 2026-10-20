@@ -65,10 +65,13 @@ MOVED = {
 # Definitions that are intentionally NOT byte-identical in Phase 1 (each documented in the new module).
 EXPECTED_DEVIATIONS = {
     # Phase 1 injection points
-    "_execute_ask_data_tool": "Phase 1: keyword-only `next_invoice_number`; Phase 2: month fix + canonical matching in the get_invoices branch",
+    "_execute_ask_data_tool": "Phase 1: keyword-only `next_invoice_number`; Phase 2: month fix + canonical matching; Phase 3: thin tuple wrapper over execute_tool/ToolResult (Decimal money, rows, calculation)",
     "_answer_data_question_smart": "Phase 1: injected legacy fallbacks; Phase 2: validate_tool_call + one-question clarification",
     # Phase 2 (approved scope only)
-    "_build_invoice_answer_df": "Phase 2: Country column resolved through the canonical ProjectIndex (case/accents/aliases)",
+    "_build_invoice_answer_df": "Phase 2: Country via canonical ProjectIndex; Phase 3: Amount (€) as exact Decimal",
+    "_ASK_DATA_TOOL_SPECS": "Phase 3: adds the whitelisted debt_by_country tool (appended last)",
+    "_ASK_DATA_TOOL_DESCRIPTIONS": "Phase 3: adds the debt_by_country description (appended last)",
+    "_annual_license_payment_row": "Phase 3: all-time/period amounts computed with Decimal instead of float",
     "_resolve_project_arg": "Phase 2: canonical resolver, thresholds 0.90 / 0.60",
     "_resolve_single_country": "Phase 2: canonical resolver (accents, Hebrew, variants), thresholds 0.90 / 0.60",
     "_resolve_ask_data_arg": "Phase 2: month resolved via resolve_month (Hebrew, 'sept'); project/country via the resolver",

@@ -10,6 +10,7 @@ from typing import Optional
 
 import pandas as pd
 
+from services.ask_data.money import to_money
 from services.ask_data.resolver import ProjectIndex
 
 def _safe_int(v, default=0):
@@ -274,7 +275,7 @@ def _build_invoice_answer_df(invoice_rows, projects) -> pd.DataFrame:
             "Project": inv.project_name,
             "Country": project_index.country(inv.project_name) or "",
             "Maint. Year": inv.maintenance_year,
-            "Amount (€)": float(inv.payment_amount),
+            "Amount (€)": to_money(inv.payment_amount),
             "Paid": inv.paid,
             "Payment Date": inv.payment_date.date().isoformat() if inv.payment_date else "",
             "Year": inv.year or "",

@@ -98,6 +98,12 @@ _ASK_DATA_TOOL_SPECS: dict[str, dict[str, tuple[str, bool]]] = {
         "paid_year": ("int", False),
         "needs_update": ("enum:yes,no", False),
     },
+    "debt_by_country": {
+        "year": ("int", False),
+        "category": ("enum:trial,y1,y2plus", False),
+        "country": ("country", False),
+        "compare_country": ("country", False),
+    },
 }
 
 # Per-tool description shown to the LLM alongside its argument list. This is the primary
@@ -187,6 +193,13 @@ _ASK_DATA_TOOL_DESCRIPTIONS: dict[str, str] = {
         "whose EOP is earlier than the payments justify', 'which licenses need their EOP updated', "
         "'expected license EOP'. Set paid_year=1 or 2 (etc.) for 'Year N paid but EOP not updated'; set "
         "needs_update='yes' for 'EOP earlier than justified by payments'. It never changes any date."
+    ),
+    "debt_by_country": (
+        "Outstanding (unpaid) debt broken down by country, from the invoices table. The country amounts "
+        "always add up exactly to the total outstanding; rows that match no project are shown separately as "
+        "'Unassigned'. Use it for 'how much debt do we have by country', 'which country has the most debt' and "
+        "'compare Belgium and Germany debt' (set country and compare_country). For the debt of ONE country or "
+        "project on its own use get_debt/get_outstanding_amount instead."
     ),
 }
 

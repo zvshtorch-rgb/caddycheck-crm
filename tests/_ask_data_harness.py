@@ -20,6 +20,7 @@ import json
 import math
 import sys
 import types
+from decimal import Decimal
 from unittest import mock
 
 import pandas as pd
@@ -28,6 +29,7 @@ from models.invoice import Invoice
 from models.project import Project
 
 FROZEN_TODAY = datetime.date(2026, 10, 20)
+FIXED_LOADED_AT = datetime.datetime(2026, 10, 20, 9, 5, tzinfo=datetime.timezone.utc)   # shown as "Data as of 2026-10-20 09:05 UTC"
 
 
 # --------------------------------------------------------------------------------------------------
@@ -156,6 +158,14 @@ def norm_value(v):
         return None
     if isinstance(v, bool):
         return v
+    if isinstance(v, Decimal):
+        return str(v)
+    if hasattr(v, "summary") and hasattr(v, "display_text"):   # a ToolResult: the random result_id is not part of behaviour
+        summary = dict(v.summary())
+        summary.pop("result_id", None)
+        return norm_value(summary)
+    if v.__class__.__name__ == "ResultStore":
+        return "<ResultStore>"
     if isinstance(v, float):
         return None if math.isnan(v) else v
     if isinstance(v, (int, str)):
@@ -356,7 +366,7 @@ class NewImpl:
     @contextlib.contextmanager
     def env(self, cfg=None, sent_log=None, bank=None, freeze=True):
         m = self.m
-        patches = []
+        patches = [mock.patch.dict("services.ask_data.data_clock._state", {"loaded_at": FIXED_LOADED_AT, "source": "test"})]
         if freeze:
             patches += [
                 mock.patch.object(m.executor, "datetime", FROZEN_DATETIME_MODULE),
@@ -500,6 +510,15 @@ TOOL_CASES: list[tuple[str, str, dict]] = [
     ("get_license_eop_reconciliation/country", "get_license_eop_reconciliation", {"country": "Ger"}),
     ("get_license_eop_reconciliation/empty", "get_license_eop_reconciliation", {"project": "Nope"}),
     ("unknown_tool", "definitely_not_a_tool", {}),
+    # Phase 3: the whitelisted debt_by_country tool
+    ("debt_by_country/overview", "debt_by_country", {}),
+    ("debt_by_country/year", "debt_by_country", {"year": 2026}),
+    ("debt_by_country/category_y1", "debt_by_country", {"category": "y1"}),
+    ("debt_by_country/single_country", "debt_by_country", {"country": "Bel"}),
+    ("debt_by_country/compare", "debt_by_country", {"country": "Bel", "compare_country": "Ger"}),
+    ("debt_by_country/compare_zero_side", "debt_by_country", {"country": "Ger", "compare_country": "Lux"}),
+    ("debt_by_country/same_country_twice", "debt_by_country", {"country": "Bel", "compare_country": "Bel"}),
+    ("debt_by_country/empty", "debt_by_country", {"year": 1999}),
 ]
 
 BANK_CASES: list[tuple[str, dict, dict]] = [
@@ -553,6 +572,9 @@ VALIDATION_CASES: list[tuple[str, object]] = [
     ("unknown_keys_ignored", {"tool": "get_debt", "arguments": {"country": "Bel", "sql": "DROP TABLE invoices", "limit": 5}}),
     ("reconciliation_args", {"tool": "get_license_eop_reconciliation", "arguments": {"paid_year": 2, "needs_update": "Yes"}}),
     ("camera_enums", {"tool": "get_camera_statistics", "arguments": {"camera_type": "topdown", "aggregation": "GROUP_BY_COUNTRY"}}),
+    ("debt_by_country_args", {"tool": "debt_by_country", "arguments": {"country": "belgium", "compare_country": "Germany", "year": "2026", "category": "Y1"}}),
+    ("debt_by_country_hebrew", {"tool": "debt_by_country", "arguments": {"country": "בלגיה", "compare_country": "גרמניה"}}),
+    ("debt_by_country_bad_country", {"tool": "debt_by_country", "arguments": {"country": "Atlantis"}}),
 ]
 
 API_KEY = "TESTKEY-123"
@@ -592,6 +614,8 @@ ROUTER_CASES: list[tuple[str, dict, list, str, object]] = [
     ("tool_exception_falls_back", BASE_CFG, [_gemini_ok('{"tool": "get_projects", "arguments": {"month": "March"}}')], "projects billed in March", None),
     ("no_api_key_goes_straight_to_legacy", {"api_key": "", "model": "m"}, [], "anything", None),
     ("gemini_failure_goes_to_legacy", BASE_CFG, [{"status": 500, "json": {}}, {"status": 500, "json": {}}], "q", None),
+    ("debt_by_country_comparison", BASE_CFG, [_gemini_ok('{"tool": "debt_by_country", "arguments": {"country": "Belgium", "compare_country": "Germany"}}')], "Compare Belgium and Germany debt", None),
+    ("debt_by_country_overview", BASE_CFG, [_gemini_ok('{"tool": "debt_by_country", "arguments": {}}')], "How much debt do we have by country?", None),
 ]
 
 
@@ -708,3 +732,56 @@ def diff_results(a, b, path="") -> list[str]:
     elif a != b:
         diffs.append(f"{path}: {json.dumps(a, default=str)[:160]}  !=  {json.dumps(b, default=str)[:160]}")
     return diffs
+
+
+_EUR = None
+
+
+def _split_amounts(text: str):
+    """(text with every euro amount replaced by a placeholder, [signed Decimal amounts])."""
+    import re
+    global _EUR
+    if _EUR is None:
+        _EUR = re.compile(r"(-?)€(-?)([\d,]+(?:\.\d+)?)")
+    amounts = []
+
+    def repl(match):
+        value = Decimal(match.group(3).replace(",", ""))
+        amounts.append(-value if (match.group(1) or match.group(2)) else value)
+        return "€#"
+
+    return _EUR.sub(repl, text), amounts
+
+
+def equivalent_snapshot(old: dict, new: dict):
+    """(True, reason) when `new` differs from `old` only by Phase 3 presentation: cents on amounts (each within
+    EUR 1 of the old whole-euro figure), appended calculation/scope/freshness/caveat paragraphs, and exact Decimal
+    table cells. Anything else (different wording, different rows, exceptions) is not equivalent."""
+    if "exception" in old or "exception" in new:
+        return False, "exception"
+    headline = new["text"].split("\n\n")[0]
+    old_shape, old_amounts = _split_amounts(old["text"])
+    new_shape, new_amounts = _split_amounts(headline)
+    if old_shape != new_shape or len(old_amounts) != len(new_amounts):
+        return False, "wording changed"
+    if any(abs(a - b) >= 1 for a, b in zip(old_amounts, new_amounts)):
+        return False, "amount changed by EUR 1 or more"
+    odf, ndf = old["df"], new["df"]
+    if odf is None and ndf is None:
+        return True, "headline cents/appended paragraphs only"
+    if odf is None or ndf is None:
+        return False, "table appeared/disappeared"
+    if odf["columns"] != ndf["columns"] or len(odf["records"]) != len(ndf["records"]):
+        return False, "table shape changed"
+    for orow, nrow in zip(odf["records"], ndf["records"]):
+        for column in odf["columns"]:
+            a, b = orow[column], nrow[column]
+            if isinstance(a, (int, float)) and not isinstance(a, bool) and isinstance(b, str):
+                try:
+                    if Decimal(repr(float(a))) != Decimal(b):
+                        return False, f"cell {column} changed"
+                except Exception:
+                    return False, f"cell {column} changed"
+            elif a != b:
+                return False, f"cell {column} changed"
+    return True, "cents/Decimal cells/appended paragraphs only"

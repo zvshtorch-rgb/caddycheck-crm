@@ -77,6 +77,9 @@ def _deployment_diagnostics_snapshot() -> dict:
     return {"commit_sha": commit_sha, "supabase_host": supabase_host, "ad_sint_kruis_brugge_license_eop": raw_eop}
 
 
+from services.ask_data import data_clock  # noqa: E402 - records when the cached CRM data was loaded
+from services.ask_data.money import fmt_eur, sum_money, to_money  # noqa: E402 - exact (Decimal) money for answers
+from services.ask_data.resolver import ProjectIndex  # noqa: E402 - canonical ledger-name -> project matching
 from services.ask_data.helpers import (  # noqa: E402 - shared pure helpers, moved to services/ask_data (Phase 1)
     DETECTION_CAMERA_FIELDS,
     ORDER_STATUS_OPTIONS,
@@ -837,6 +840,7 @@ def load_data():
         project.status = _normalize_project_status(getattr(project, "status", ""))
     debt_summaries = compute_debt_summaries(projects, invoices)
     yearly_summary = get_yearly_summary(invoices)
+    data_clock.mark_loaded(source_name)  # cache-miss only; lets Ask Data show "Data as of <load time>"
     return projects, invoices, debt_summaries, yearly_summary, source_name
 
 
@@ -1181,9 +1185,10 @@ def _answer_data_question(question: str, projects, invoices, debt_summaries) -> 
         if not invoice_rows:
             return f"Invoice {invoice_number} is not in the invoice ledger.", None
 
-        total_amount = sum(float(inv.payment_amount) for inv in invoice_rows)
+        total_amount = sum_money(inv.payment_amount for inv in invoice_rows)
         df = _build_invoice_answer_df(invoice_rows, projects)
-        return f"Invoice {invoice_number} has {len(df)} row(s) totaling €{total_amount:,.0f}.", df
+        return (f"Invoice {invoice_number} has {len(df)} row(s) totaling {fmt_eur(total_amount)}."
+                f"\n\n{data_clock.format_as_of(data_clock.loaded_at())}."), df
 
     if ("sent" in q or "emailed" in q or "email" in q) and ("pdf" in q or "invoice" in q):
         rows = load_sent_invoices_log()
@@ -1258,11 +1263,12 @@ def _answer_data_question(question: str, projects, invoices, debt_summaries) -> 
             debt_rows = [inv for inv in debt_rows if _safe_int(inv.invoice_number, default=0) == invoice_number]
         if year is not None:
             debt_rows = [inv for inv in debt_rows if inv.year == year]
-        if country_names:
-            project_names_in_country = {p.project_name for p in projects if p.country in country_names}
-            debt_rows = [inv for inv in debt_rows if inv.project_name in project_names_in_country]
-        if project_name:
-            debt_rows = [inv for inv in debt_rows if inv.project_name == project_name]
+        if country_names or project_name:
+            project_index = ProjectIndex(projects)
+            if country_names:
+                debt_rows = [inv for inv in debt_rows if project_index.country(inv.project_name) in country_names]
+            if project_name:
+                debt_rows = [inv for inv in debt_rows if project_index.canonical_name(inv.project_name) == project_name]
         if "trial" in q:
             debt_rows = [inv for inv in debt_rows if _is_paid_trial_category(inv)]
         elif "y1" in q or "first year" in q or "new installation" in q:
@@ -1271,9 +1277,10 @@ def _answer_data_question(question: str, projects, invoices, debt_summaries) -> 
             debt_rows = [inv for inv in debt_rows if _is_maintenance_category(inv)]
         if not debt_rows:
             return "No unpaid invoice rows match that question.", None
-        total_amount = sum(float(inv.payment_amount) for inv in debt_rows)
+        total_amount = sum_money(inv.payment_amount for inv in debt_rows)
         df = _build_invoice_answer_df(debt_rows, projects)
-        return f"I found {len(df)} unpaid invoice row(s) totaling €{total_amount:,.0f}.", df
+        return (f"I found {len(df)} unpaid invoice row(s) totaling {fmt_eur(total_amount)}."
+                f"\n\n{data_clock.format_as_of(data_clock.loaded_at())}."), df
 
     if "top" in q and "debt" in q:
         debt_by_project = {}
@@ -1282,8 +1289,7 @@ def _answer_data_question(question: str, projects, invoices, debt_summaries) -> 
                 continue
             if year is not None and inv.year != year:
                 continue
-            debt_by_project.setdefault(inv.project_name, 0.0)
-            debt_by_project[inv.project_name] += float(inv.payment_amount)
+            debt_by_project[inv.project_name] = debt_by_project.get(inv.project_name, to_money(0)) + to_money(inv.payment_amount)
         if not debt_by_project:
             return "No unpaid debt rows match that question.", None
         df = pd.DataFrame([

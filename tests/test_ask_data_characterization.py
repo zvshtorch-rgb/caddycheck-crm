@@ -20,12 +20,13 @@ from pathlib import Path
 
 from tests._ask_data_harness import (
     BANK_CASES, PLANNER_CASES, ROUTER_CASES, TOOL_CASES, VALIDATION_CASES,
-    NewImpl, OracleImpl, run_scenarios,
+    NewImpl, OracleImpl, equivalent_snapshot, run_scenarios,
 )
 
 ROOT = Path(__file__).resolve().parent.parent
 GOLDEN = json.loads((ROOT / "tests" / "golden" / "ask_data_v2_characterization.json").read_text(encoding="utf-8"))
 DELTAS = json.loads((ROOT / "tests" / "golden" / "ask_data_phase2_deltas.json").read_text(encoding="utf-8"))
+DELTAS3 = json.loads((ROOT / "tests" / "golden" / "ask_data_phase3_deltas.json").read_text(encoding="utf-8"))
 PACKAGE = ROOT / "services" / "ask_data"
 
 # Phase 2: the ONLY cases whose behavior differs from the original (Phase 1 golden). Anything else changing fails.
@@ -45,11 +46,15 @@ APPROVED_DELTAS = {
 def _with_deltas(golden: dict, deltas: dict) -> dict:
     merged = json.loads(json.dumps(golden))
     for section, cases in deltas.items():
-        merged[section].update(cases)
+        if isinstance(cases, dict):
+            merged[section].update(cases)
+        else:
+            merged[section] = cases
     return merged
 
 
-EXPECTED = _with_deltas(GOLDEN, DELTAS)
+EXPECTED_PHASE2 = _with_deltas(GOLDEN, DELTAS)
+EXPECTED = _with_deltas(EXPECTED_PHASE2, DELTAS3)          # Phase 1 golden + Phase 2 deltas + Phase 3 deltas
 
 
 class _SectionMixin:
@@ -69,7 +74,7 @@ class TestExtractedModulesMatchOriginal(_SectionMixin, unittest.TestCase):
         cls.observed = run_scenarios(NewImpl())
 
     def test_tool_catalog_text_is_unchanged(self):
-        self.assertEqual(GOLDEN["catalog"], self.observed["catalog"])
+        self.assertEqual(EXPECTED["catalog"], self.observed["catalog"])
 
     def test_every_tool_executes_identically(self):
         self._check_section("tools")
@@ -96,7 +101,7 @@ class TestRefactoredAppWrappersMatchOriginal(_SectionMixin, unittest.TestCase):
         cls.observed = run_scenarios(OracleImpl(source, "refactored-app", delegate=NewImpl()))
 
     def test_catalog(self):
-        self.assertEqual(GOLDEN["catalog"], self.observed["catalog"])
+        self.assertEqual(EXPECTED["catalog"], self.observed["catalog"])
 
     def test_tools(self):
         self._check_section("tools")
@@ -115,11 +120,11 @@ class TestScenarioCoverage(unittest.TestCase):
         self.assertEqual(set(TOOL_SPECS), covered - {"definitely_not_a_tool"})
 
     def test_scenario_counts_match_golden(self):
-        self.assertEqual(len(TOOL_CASES), len(GOLDEN["tools"]))
-        self.assertEqual(len(BANK_CASES), len(GOLDEN["bank"]))
-        self.assertEqual(len(VALIDATION_CASES), len(GOLDEN["validation"]))
-        self.assertEqual(len(PLANNER_CASES), len(GOLDEN["planner"]))
-        self.assertEqual(len(ROUTER_CASES), len(GOLDEN["router"]))
+        self.assertEqual(len(TOOL_CASES), len(EXPECTED["tools"]))
+        self.assertEqual(len(BANK_CASES), len(EXPECTED["bank"]))
+        self.assertEqual(len(VALIDATION_CASES), len(EXPECTED["validation"]))
+        self.assertEqual(len(PLANNER_CASES), len(EXPECTED["planner"]))
+        self.assertEqual(len(ROUTER_CASES), len(EXPECTED["router"]))
 
 
 class TestOnlyApprovedBehaviorChanged(unittest.TestCase):
@@ -131,10 +136,120 @@ class TestOnlyApprovedBehaviorChanged(unittest.TestCase):
         for (section, case) in changed:
             self.assertNotEqual(DELTAS[section][case], GOLDEN[section][case], f"{section}/{case} is not actually a delta")
 
-    def test_planner_prompt_and_tool_catalog_are_unchanged(self):
-        observed = run_scenarios(NewImpl())
-        self.assertEqual(GOLDEN["catalog"], observed["catalog"])
-        self.assertEqual(GOLDEN["planner"], observed["planner"])  # includes the full prompt hash for every request
+NEW_TOOL_BLOCK = (
+    "- debt_by_country(year (optional, int), category (optional, one of: trial,y1,y2plus), "
+    "country (optional, country), compare_country (optional, country))\n"
+    "  Outstanding (unpaid) debt broken down by country, from the invoices table. The country amounts "
+    "always add up exactly to the total outstanding; rows that match no project are shown separately as "
+    "'Unassigned'. Use it for 'how much debt do we have by country', 'which country has the most debt' and "
+    "'compare Belgium and Germany debt' (set country and compare_country). For the debt of ONE country or "
+    "project on its own use get_debt/get_outstanding_amount instead."
+)
+ROWS_ADDED_CASES = {  # outstanding/paid tools now also return the rows behind their figure (Phase 3 item 6)
+    "get_paid_amount/all", "get_paid_amount/country", "get_paid_amount/paid_year", "get_paid_amount/project_fully_paid",
+    "get_paid_amount/project_partial", "get_paid_amount/year", "get_outstanding_amount/all", "get_outstanding_amount/country",
+    "get_outstanding_amount/project", "get_outstanding_amount/year",
+}
+ADDED_CASES = {
+    "tools": {c for c in DELTAS3.get("tools", {}) if c.startswith("debt_by_country/")},
+    "validation": {"debt_by_country_args", "debt_by_country_hebrew", "debt_by_country_bad_country"},
+    "router": {"debt_by_country_comparison", "debt_by_country_overview"},
+}
+
+
+class TestPhase3OnlyApprovedChanges(unittest.TestCase):
+    """Phase 3 changes: Decimal cents, appended calculation/scope/freshness paragraphs, rows for outstanding/paid,
+    the debt_by_country tool (and only that tool in the planner catalog). Everything else must be untouched."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.observed = run_scenarios(NewImpl())
+
+    def test_catalog_gains_exactly_the_debt_by_country_block(self):
+        self.assertEqual(EXPECTED["catalog"], GOLDEN["catalog"] + "\n" + NEW_TOOL_BLOCK)
+        self.assertEqual(self.observed["catalog"], EXPECTED["catalog"])
+
+    def test_prompt_is_otherwise_byte_identical_to_the_pre_phase3_prompt(self):
+        import hashlib
+        from unittest import mock
+        from tests._ask_data_harness import _gemini_ok, _make_post, fake_streamlit
+        checked = 0
+        for case_id, cfg, question, responses in PLANNER_CASES:
+            if not cfg.get("api_key") or not question.strip() or not responses:
+                continue
+            calls = []
+            with fake_streamlit(), NewImpl().env(cfg=cfg), mock.patch("requests.post", _make_post(responses, calls)):
+                NewImpl().parse(question)
+            prompt = calls[0]["body"]["contents"][0]["parts"][0]["text"]
+            self.assertEqual(prompt.count(EXPECTED["catalog"]), 1, case_id)
+            restored = prompt.replace(EXPECTED["catalog"], GOLDEN["catalog"])
+            self.assertEqual(hashlib.sha256(restored.encode("utf-8")).hexdigest(),
+                             GOLDEN["planner"][case_id]["first_request"]["prompt_sha256"], f"{case_id}: prompt changed beyond the catalog")
+            self.assertEqual(calls[0]["body"]["generationConfig"], GOLDEN["planner"][case_id]["first_request"]["generationConfig"])
+            checked += 1
+        self.assertGreaterEqual(checked, 9)
+
+    def test_only_request_making_planner_cases_changed(self):
+        changed = set(DELTAS3.get("planner", {}))
+        expected = {c for c, entry in EXPECTED_PHASE2["planner"].items() if entry["first_request"] is not None}
+        self.assertEqual(changed, expected)
+        for case_id in changed:  # nothing but the fingerprint of the request differs
+            old, new = dict(EXPECTED_PHASE2["planner"][case_id]), dict(DELTAS3["planner"][case_id])
+            old_req, new_req = dict(old.pop("first_request")), dict(new.pop("first_request"))
+            self.assertEqual(old, new, case_id)
+            for key in ("url", "headers", "timeout", "generationConfig"):
+                self.assertEqual(old_req[key], new_req[key], f"{case_id}.{key}")
+
+    def test_changed_tool_cases_differ_only_by_presentation(self):
+        for section in ("tools", "bank"):
+            for case_id, new in DELTAS3.get(section, {}).items():
+                if case_id in ADDED_CASES.get(section, set()):
+                    continue
+                with self.subTest(section=section, case=case_id):
+                    old = EXPECTED_PHASE2[section][case_id]
+                    if case_id in ROWS_ADDED_CASES:
+                        ok, why = equivalent_snapshot({**old, "df": new["df"]}, new)   # same headline, rows table is the addition
+                        self.assertTrue(ok, why)
+                        self.assertIsNone(old["df"])
+                        self.assertIsNotNone(new["df"])
+                    else:
+                        ok, why = equivalent_snapshot(old, new)
+                        self.assertTrue(ok, why)
+
+    def test_new_cases_are_exactly_the_debt_by_country_ones(self):
+        for section, cases in ADDED_CASES.items():
+            self.assertEqual(set(DELTAS3[section]) - set(EXPECTED_PHASE2[section]), cases, section)
+            self.assertTrue(set(cases) <= set(DELTAS3[section]))
+
+    def test_rows_returned_by_outstanding_and_paid_add_up_to_the_headline(self):
+        from decimal import Decimal
+        for case_id in ROWS_ADDED_CASES:
+            new = DELTAS3["tools"][case_id]
+            headline_amount = Decimal(new["text"].split("€")[1].split(" ")[0].replace(",", "").rstrip("."))
+            total = sum((Decimal(row["Amount (€)"]) for row in new["df"]["records"]), Decimal("0"))
+            self.assertEqual(total, headline_amount, case_id)
+
+    def test_changed_router_cases_differ_only_by_presentation_and_new_state_keys(self):
+        allowed_new_keys = {"_ask_data_last_result", "_ask_data_result_store"}
+        for case_id, new in DELTAS3.get("router", {}).items():
+            if case_id in ADDED_CASES["router"]:
+                continue
+            old = EXPECTED_PHASE2["router"][case_id]
+            with self.subTest(case=case_id):
+                old_result = old["result"]
+                if case_id == "outstanding_total":      # get_outstanding_amount now returns its rows (Phase 3 item 6)
+                    self.assertIsNone(old_result["df"])
+                    old_result = {**old_result, "df": new["result"]["df"]}
+                ok, why = equivalent_snapshot(old_result, new["result"])
+                self.assertTrue(ok, why)
+                self.assertEqual(old["legacy_calls"], new["legacy_calls"])
+                self.assertEqual(old["posts"], new["posts"])
+                self.assertTrue(set(new["state"]) - set(old["state"]) <= allowed_new_keys)
+                for key in old["state"]:
+                    self.assertEqual(old["state"][key], new["state"][key], key)
+
+    def test_validation_only_gains_the_new_tool_cases(self):
+        self.assertEqual(set(DELTAS3.get("validation", {})), ADDED_CASES["validation"])
 
 
 class TestPackageIsReadOnly(unittest.TestCase):

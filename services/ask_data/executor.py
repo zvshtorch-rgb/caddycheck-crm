@@ -17,7 +17,11 @@ from typing import Optional
 import pandas as pd
 
 from config.settings import MONTH_ORDER, load_sent_invoices_log
+from services.ask_data import data_clock
+from services.ask_data.breakdown import UNASSIGNED_LABEL, debt_by_country
+from services.ask_data.money import ZERO, fmt_eur, fmt_percent, percent, sum_money, to_money
 from services.ask_data.resolver import ProjectIndex
+from services.ask_data.tool_result import Component, ToolResult, new_result_id
 from services.excel_service import get_projects_for_month
 from services.ask_data.helpers import (
     _build_invoice_answer_df,
@@ -26,6 +30,7 @@ from services.ask_data.helpers import (
     _is_new_installation_category,
     _is_paid_trial_category,
     _license_status,
+    _normalize_country,
     _normalize_project_status,
     _project_detection_counts,
     _project_license_date,
@@ -129,15 +134,15 @@ def _annual_license_payment_row(project, eop, invoices, today: datetime.date) ->
         inv for inv in invoices
         if _safe_str(inv.project_name).lower().strip() == key and not inv.is_cancelled()
     ]
-    hist_invoiced = sum(float(inv.payment_amount) for inv in active_rows)
-    hist_paid = sum(float(inv.payment_amount) for inv in active_rows if inv.is_paid())
-    hist_outstanding = sum(float(inv.payment_amount) for inv in active_rows if inv.is_unpaid())
+    hist_invoiced = sum_money(inv.payment_amount for inv in active_rows)
+    hist_paid = sum_money(inv.payment_amount for inv in active_rows if inv.is_paid())
+    hist_outstanding = sum_money(inv.payment_amount for inv in active_rows if inv.is_unpaid())
 
     annual_month = _annual_payment_month(project)
     target_year = _latest_annual_invoice_year(annual_month, today)
 
     invoice_number, period_text = "", ""
-    invoice_amount, outstanding = 0.0, 0.0
+    invoice_amount, outstanding = ZERO, ZERO
     paid_flag = "N/A"
 
     if target_year is None:
@@ -152,8 +157,8 @@ def _annual_license_payment_row(project, eop, invoices, today: datetime.date) ->
         if not period_rows:
             status = "No Annual Invoice Found"
         else:
-            invoice_amount = sum(float(inv.payment_amount) for inv in period_rows)
-            outstanding = sum(float(inv.payment_amount) for inv in period_rows if inv.is_unpaid())
+            invoice_amount = sum_money(inv.payment_amount for inv in period_rows)
+            outstanding = sum_money(inv.payment_amount for inv in period_rows if inv.is_unpaid())
             invoice_number = ", ".join(
                 str(n) for n in sorted({_safe_int(inv.invoice_number, default=0) for inv in period_rows if inv.invoice_number})
             )
@@ -177,13 +182,170 @@ def _annual_license_payment_row(project, eop, invoices, today: datetime.date) ->
     }
 
 
+def _charges_and_credits(rows, noun: str):
+    """(calculation text, components, warnings) for a sum of ledger rows; unpaid credits are netted and called out."""
+    total = sum_money(inv.payment_amount for inv in rows)
+    credits = [inv for inv in rows if to_money(inv.payment_amount) < 0]
+    if not credits:
+        return (f"sum of {len(rows)} {noun} row(s) = {fmt_eur(total)}",
+                [Component("Total", total, len(rows), tuple(rows))], [])
+    charges = [inv for inv in rows if to_money(inv.payment_amount) >= 0]
+    charges_total = sum_money(inv.payment_amount for inv in charges)
+    credits_total = sum_money(inv.payment_amount for inv in credits)
+    if not charges:
+        return (f"{len(credits)} credit row(s) = {fmt_eur(total)}",
+                [Component("Credits", credits_total, len(credits), tuple(credits))], [])
+    calc = (f"{fmt_eur(charges_total)} charges ({len(charges)} row(s)) − {fmt_eur(abs(credits_total))} "
+            f"credits ({len(credits)} row(s)) = {fmt_eur(total)}")
+    return (calc,
+            [Component("Charges", charges_total, len(charges), tuple(charges)),
+             Component("Credits", credits_total, len(credits), tuple(credits))],
+            [f"{len(credits)} credit row(s) totalling {fmt_eur(credits_total)} are netted against the charges."])
+
+
+def _financial_result(tool_name: str, args: dict, projects, text: str, rows, *, noun: str = "invoice",
+                      value=None, calculation=None, components=None, warnings=None, dataframe=None, derived=None) -> ToolResult:
+    """Build a financial ToolResult whose value/calculation come from the retained ledger rows (all Decimal)."""
+    rows = list(rows)
+    if value is None:
+        value = sum_money(inv.payment_amount for inv in rows)
+    if calculation is None and components is None:
+        calculation, components, extra = _charges_and_credits(rows, noun)
+        warnings = list(warnings or []) + extra
+    if dataframe is None and rows:
+        dataframe = _build_invoice_answer_df(rows, projects)
+    return ToolResult(
+        tool=tool_name, text=text, dataframe=dataframe, financial=True, value=value, row_count=len(rows), rows=rows,
+        components=list(components or []), calculation=calculation, derived_amounts=list(derived or []),
+        warnings=list(warnings or []), frame_builder=lambda r: _build_invoice_answer_df(r, projects),
+    )
+
+
+def _country_label(code: str) -> str:
+    full = _normalize_country(code)
+    return code if full == code else f"{full} ({code})"
+
+
+def _debt_by_country_result(tool_name: str, args: dict, projects, invoices) -> ToolResult:
+    """Outstanding debt per country. Country buckets + 'Unassigned' always add up exactly to the total."""
+    category = args.get("category")
+
+    def predicate(inv):
+        if not inv.is_unpaid():
+            return False
+        if category == "trial":
+            return _is_paid_trial_category(inv)
+        if category == "y1":
+            return _is_new_installation_category(inv)
+        if category == "y2plus":
+            return _is_maintenance_category(inv)
+        return True
+
+    bd = debt_by_country(invoices, projects, row_filter=predicate, year=args.get("year"))
+    total = bd.total
+    ranked = sorted(bd.countries, key=lambda b: (-b.amount, b.label))
+    buckets = ranked + [b for b in (bd.no_country, bd.unassigned) if b.rows]
+    all_rows = [r for b in buckets for r in b.rows]
+    by_code = {b.label: b for b in ranked}
+
+    def share(bucket):
+        return percent(bucket.amount, total)
+
+    warnings = []
+    if bd.unassigned.rows:
+        names = ", ".join(bd.unassigned_names()[:5])
+        warnings.append(f"{bd.unassigned.row_count} unpaid row(s) totalling {fmt_eur(bd.unassigned.amount)} match no project and "
+                        f"are shown as '{UNASSIGNED_LABEL}' ({names}).")
+    if bd.no_country.rows:
+        warnings.append(f"{bd.no_country.row_count} unpaid row(s) totalling {fmt_eur(bd.no_country.amount)} belong to projects "
+                        f"with no country set and are shown as '{bd.no_country.label}'.")
+
+    records = [{"Country": _country_label(b.label) if index < len(ranked) else b.label, "Rows": b.row_count,
+                "Amount (€)": b.amount, "Share of total (%)": share(b)} for index, b in enumerate(buckets)]
+    records.append({"Country": "Total", "Rows": bd.row_count, "Amount (€)": total, "Share of total (%)": percent(total, total)})
+    frame = pd.DataFrame(records)
+    components = [Component(b.label, b.amount, b.row_count, tuple(b.rows)) for b in buckets]
+    parts_calc = " + ".join(f"{b.label} {fmt_eur(b.amount)}" for b in buckets)
+
+    if not all_rows:
+        return ToolResult(
+            tool=tool_name, financial=True, value=ZERO, text="There is no outstanding debt for the selected filters.",
+            calculation=f"no unpaid rows = {fmt_eur(ZERO)}", warnings=warnings,
+        )
+
+    country_a, country_b = args.get("country"), args.get("compare_country")
+    if country_a and country_b and country_a != country_b:
+        a = by_code[country_a].amount if country_a in by_code else ZERO
+        b = by_code[country_b].amount if country_b in by_code else ZERO
+        other = total - a - b
+        other_rows = [r for bucket in buckets if bucket.label not in (country_a, country_b) for r in bucket.rows]
+        label_a, label_b = _country_label(country_a), _country_label(country_b)
+        diff = abs(a - b)
+        if a == b:
+            text = f"{label_a} and {label_b} have the same outstanding debt: {fmt_eur(a)} each."
+        else:
+            (high_label, high), (low_label, low) = sorted(((label_a, a), (label_b, b)), key=lambda t: -t[1])
+            pct_txt = fmt_percent(percent(diff, low)) if low > 0 else None
+            text = (f"{label_a} has {fmt_eur(a)} and {label_b} has {fmt_eur(b)} of outstanding debt; {high_label} has {fmt_eur(diff)} more"
+                    + (f" ({pct_txt} higher)." if pct_txt else f" ({low_label} has none)."))
+        components = [
+            Component(country_a, a, by_code[country_a].row_count if country_a in by_code else 0,
+                      tuple(by_code[country_a].rows) if country_a in by_code else ()),
+            Component(country_b, b, by_code[country_b].row_count if country_b in by_code else 0,
+                      tuple(by_code[country_b].rows) if country_b in by_code else ()),
+            Component("All other countries and unassigned", other, len(other_rows), tuple(other_rows)),
+        ]
+        calculation = f"{country_a} {fmt_eur(a)} + {country_b} {fmt_eur(b)} + other {fmt_eur(other)} = total {fmt_eur(total)}"
+        return _financial_result(tool_name, args, projects, text, all_rows, value=total, calculation=calculation,
+                                 components=components, warnings=warnings, dataframe=frame, derived=[diff, other])
+
+    if country_a:
+        bucket = by_code.get(country_a)
+        amount = bucket.amount if bucket else ZERO
+        count = bucket.row_count if bucket else 0
+        pct_txt = fmt_percent(percent(amount, total))
+        text = (f"{_country_label(country_a)} has {fmt_eur(amount)} of outstanding debt ({pct_txt} of the {fmt_eur(total)} total) "
+                f"across {count} row(s).")
+    else:
+        text = f"Total outstanding debt is {fmt_eur(total)} across {bd.row_count} unpaid row(s)."
+        if ranked:
+            top = ranked[0]
+            text += f" {_country_label(top.label)} has the most: {fmt_eur(top.amount)} ({fmt_percent(share(top))} of the total)."
+    return _financial_result(tool_name, args, projects, text, all_rows, value=total,
+                             calculation=f"{parts_calc} = {fmt_eur(total)}", components=components, warnings=warnings, dataframe=frame)
+
+
 def _execute_ask_data_tool(
     tool_name: str, args: dict, projects, invoices, debt_summaries, *, next_invoice_number=None
 ) -> tuple[str, Optional[pd.DataFrame]]:
+    """Backward-compatible tuple form: (display text, table). Prefer `execute_tool`, which returns the ToolResult."""
+    result = execute_tool(tool_name, args, projects, invoices, debt_summaries, next_invoice_number=next_invoice_number)
+    return result.display_text(), result.dataframe
+
+
+def execute_tool(
+    tool_name: str, args: dict, projects, invoices, debt_summaries, *, next_invoice_number=None
+) -> ToolResult:
+    """Execute one validated, read-only tool call and return its ToolResult (value, rows, calculation, filters,
+    data timestamp, caveats, result_id). Everything is computed here from the loaded CRM data."""
+    outcome = _dispatch_tool(tool_name, args, projects, invoices, debt_summaries, next_invoice_number=next_invoice_number)
+    result = outcome if isinstance(outcome, ToolResult) else ToolResult(tool=tool_name, text=outcome[0], dataframe=outcome[1])
+    result.filters = {k: v for k, v in args.items() if v is not None}
+    result.result_id = result.result_id or new_result_id()
+    if result.financial:
+        result.data_as_of = data_clock.loaded_at()
+        if result.data_as_of is None:
+            result.warnings.append("The data load time is unknown, so no freshness timestamp can be shown.")
+    return result
+
+
+def _dispatch_tool(
+    tool_name: str, args: dict, projects, invoices, debt_summaries, *, next_invoice_number=None
+):
     """
     Execute one validated, read-only tool call against the already-loaded
     CRM data. All numbers are computed here in plain Python — the LLM never
-    sees or calculates any of this.
+    sees or calculates any of this. Returns a ToolResult (financial tools) or a (text, table) pair.
     """
     if tool_name == "get_invoice":
         invoice_number = args["invoice_number"]
@@ -192,16 +354,16 @@ def _execute_ask_data_tool(
             rows = [inv for inv in rows if inv.year == args["year"]]
         if not rows:
             return f"Invoice {invoice_number} is not in the invoice ledger.", None
-        total = sum(float(inv.payment_amount) for inv in rows)
+        total = sum_money(inv.payment_amount for inv in rows)
         if len(rows) == 1:
             paid_txt = "Cancelled" if rows[0].is_cancelled() else ("Paid" if rows[0].is_paid() else "Unpaid")
-            summary = f"Invoice {invoice_number} totals €{total:,.0f} and is {paid_txt}."
+            summary = f"Invoice {invoice_number} totals {fmt_eur(total)} and is {paid_txt}."
         else:
             summary = (
-                f"Invoice {invoice_number} has {len(rows)} row(s) totaling €{total:,.0f}; "
+                f"Invoice {invoice_number} has {len(rows)} row(s) totaling {fmt_eur(total)}; "
                 "see the Paid column below for each row's status."
             )
-        return summary, _build_invoice_answer_df(rows, projects)
+        return _financial_result(tool_name, args, projects, summary, rows)
 
     if tool_name in ("get_invoices", "get_unpaid_invoices"):
         rows = list(invoices)
@@ -231,9 +393,9 @@ def _execute_ask_data_tool(
             rows = [inv for inv in rows if _is_maintenance_category(inv)]
         if not rows:
             return "No invoices match that question.", None
-        total = sum(float(inv.payment_amount) for inv in rows)
+        total = sum_money(inv.payment_amount for inv in rows)
         label = "unpaid invoice" if tool_name == "get_unpaid_invoices" else "invoice"
-        return f"Found {len(rows)} {label} row(s) totaling €{total:,.0f}.", _build_invoice_answer_df(rows, projects)
+        return _financial_result(tool_name, args, projects, f"Found {len(rows)} {label} row(s) totaling {fmt_eur(total)}.", rows, noun=label)
 
     if tool_name == "get_project":
         project = next((p for p in projects if p.project_name == args["project"]), None)
@@ -283,25 +445,28 @@ def _execute_ask_data_tool(
         rows = _filter_invoices_for_debt_tools(invoices, projects, args, lambda inv: inv.is_unpaid())
         if not rows:
             return "No unpaid invoice rows match that question.", None
-        total = sum(float(inv.payment_amount) for inv in rows)
-        return f"I found {len(rows)} unpaid invoice row(s) totaling €{total:,.0f}.", _build_invoice_answer_df(rows, projects)
+        total = sum_money(inv.payment_amount for inv in rows)
+        return _financial_result(
+            tool_name, args, projects, f"I found {len(rows)} unpaid invoice row(s) totaling {fmt_eur(total)}.", rows, noun="unpaid invoice")
 
     if tool_name == "get_outstanding_amount":
         rows = _filter_invoices_for_debt_tools(invoices, projects, args, lambda inv: inv.is_unpaid())
-        total = sum(float(inv.payment_amount) for inv in rows)
+        total = sum_money(inv.payment_amount for inv in rows)
         subject = args.get("project") or args.get("country") or "the selected filters"
-        return f"Outstanding (unpaid) amount for {subject} is €{total:,.0f} across {len(rows)} invoice row(s).", None
+        return _financial_result(
+            tool_name, args, projects,
+            f"Outstanding (unpaid) amount for {subject} is {fmt_eur(total)} across {len(rows)} invoice row(s).", rows, noun="unpaid invoice")
 
     if tool_name == "get_paid_amount":
         rows = _filter_invoices_for_debt_tools(invoices, projects, args, lambda inv: inv.is_paid())
-        total = sum(float(inv.payment_amount) for inv in rows)
+        total = sum_money(inv.payment_amount for inv in rows)
         subject = args.get("project") or args.get("country") or "the selected filters"
         # Also report the outstanding balance so "is X fully paid?" can never be answered with
         # just a paid-amount figure that silently omits money still owed (paid_year is dropped
         # here since it's a payment-date filter and unpaid invoices have no payment_date).
         outstanding_args = {k: v for k, v in args.items() if k != "paid_year"}
         outstanding_rows = _filter_invoices_for_debt_tools(invoices, projects, outstanding_args, lambda inv: inv.is_unpaid())
-        outstanding_total = sum(float(inv.payment_amount) for inv in outstanding_rows)
+        outstanding_total = sum_money(inv.payment_amount for inv in outstanding_rows)
         if not rows and not outstanding_rows:
             # Zero paid AND zero unpaid rows means no matching invoices exist at all — never
             # claim "fully paid" for a scope with no invoices to be paid in the first place.
@@ -310,27 +475,42 @@ def _execute_ask_data_tool(
             status_txt = " No outstanding balance remains — fully paid."
         else:
             status_txt = (
-                f" €{outstanding_total:,.0f} across {len(outstanding_rows)} invoice row(s) is still "
+                f" {fmt_eur(outstanding_total)} across {len(outstanding_rows)} invoice row(s) is still "
                 "outstanding — NOT fully paid."
             )
-        return f"Paid amount for {subject} is €{total:,.0f} across {len(rows)} invoice row(s).{status_txt}", None
+        components = [
+            Component("Paid", total, len(rows), tuple(rows)),
+            Component("Still outstanding", outstanding_total, len(outstanding_rows), tuple(outstanding_rows)),
+        ]
+        calculation = (f"{fmt_eur(total)} paid ({len(rows)} row(s)); {fmt_eur(outstanding_total)} still outstanding "
+                       f"({len(outstanding_rows)} row(s))")
+        return _financial_result(
+            tool_name, args, projects,
+            f"Paid amount for {subject} is {fmt_eur(total)} across {len(rows)} invoice row(s).{status_txt}", rows,
+            value=total, calculation=calculation, components=components)
 
     if tool_name == "get_top_debt_projects":
         year = args.get("year")
         limit = max(1, args.get("limit") or 10)
-        debt_by_project: dict[str, float] = {}
+        rows_by_project: dict[str, list] = {}
         for inv in invoices:
             if not inv.is_unpaid():
                 continue
             if year is not None and inv.year != year:
                 continue
-            debt_by_project.setdefault(inv.project_name, 0.0)
-            debt_by_project[inv.project_name] += float(inv.payment_amount)
-        if not debt_by_project:
+            rows_by_project.setdefault(inv.project_name, []).append(inv)
+        if not rows_by_project:
             return "No unpaid debt rows match that question.", None
+        debt_by_project = {name: sum_money(r.payment_amount for r in rs) for name, rs in rows_by_project.items()}
         top = sorted(debt_by_project.items(), key=lambda item: item[1], reverse=True)[:limit]
         df = pd.DataFrame([{"Project": name, "Debt (€)": amount} for name, amount in top])
-        return f"Here are the top {len(top)} debt project(s).", df
+        components = [Component(name, amount, len(rows_by_project[name]), tuple(rows_by_project[name])) for name, amount in top]
+        shown_rows = [r for name, _amount in top for r in rows_by_project[name]]
+        shown_total = sum_money(amount for _name, amount in top)
+        return _financial_result(
+            tool_name, args, projects, f"Here are the top {len(top)} debt project(s).", shown_rows, value=shown_total,
+            calculation=f"unpaid rows summed per project; the {len(top)} project(s) shown total {fmt_eur(shown_total)}",
+            components=components, dataframe=df)
 
     if tool_name == "get_sent_invoices":
         rows = load_sent_invoices_log()
@@ -403,24 +583,41 @@ def _execute_ask_data_tool(
             allocations = _allocations_for(last_payment)
 
         date_txt = _safe_str(last_payment.get("payment_date")) or "unknown date"
+        bank_caveat = "The bank-payment log may be incomplete; it is an event log, not the authoritative paid/unpaid status."
         if allocations:
-            df = pd.DataFrame([
-                {
-                    "Invoice #": a.get("invoice_number"),
-                    "Project": a.get("project_name"),
-                    "Maint. Year": a.get("maintenance_year"),
-                    "Amount (€)": a.get("amount_applied"),
-                    "Year": a.get("year"),
-                }
-                for a in allocations
-            ])
-            total = sum(_safe_float(a.get("amount_applied")) for a in allocations)
-            return f"Last bank payment ({date_txt}) covered {len(df)} invoice line(s) totaling €{total:,.0f}.", df
+            def _allocation_frame(items):
+                return pd.DataFrame([
+                    {
+                        "Invoice #": a.get("invoice_number"),
+                        "Project": a.get("project_name"),
+                        "Maint. Year": a.get("maintenance_year"),
+                        "Amount (€)": to_money(a.get("amount_applied")),
+                        "Year": a.get("year"),
+                    }
+                    for a in items
+                ])
 
-        total = _safe_float(last_payment.get("applied_amount")) or _safe_float(last_payment.get("received_amount"))
+            df = _allocation_frame(allocations)
+            total = sum_money(a.get("amount_applied") for a in allocations)
+            result = ToolResult(
+                tool=tool_name, financial=True, value=total, dataframe=df, row_count=len(allocations), rows=list(allocations),
+                text=f"Last bank payment ({date_txt}) covered {len(df)} invoice line(s) totaling {fmt_eur(total)}.",
+                calculation=f"sum of {len(allocations)} allocation line(s) = {fmt_eur(total)}",
+                components=[Component("Allocations", total, len(allocations), tuple(allocations))],
+                warnings=[bank_caveat], frame_builder=_allocation_frame,
+            )
+            return result
+
+        applied = to_money(last_payment.get("applied_amount"))
+        total = applied if applied != 0 else to_money(last_payment.get("received_amount"))
         inv_no = last_payment.get("invoice_number")
         subject = f"invoice #{inv_no}" if inv_no else (last_payment.get("source_name") or "an invoice")
-        return f"Last bank payment ({date_txt}): {subject}, €{total:,.0f}.", None
+        return ToolResult(
+            tool=tool_name, financial=True, value=total,
+            text=f"Last bank payment ({date_txt}): {subject}, {fmt_eur(total)}.",
+            calculation=f"recorded payment amount (no invoice allocations are logged for it) = {fmt_eur(total)}",
+            warnings=[bank_caveat],
+        )
 
     if tool_name == "get_licenses":
         entries = _filter_license_entries(projects, args)
@@ -453,7 +650,10 @@ def _execute_ask_data_tool(
         for row in rows:
             status_counts[row["Annual Payment Status"]] = status_counts.get(row["Annual Payment Status"], 0) + 1
         summary = ", ".join(f"{count} {status}" for status, count in status_counts.items())
-        return f"Found {len(rows)} project(s) with latest annual payment status ({summary}).", df
+        return ToolResult(
+            tool=tool_name, financial=True, dataframe=df, row_count=len(rows),
+            text=f"Found {len(rows)} project(s) with latest annual payment status ({summary}).",
+        )
 
     if tool_name == "get_license_eop_reconciliation":
         all_rows = build_license_reconciliation(projects, invoices, _normalize_project_status)
@@ -534,8 +734,7 @@ def _execute_ask_data_tool(
             return f"Average {metric_label} cameras per {status_scope}project is {avg:.1f} (across {len(rows)} project(s)).", None
         return f"There are {total} {metric_label} camera(s) across {len(rows)} {status_scope}project(s){country_txt}.", None
 
+    if tool_name == "debt_by_country":
+        return _debt_by_country_result(tool_name, args, projects, invoices)
+
     return "I could not execute that tool.", None
-
-
-# Public aliases for later phases.
-execute_tool = _execute_ask_data_tool

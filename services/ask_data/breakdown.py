@@ -13,6 +13,7 @@ from typing import Callable, Optional
 
 import pandas as pd
 
+from services.ask_data.money import to_money
 from services.ask_data.resolver import ProjectIndex
 
 UNASSIGNED_LABEL = "Unassigned (no matching project)"
@@ -20,7 +21,7 @@ NO_COUNTRY_LABEL = "(country not set)"
 
 
 def _dec(value) -> Decimal:
-    return Decimal(str(value if value is not None else 0))
+    return to_money(value)
 
 
 @dataclass
@@ -56,8 +57,8 @@ class DebtBreakdown:
         return sorted({getattr(r, "project_name", "") for r in self.unassigned.rows})
 
     def to_dataframe(self) -> pd.DataFrame:
-        records = [{"Country": b.label, "Rows": b.row_count, "Amount (€)": float(b.amount)} for b in self.buckets]
-        records.append({"Country": "Total", "Rows": self.row_count, "Amount (€)": float(self.total)})
+        records = [{"Country": b.label, "Rows": b.row_count, "Amount (€)": b.amount} for b in self.buckets]
+        records.append({"Country": "Total", "Rows": self.row_count, "Amount (€)": self.total})
         return pd.DataFrame(records)
 
 
