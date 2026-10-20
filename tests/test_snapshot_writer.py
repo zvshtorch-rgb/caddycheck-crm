@@ -36,8 +36,10 @@ def make_projects():
 class TestBuildSnapshotRows(unittest.TestCase):
     """Pure function: no I/O, directly testable."""
 
+    CAPTURED_AT = "2026-10-20T20:00:00+00:00"
+
     def test_one_row_per_saved_invoice_with_resolved_country_and_network(self):
-        rows = build_snapshot_rows(make_invoices(), make_projects())
+        rows = build_snapshot_rows(make_invoices(), make_projects(), self.CAPTURED_AT)
         self.assertEqual(len(rows), 2)  # the unsaved draft (db_id=None) is skipped
         by_id = {r["invoice_row_id"]: r for r in rows}
         self.assertEqual(by_id[1]["country_at_capture"], "Belgium")
@@ -47,10 +49,15 @@ class TestBuildSnapshotRows(unittest.TestCase):
         self.assertEqual(by_id[2]["paid"], "Yes")
         self.assertEqual(by_id[2]["payment_date"], "2026-10-10")
 
+    def test_every_row_gets_the_same_explicit_captured_at(self):
+        rows = build_snapshot_rows(make_invoices(), make_projects(), self.CAPTURED_AT)
+        self.assertTrue(rows)
+        self.assertEqual({r["captured_at"] for r in rows}, {self.CAPTURED_AT})
+
     def test_never_mutates_the_input_objects(self):
         invoices = make_invoices()
         before = [(i.payment_amount, i.paid, i.project_name) for i in invoices]
-        build_snapshot_rows(invoices, make_projects())
+        build_snapshot_rows(invoices, make_projects(), self.CAPTURED_AT)
         after = [(i.payment_amount, i.paid, i.project_name) for i in invoices]
         self.assertEqual(before, after)
 
@@ -104,6 +111,29 @@ class TestSnapshotWriterIdempotency(unittest.TestCase):
         self._run()
         self.assertGreater(self.store.write_calls, first_write_calls)   # it DID write again (reran)...
         self.assertEqual(len(self.store.snapshot_rows), 2)              # ...but row count never duplicated
+
+    def test_rerun_refreshes_captured_at_on_every_row_identically(self):
+        """Regression test for the idempotency defect found in production Step 3 verification: a same-day
+        rerun must overwrite captured_at on every existing row with the new run's timestamp, never leave
+        the original value in place."""
+        self._run()
+        first_captured = {row["captured_at"] for row in self.store.snapshot_rows.values()}
+        self.assertEqual(len(first_captured), 1)   # single run -> single shared timestamp
+        first_value = next(iter(first_captured))
+
+        self._run()   # same day, rerun
+        second_captured = {row["captured_at"] for row in self.store.snapshot_rows.values()}
+        self.assertEqual(len(second_captured), 1)                      # still a single shared timestamp...
+        second_value = next(iter(second_captured))
+        self.assertNotEqual(second_value, first_value)                  # ...but refreshed, not left stale
+        self.assertGreater(second_value, first_value)                   # and strictly newer
+
+        # Everything else about the rerun stays exactly as before: no duplicates, same snapshot_date,
+        # unchanged row count, unchanged financial totals.
+        self.assertEqual(len(self.store.snapshot_rows), 2)
+        self.assertEqual({k[0] for k in self.store.snapshot_rows}, {self.day.isoformat()})
+        total = sum(row["payment_amount"] for row in self.store.snapshot_rows.values() if row["paid"] == "No")
+        self.assertEqual(total, 500.0)   # only invoice 100 is unpaid in this fixture; unchanged by the rerun
 
     def test_rerun_after_a_ledger_change_reflects_the_latest_state(self):
         self._run()
