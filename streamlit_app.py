@@ -1518,6 +1518,8 @@ def _ask_data_shadow_v3_summary(question: str, projects, invoices, debt_summarie
             return ShadowSummary.from_tool_result(outcome.result, outcome_kind=outcome.kind)
         if outcome.kind == "legacy":
             return ShadowSummary.from_legacy(outcome.dataframe)
+        if outcome.kind == "historical_unsupported":
+            return ShadowSummary.from_historical_unsupported()
         return ShadowSummary.from_error()
     except Exception:
         return ShadowSummary.from_error()
@@ -3963,6 +3965,8 @@ elif page == "❓ Ask Data":
                     v3_summary = ShadowSummary.from_tool_result(outcome.result, outcome_kind=outcome.kind)
                 elif outcome.kind == "legacy":
                     v3_summary = ShadowSummary.from_legacy(outcome.dataframe)
+                elif outcome.kind == "historical_unsupported":
+                    v3_summary = ShadowSummary.from_historical_unsupported()
                 else:
                     v3_summary = ShadowSummary.from_error()
                 v2_summary = _ask_data_shadow_v2_summary(text, projects, invoices, debt_summaries)

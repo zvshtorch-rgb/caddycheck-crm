@@ -95,6 +95,12 @@ class ShadowSummary:
                    row_set_hash=_row_set_hash(dataframe))
 
     @classmethod
+    def from_historical_unsupported(cls) -> "ShadowSummary":
+        """A deliberately declined historical/change-over-time question (no Phase 5 history source yet) --
+        distinct from from_error() so the shadow log can tell "intentionally declined" apart from a bug."""
+        return cls(outcome_kind="historical_unsupported")
+
+    @classmethod
     def from_error(cls) -> "ShadowSummary":
         return cls(outcome_kind="error")
 

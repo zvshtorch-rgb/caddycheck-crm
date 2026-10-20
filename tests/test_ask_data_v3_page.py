@@ -149,6 +149,24 @@ class TestAskDataV3Page(unittest.TestCase):
         self.assertEqual([r for r, _ in roles_and_texts], ["user", "assistant", "user", "assistant"])
         self.assertIn("19,999.00", roles_and_texts[3][1])
 
+    def test_a_historical_question_gets_the_limitation_text_with_no_drilldown_buttons(self):
+        """Regression test for the production bug: "What changed since September 1?" must never reach
+        Gemini/an unrelated tool, and must never offer "Show invoices"/"Show breakdown" (goal 4).
+
+        One Gemini response is still queued: the editor-pilot shadow comparison runs v2 (which has no
+        historical-question guard) on the same text in the background for comparison -- that is a deliberate,
+        separate feature (see test_ask_data_shadow.py), not v3 itself calling the model."""
+        shadow_v2_payload = '{"tool": "get_license_payment_status", "arguments": {}}'
+        app = self._select_v3(self.open_page(v3_enabled=True, gemini_responses=[_gemini_ok(shadow_v2_payload)]))
+        app.chat_input[0].set_value("What changed since September 1?").run()
+        self.assertFalse(app.exception, [e.value for e in app.exception])
+        roles_and_texts = self.chat_texts(app)
+        self.assertEqual([r for r, _ in roles_and_texts], ["user", "assistant"])
+        self.assertIn("I don't yet have a complete historical snapshot", roles_and_texts[1][1])
+        self.assertFalse(any(b.label == "📄 Show invoices" for b in app.button))
+        self.assertFalse(any(b.label == "📊 Show breakdown" for b in app.button))
+        self.assertEqual(len(self.posts), 1, "only the background v2 shadow comparison may call Gemini, never v3 itself")
+
     def test_show_invoices_button_drills_down_without_calling_gemini_again(self):
         payload = '{"tool": "get_debt", "arguments": {"country": "Belgium"}}'
         app = self._select_v3(self.open_page(v3_enabled=True, gemini_responses=[_gemini_ok(payload), _gemini_ok(payload)]))
