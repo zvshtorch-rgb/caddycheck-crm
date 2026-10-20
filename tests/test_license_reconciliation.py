@@ -163,8 +163,11 @@ class TestBuildAndFilter(unittest.TestCase):
 
 class TestToolRegistration(unittest.TestCase):
     def test_tool_registered_and_read_only(self):
-        src = (Path(__file__).resolve().parent.parent / "streamlit_app.py").read_text(encoding="utf-8")
-        self.assertIn('"get_license_eop_reconciliation": {', src)
+        # The Ask Data v2 code lives in services/ask_data (extracted from streamlit_app.py in Phase 1).
+        root = Path(__file__).resolve().parent.parent
+        specs_src = (root / "services" / "ask_data" / "tool_specs.py").read_text(encoding="utf-8")
+        src = (root / "services" / "ask_data" / "executor.py").read_text(encoding="utf-8")
+        self.assertIn('"get_license_eop_reconciliation": {', specs_src)
         self.assertIn('if tool_name == "get_license_eop_reconciliation":', src)
         self.assertIn("build_license_reconciliation", src)
         branch = src.split('if tool_name == "get_license_eop_reconciliation":', 1)[1].split('if tool_name == "get_camera_statistics":', 1)[0]
