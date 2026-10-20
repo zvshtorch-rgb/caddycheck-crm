@@ -1,0 +1,511 @@
+{
+ "router": {
+  "tool_call_success": {
+   "legacy_calls": [],
+   "posts": 1,
+   "result": {
+    "df": {
+     "columns": [
+      "Invoice #",
+      "Project",
+      "Country",
+      "Maint. Year",
+      "Amount (€)",
+      "Paid",
+      "Payment Date",
+      "Year"
+     ],
+     "records": [
+      {
+       "Amount (€)": 7780.0,
+       "Country": "Bel",
+       "Invoice #": "8001",
+       "Maint. Year": "Y1",
+       "Paid": "No",
+       "Payment Date": "",
+       "Project": "AD Alpha",
+       "Year": 2026
+      },
+      {
+       "Amount (€)": 1140.0,
+       "Country": "Bel",
+       "Invoice #": "8004",
+       "Maint. Year": "Y2",
+       "Paid": "No",
+       "Payment Date": "",
+       "Project": "CM Gamma",
+       "Year": 2025
+      },
+      {
+       "Amount (€)": 4668.0,
+       "Country": "Bel",
+       "Invoice #": "8008",
+       "Maint. Year": "Y1",
+       "Paid": "No",
+       "Payment Date": "",
+       "Project": "Intermarche Heusy",
+       "Year": 2026
+      },
+      {
+       "Amount (€)": 3112.0,
+       "Country": "Bel",
+       "Invoice #": "8009",
+       "Maint. Year": "Y1",
+       "Paid": "No",
+       "Payment Date": "",
+       "Project": "intermarche heusy",
+       "Year": 2026
+      },
+      {
+       "Amount (€)": 778.0,
+       "Country": "Bel",
+       "Invoice #": "8012",
+       "Maint. Year": "Y1",
+       "Paid": "No",
+       "Payment Date": "",
+       "Project": "AD Theta",
+       "Year": 2024
+      },
+      {
+       "Amount (€)": -2723.0,
+       "Country": "Bel",
+       "Invoice #": "8013",
+       "Maint. Year": "Credit",
+       "Paid": "No",
+       "Payment Date": "",
+       "Project": "AD Alpha",
+       "Year": 2026
+      },
+      {
+       "Amount (€)": 228.0,
+       "Country": "Bel",
+       "Invoice #": "—",
+       "Maint. Year": "Y3",
+       "Paid": "No",
+       "Payment Date": "",
+       "Project": "CM Gamma",
+       "Year": ""
+      },
+      {
+       "Amount (€)": 5016.0,
+       "Country": "Bel",
+       "Invoice #": "8016",
+       "Maint. Year": "Y2",
+       "Paid": "No",
+       "Payment Date": "",
+       "Project": "AD Beta",
+       "Year": 2026
+      }
+     ]
+    },
+    "text": "I found 8 unpaid invoice row(s) totaling €19,999."
+   },
+   "state": {
+    "_ask_data_llm_tool_call": {
+     "arguments": {
+      "category": null,
+      "country": "Bel",
+      "project": null,
+      "year": null
+     },
+     "tool": "get_debt"
+    }
+   }
+  },
+  "tool_exception_falls_back": {
+   "legacy_calls": [],
+   "posts": 1,
+   "result": {
+    "df": {
+     "columns": [
+      "Project",
+      "Country",
+      "# Cams",
+      "Payment Month",
+      "Status"
+     ],
+     "records": [
+      {
+       "# Cams": 10,
+       "Country": "Bel",
+       "Payment Month": "March",
+       "Project": "AD Alpha",
+       "Status": "Active"
+      }
+     ]
+    },
+    "text": "Found 1 active project(s)."
+   },
+   "state": {
+    "_ask_data_llm_tool_call": {
+     "arguments": {
+      "country": null,
+      "min_cameras": null,
+      "month": "March",
+      "status": null
+     },
+     "tool": "get_projects"
+    }
+   }
+  }
+ },
+ "tools": {
+  "get_debt/country": {
+   "df": {
+    "columns": [
+     "Invoice #",
+     "Project",
+     "Country",
+     "Maint. Year",
+     "Amount (€)",
+     "Paid",
+     "Payment Date",
+     "Year"
+    ],
+    "records": [
+     {
+      "Amount (€)": 7780.0,
+      "Country": "Bel",
+      "Invoice #": "8001",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Alpha",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 1140.0,
+      "Country": "Bel",
+      "Invoice #": "8004",
+      "Maint. Year": "Y2",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "CM Gamma",
+      "Year": 2025
+     },
+     {
+      "Amount (€)": 4668.0,
+      "Country": "Bel",
+      "Invoice #": "8008",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "Intermarche Heusy",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 3112.0,
+      "Country": "Bel",
+      "Invoice #": "8009",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "intermarche heusy",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 778.0,
+      "Country": "Bel",
+      "Invoice #": "8012",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Theta",
+      "Year": 2024
+     },
+     {
+      "Amount (€)": -2723.0,
+      "Country": "Bel",
+      "Invoice #": "8013",
+      "Maint. Year": "Credit",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Alpha",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 228.0,
+      "Country": "Bel",
+      "Invoice #": "—",
+      "Maint. Year": "Y3",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "CM Gamma",
+      "Year": ""
+     },
+     {
+      "Amount (€)": 5016.0,
+      "Country": "Bel",
+      "Invoice #": "8016",
+      "Maint. Year": "Y2",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Beta",
+      "Year": 2026
+     }
+    ]
+   },
+   "text": "I found 8 unpaid invoice row(s) totaling €19,999."
+  },
+  "get_invoices/country": {
+   "df": {
+    "columns": [
+     "Invoice #",
+     "Project",
+     "Country",
+     "Maint. Year",
+     "Amount (€)",
+     "Paid",
+     "Payment Date",
+     "Year"
+    ],
+    "records": [
+     {
+      "Amount (€)": 7780.0,
+      "Country": "Bel",
+      "Invoice #": "8001",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Alpha",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 2280.0,
+      "Country": "Bel",
+      "Invoice #": "8002",
+      "Maint. Year": "Y2",
+      "Paid": "Yes",
+      "Payment Date": "2026-03-05",
+      "Project": "AD Alpha",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 1824.0,
+      "Country": "Bel",
+      "Invoice #": "8003",
+      "Maint. Year": "Y5",
+      "Paid": "Yes",
+      "Payment Date": "2025-06-02",
+      "Project": "AD Beta",
+      "Year": 2025
+     },
+     {
+      "Amount (€)": 1824.0,
+      "Country": "Bel",
+      "Invoice #": "8003",
+      "Maint. Year": "Y6",
+      "Paid": "Yes",
+      "Payment Date": "2026-06-02",
+      "Project": "AD Beta",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 1140.0,
+      "Country": "Bel",
+      "Invoice #": "8004",
+      "Maint. Year": "Y2",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "CM Gamma",
+      "Year": 2025
+     },
+     {
+      "Amount (€)": 684.0,
+      "Country": "Bel",
+      "Invoice #": "8005",
+      "Maint. Year": "Y3",
+      "Paid": "cancelled",
+      "Payment Date": "",
+      "Project": "Proxy Delta",
+      "Year": 2025
+     },
+     {
+      "Amount (€)": 4668.0,
+      "Country": "Bel",
+      "Invoice #": "8008",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "Intermarche Heusy",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 3112.0,
+      "Country": "Bel",
+      "Invoice #": "8009",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "intermarche heusy",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 5446.0,
+      "Country": "Bel",
+      "Invoice #": "8011",
+      "Maint. Year": "Y1",
+      "Paid": "Yes",
+      "Payment Date": "2025-12-31",
+      "Project": "AD Theta",
+      "Year": 2025
+     },
+     {
+      "Amount (€)": 778.0,
+      "Country": "Bel",
+      "Invoice #": "8012",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Theta",
+      "Year": 2024
+     },
+     {
+      "Amount (€)": -2723.0,
+      "Country": "Bel",
+      "Invoice #": "8013",
+      "Maint. Year": "Credit",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Alpha",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 456.0,
+      "Country": "Bel",
+      "Invoice #": "8014",
+      "Maint. Year": "Y3",
+      "Paid": "Yes",
+      "Payment Date": "2025-01-15",
+      "Project": "AD Alpha",
+      "Year": 2025
+     },
+     {
+      "Amount (€)": 228.0,
+      "Country": "Bel",
+      "Invoice #": "—",
+      "Maint. Year": "Y3",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "CM Gamma",
+      "Year": ""
+     },
+     {
+      "Amount (€)": 5016.0,
+      "Country": "Bel",
+      "Invoice #": "8016",
+      "Maint. Year": "Y2",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Beta",
+      "Year": 2026
+     }
+    ]
+   },
+   "text": "Found 14 invoice row(s) totaling €32,513."
+  },
+  "get_outstanding_amount/project": {
+   "df": null,
+   "text": "Outstanding (unpaid) amount for Intermarche Heusy is €7,780 across 2 invoice row(s)."
+  },
+  "get_paid_amount/country": {
+   "df": null,
+   "text": "Paid amount for Bel is €11,830 across 5 invoice row(s). €19,999 across 8 invoice row(s) is still outstanding — NOT fully paid."
+  },
+  "get_projects/month_filter_latent_bug": {
+   "df": {
+    "columns": [
+     "Project",
+     "Country",
+     "# Cams",
+     "Payment Month",
+     "Status"
+    ],
+    "records": [
+     {
+      "# Cams": 10,
+      "Country": "Bel",
+      "Payment Month": "March",
+      "Project": "AD Alpha",
+      "Status": "Active"
+     }
+    ]
+   },
+   "text": "Found 1 active project(s)."
+  },
+  "get_unpaid_invoices/country_year": {
+   "df": {
+    "columns": [
+     "Invoice #",
+     "Project",
+     "Country",
+     "Maint. Year",
+     "Amount (€)",
+     "Paid",
+     "Payment Date",
+     "Year"
+    ],
+    "records": [
+     {
+      "Amount (€)": 7780.0,
+      "Country": "Bel",
+      "Invoice #": "8001",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Alpha",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 4668.0,
+      "Country": "Bel",
+      "Invoice #": "8008",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "Intermarche Heusy",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 3112.0,
+      "Country": "Bel",
+      "Invoice #": "8009",
+      "Maint. Year": "Y1",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "intermarche heusy",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": -2723.0,
+      "Country": "Bel",
+      "Invoice #": "8013",
+      "Maint. Year": "Credit",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Alpha",
+      "Year": 2026
+     },
+     {
+      "Amount (€)": 5016.0,
+      "Country": "Bel",
+      "Invoice #": "8016",
+      "Maint. Year": "Y2",
+      "Paid": "No",
+      "Payment Date": "",
+      "Project": "AD Beta",
+      "Year": 2026
+     }
+    ]
+   },
+   "text": "Found 5 unpaid invoice row(s) totaling €17,853."
+  }
+ },
+ "validation": {
+  "country_typo": {
+   "cleaned": {},
+   "error": "Ambiguous argument 'country'='blegium' for tool 'get_debt'.",
+   "tool": null
+  }
+ }
+}

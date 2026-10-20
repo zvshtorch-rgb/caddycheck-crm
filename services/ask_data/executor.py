@@ -1,14 +1,15 @@
 """Ask Data v2 deterministic tool executor (read-only).
 
-Moved verbatim from streamlit_app.py (Ask Data Phase 1). Every number is computed here in plain
-Python from the already-loaded CRM data; the LLM never sees or calculates any of it.
+Phase 1 moved this verbatim from streamlit_app.py. Every number is computed here in plain Python from the
+already-loaded CRM data; the LLM never sees or calculates any of it.
 
-Deliberate, minimal deviations from the original (everything else is byte-for-byte the same logic):
-  * `get_next_invoice_number` used the streamlit_app globals `_get_next_invoice_number` and `_data_path`;
-    it now calls an injected zero-argument provider (`next_invoice_number`), supplied by the app wrapper.
-  * KNOWN LATENT BUG, deliberately preserved in Phase 1: `get_projects_for_month` is not imported in
-    streamlit_app.py (nor here), so month-filtered project questions raise NameError exactly as before.
-    A characterization test pins this; fixing it is a separate, approved change.
+Phase 2 changes (everything else is unchanged, including float arithmetic and output formatting):
+  * country and project filters match LEDGER rows to projects through the canonical `ProjectIndex`
+    (case/accent/punctuation-insensitive + approved aliases) instead of exact project-name equality;
+  * `get_projects_for_month` is now imported (it was missing, so month-filtered questions raised NameError).
+
+Phase 1 deviation kept: `get_next_invoice_number` calls an injected zero-argument provider
+(`next_invoice_number`) supplied by the app wrapper instead of reading streamlit_app globals.
 """
 import datetime
 from typing import Optional
@@ -16,6 +17,8 @@ from typing import Optional
 import pandas as pd
 
 from config.settings import MONTH_ORDER, load_sent_invoices_log
+from services.ask_data.resolver import ProjectIndex
+from services.excel_service import get_projects_for_month
 from services.ask_data.helpers import (
     _build_invoice_answer_df,
     _build_project_answer_df,
@@ -53,11 +56,11 @@ def _filter_invoices_for_debt_tools(invoices, projects, args: dict, paid_predica
         rows = [inv for inv in rows if inv.year == args["year"]]
     if args.get("paid_year") is not None:
         rows = [inv for inv in rows if inv.payment_date and inv.payment_date.year == args["paid_year"]]
+    index = ProjectIndex(projects) if (args.get("country") or args.get("project")) else None
     if args.get("country"):
-        names_in_country = {p.project_name for p in projects if p.country == args["country"]}
-        rows = [inv for inv in rows if inv.project_name in names_in_country]
+        rows = [inv for inv in rows if index.country(inv.project_name) == args["country"]]
     if args.get("project"):
-        rows = [inv for inv in rows if inv.project_name == args["project"]]
+        rows = [inv for inv in rows if index.canonical_name(inv.project_name) == args["project"]]
     category = args.get("category")
     if category == "trial":
         rows = [inv for inv in rows if _is_paid_trial_category(inv)]
@@ -210,15 +213,15 @@ def _execute_ask_data_tool(
             rows = [inv for inv in rows if inv.is_unpaid()]
         elif args.get("paid") == "cancelled":
             rows = [inv for inv in rows if inv.is_cancelled()]
+        index = ProjectIndex(projects) if (args.get("country") or args.get("project")) else None
         if args.get("project"):
-            rows = [inv for inv in rows if inv.project_name == args["project"]]
+            rows = [inv for inv in rows if index.canonical_name(inv.project_name) == args["project"]]
         if args.get("year") is not None:
             rows = [inv for inv in rows if inv.year == args["year"]]
         if args.get("paid_year") is not None:
             rows = [inv for inv in rows if inv.payment_date and inv.payment_date.year == args["paid_year"]]
         if args.get("country"):
-            names_in_country = {p.project_name for p in projects if p.country == args["country"]}
-            rows = [inv for inv in rows if inv.project_name in names_in_country]
+            rows = [inv for inv in rows if index.country(inv.project_name) == args["country"]]
         category = args.get("category")
         if category == "trial":
             rows = [inv for inv in rows if _is_paid_trial_category(inv)]
@@ -261,7 +264,7 @@ def _execute_ask_data_tool(
         if args.get("country"):
             rows = [p for p in rows if p.country == args["country"]]
         if args.get("month"):
-            rows = get_projects_for_month(rows, args["month"])  # noqa: F821 - known latent bug preserved in Phase 1 (see module docstring)
+            rows = get_projects_for_month(rows, args["month"])
         if args.get("min_cameras") is not None:
             rows = [p for p in rows if _safe_int(p.num_cams) > args["min_cameras"]]
         if tool_name == "count_projects":

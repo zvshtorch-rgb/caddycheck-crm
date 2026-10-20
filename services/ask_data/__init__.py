@@ -3,7 +3,9 @@
 Phase 1 is a pure extraction of the existing "Ask Data v2" tool-selection logic out of
 streamlit_app.py with no behavior change. Submodules:
 
-  helpers      shared pure helpers (moved verbatim)
+  helpers      shared pure helpers (moved verbatim in Phase 1)
+  resolver     canonical entity resolution: normalisation (case/accents/punctuation/Hebrew), aliases, thresholds
+  breakdown    country breakdown that always reconciles to the total, with a visible "unassigned" bucket
   tool_specs   the read-only tool catalog (specs + descriptions + prompt catalog text)
   validation   argument resolution / validation of an LLM tool call
   executor     deterministic execution of one validated tool call

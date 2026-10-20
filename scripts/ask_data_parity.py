@@ -64,8 +64,16 @@ MOVED = {
 
 # Definitions that are intentionally NOT byte-identical in Phase 1 (each documented in the new module).
 EXPECTED_DEVIATIONS = {
-    "_execute_ask_data_tool": "signature gains keyword-only `next_invoice_number`; get_next_invoice_number branch calls it",
-    "_answer_data_question_smart": "legacy fallbacks and next_invoice_number are injected instead of read from app globals",
+    # Phase 1 injection points
+    "_execute_ask_data_tool": "Phase 1: keyword-only `next_invoice_number`; Phase 2: month fix + canonical matching in the get_invoices branch",
+    "_answer_data_question_smart": "Phase 1: injected legacy fallbacks; Phase 2: validate_tool_call + one-question clarification",
+    # Phase 2 (approved scope only)
+    "_build_invoice_answer_df": "Phase 2: Country column resolved through the canonical ProjectIndex (case/accents/aliases)",
+    "_resolve_project_arg": "Phase 2: canonical resolver, thresholds 0.90 / 0.60",
+    "_resolve_single_country": "Phase 2: canonical resolver (accents, Hebrew, variants), thresholds 0.90 / 0.60",
+    "_resolve_ask_data_arg": "Phase 2: month resolved via resolve_month (Hebrew, 'sept'); project/country via the resolver",
+    "_validate_ask_data_tool_call": "Phase 2: thin wrapper over validate_tool_call (adds clarification)",
+    "_filter_invoices_for_debt_tools": "Phase 2: country/project matched via ProjectIndex instead of exact project-name equality",
 }
 
 

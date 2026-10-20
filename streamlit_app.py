@@ -299,6 +299,7 @@ from services.excel_service import (
     compute_debt_summaries,
     get_yearly_summary,
     get_monthly_invoice_projects,
+    get_projects_for_month,
     load_projects as load_projects_excel,
     load_invoices as load_invoices_excel,
     save_projects_to_excel,

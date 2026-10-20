@@ -10,6 +10,7 @@ from typing import Optional
 
 import pandas as pd
 
+from services.ask_data.resolver import ProjectIndex
 
 def _safe_int(v, default=0):
     """Convert v to int safely, returning default for None/NaN/empty."""
@@ -266,12 +267,12 @@ def _match_countries_from_question(question: str, projects, fuzzy_threshold: flo
 
 
 def _build_invoice_answer_df(invoice_rows, projects) -> pd.DataFrame:
-    country_map = {p.project_name.lower().strip(): p.country for p in projects}
+    project_index = ProjectIndex(projects)
     return pd.DataFrame([
         {
             "Invoice #": str(int(inv.invoice_number)) if inv.invoice_number else "—",
             "Project": inv.project_name,
-            "Country": country_map.get(inv.project_name.lower().strip(), ""),
+            "Country": project_index.country(inv.project_name) or "",
             "Maint. Year": inv.maintenance_year,
             "Amount (€)": float(inv.payment_amount),
             "Paid": inv.paid,
