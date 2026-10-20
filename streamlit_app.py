@@ -1471,7 +1471,7 @@ def _answer_data_question_smart(question: str, projects, invoices, debt_summarie
 # ══════════════════════════════════════════════════════════════════════════════
 
 from services.ask_data.context import ConversationContext  # noqa: E402
-from services.ask_data.conversation import answer_turn  # noqa: E402
+from services.ask_data.conversation import answer_turn, reset_conversation  # noqa: E402
 from services.ask_data.tool_result import ResultStore  # noqa: E402
 
 
@@ -3941,7 +3941,16 @@ elif page == "❓ Ask Data":
 
         if st.button("🧹 New conversation", key="ask_data_v3_reset"):
             st.session_state["_ask_data_v3_messages"] = []
-            _v3_context.reset()
+            # Full isolation from the previous conversation: resets the context (intent, filters incl.
+            # period/at_date/country/network/etc., previous_result_id, clarification, turn_count) AND
+            # replaces the result store with a brand-new, empty one -- see
+            # services/ask_data/conversation.py's reset_conversation() docstring for why a fresh store is
+            # required, not merely context.reset() on its own.
+            st.session_state["_ask_data_v3_result_store"] = reset_conversation(_v3_context)
+            st.session_state.pop("_ask_data_v3_last_result", None)
+            st.session_state.pop("_ask_data_v3_tool_call", None)
+            st.session_state.pop("_ask_data_v3_llm_error", None)
+            st.session_state.pop("_ask_data_v3_grounding_error", None)
             st.rerun()
 
         def _render_v3_message(msg: dict, *, show_drilldown_buttons: bool = False) -> None:

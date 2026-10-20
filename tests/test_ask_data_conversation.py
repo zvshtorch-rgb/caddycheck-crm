@@ -13,7 +13,7 @@ from services.ask_data.context import (
 )
 from services.ask_data.conversation import (
     HISTORICAL_LIMITATION_TEXT, TurnOutcome, answer_turn, breakdown_table_for_result, detect_drilldown_kind,
-    is_historical_question, rows_table_for_result,
+    is_historical_question, reset_conversation, rows_table_for_result,
 )
 from services.ask_data.money import fmt_eur, sum_money
 from services.ask_data.planner import _llm_parse_data_question
@@ -322,6 +322,62 @@ class TestBilingualContinuity(unittest.TestCase):
         self.assertEqual(detect_drilldown_kind("show breakdown"), "breakdown")
         self.assertEqual(detect_drilldown_kind("פירוט"), "breakdown")
         self.assertIsNone(detect_drilldown_kind("How much debt in Belgium?"))
+
+
+class TestNewConversationFullyResetsState(unittest.TestCase):
+    """Regression test: "New conversation" must produce exactly the same Ask Data conversational state as a
+    fresh session. Found via production testing: the button cleared ConversationContext but left the
+    drill-down ResultStore in place -- see reset_conversation()'s docstring for why a fresh store (not
+    merely context.reset()) is required."""
+
+    def test_network_query_drilldown_new_conversation_unrelated_query_has_no_inherited_scope(self):
+        projects, invoices = make_data()
+        ctx = ConversationContext()
+        store = ResultStore()
+
+        def turn(question, payload):
+            with fake_streamlit(), mock.patch.dict(data_clock._state, {"loaded_at": FIXED_LOADED_AT, "source": "test"}), \
+                    mock.patch("services.ask_data.planner.get_gemini_config", lambda: BASE_CFG), \
+                    mock.patch("requests.post", _make_post([_gemini_ok(payload)] if payload else [], [])):
+                return answer_turn(question, projects, invoices, [], ctx, legacy_normalize_question=legacy_normalize,
+                                   legacy_answer=legacy_answer, result_store=store)
+
+        # Turn 1: a network query.
+        turn1 = turn("Edeka debt", '{"tool": "get_debt", "arguments": {"network": "Edeka"}}')
+        self.assertEqual(turn1.kind, "tool")
+        network_result_id = ctx.previous_result_id
+        self.assertIsNotNone(network_result_id)
+        self.assertEqual(turn1.result.filters.get("network"), "Edeka")
+        # Note: 'network' is not in CARRYABLE_FILTER_KEYS (a pre-existing, documented gap predating Phase 5
+        # -- the Network Resolver phase added network to the tools themselves, not to follow-up context),
+        # so it is correctly absent from ctx.filters; that is unrelated to this reset bug.
+
+        # Turn 2: drill-down on that network result.
+        turn2 = turn("Which invoices make that up?", None)
+        self.assertEqual(turn2.kind, "drilldown")
+        self.assertIs(turn2.result, store.get(network_result_id))
+
+        # "New conversation": full reset, replacing the store -- mirrors streamlit_app.py's button handler
+        # exactly (st.session_state["_ask_data_v3_result_store"] = reset_conversation(_v3_context)).
+        store = reset_conversation(ctx)
+
+        self.assertIsNone(ctx.previous_result_id)
+        self.assertEqual(ctx.filters, {})
+        self.assertIsNone(ctx.clarification)
+        self.assertEqual(ctx.turn_count, 0)
+        self.assertIsNone(store.get(network_result_id))   # the old result is unreachable in the NEW store
+
+        # Turn 3: an unrelated query in the "new" conversation -- no inherited network scope.
+        turn3 = turn("How much debt in Belgium?", '{"tool": "get_debt", "arguments": {"country": "Bel"}}')
+        self.assertEqual(turn3.kind, "tool")
+        self.assertNotIn("network", turn3.result.filters)
+        self.assertEqual(turn3.result.filters.get("country"), "Bel")
+
+        # A drill-down request in the new conversation resolves to turn 3's OWN result, never turn 1's.
+        drilldown_after_reset = turn("Which invoices make that up?", None)
+        self.assertEqual(drilldown_after_reset.kind, "drilldown")
+        self.assertIs(drilldown_after_reset.result, turn3.result)
+        self.assertIsNot(drilldown_after_reset.result, turn1.result)
 
 
 class TestResultIdIsolationBySession(unittest.TestCase):

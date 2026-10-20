@@ -141,3 +141,4 @@ class ConversationContext:
         self.filters = {}
         self.previous_result_id = None
         self.clarification = None
+        self.turn_count = 0
