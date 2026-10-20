@@ -27,6 +27,7 @@ ROOT = Path(__file__).resolve().parent.parent
 GOLDEN = json.loads((ROOT / "tests" / "golden" / "ask_data_v2_characterization.json").read_text(encoding="utf-8"))
 DELTAS = json.loads((ROOT / "tests" / "golden" / "ask_data_phase2_deltas.json").read_text(encoding="utf-8"))
 DELTAS3 = json.loads((ROOT / "tests" / "golden" / "ask_data_phase3_deltas.json").read_text(encoding="utf-8"))
+DELTAS_NETWORK = json.loads((ROOT / "tests" / "golden" / "ask_data_network_resolver_deltas.json").read_text(encoding="utf-8"))
 PACKAGE = ROOT / "services" / "ask_data"
 
 # Phase 2: the ONLY cases whose behavior differs from the original (Phase 1 golden). Anything else changing fails.
@@ -54,7 +55,8 @@ def _with_deltas(golden: dict, deltas: dict) -> dict:
 
 
 EXPECTED_PHASE2 = _with_deltas(GOLDEN, DELTAS)
-EXPECTED = _with_deltas(EXPECTED_PHASE2, DELTAS3)          # Phase 1 golden + Phase 2 deltas + Phase 3 deltas
+EXPECTED_PHASE3 = _with_deltas(EXPECTED_PHASE2, DELTAS3)          # Phase 1 golden + Phase 2 deltas + Phase 3 deltas
+EXPECTED = _with_deltas(EXPECTED_PHASE3, DELTAS_NETWORK)          # + the Network Resolver delta
 
 
 class _SectionMixin:
@@ -165,29 +167,19 @@ class TestPhase3OnlyApprovedChanges(unittest.TestCase):
     def setUpClass(cls):
         cls.observed = run_scenarios(NewImpl())
 
-    def test_catalog_gains_exactly_the_debt_by_country_block(self):
-        self.assertEqual(EXPECTED["catalog"], GOLDEN["catalog"] + "\n" + NEW_TOOL_BLOCK)
-        self.assertEqual(self.observed["catalog"], EXPECTED["catalog"])
+    def test_catalog_gained_exactly_the_debt_by_country_block_at_the_time(self):
+        """Static check of this phase's OWN delta file (GOLDEN -> +debt_by_country), independent of any
+        later phase. Whether *current* live code matches the full approved history (now including the
+        Network Resolver's own catalog delta) is TestNetworkResolverOnlyApprovedChanges's job, using the
+        full cumulative EXPECTED -- not this phase-scoped EXPECTED_PHASE3."""
+        self.assertEqual(EXPECTED_PHASE3["catalog"], GOLDEN["catalog"] + "\n" + NEW_TOOL_BLOCK)
 
-    def test_prompt_is_otherwise_byte_identical_to_the_pre_phase3_prompt(self):
-        import hashlib
-        from unittest import mock
-        from tests._ask_data_harness import _gemini_ok, _make_post, fake_streamlit
-        checked = 0
-        for case_id, cfg, question, responses in PLANNER_CASES:
-            if not cfg.get("api_key") or not question.strip() or not responses:
-                continue
-            calls = []
-            with fake_streamlit(), NewImpl().env(cfg=cfg), mock.patch("requests.post", _make_post(responses, calls)):
-                NewImpl().parse(question)
-            prompt = calls[0]["body"]["contents"][0]["parts"][0]["text"]
-            self.assertEqual(prompt.count(EXPECTED["catalog"]), 1, case_id)
-            restored = prompt.replace(EXPECTED["catalog"], GOLDEN["catalog"])
-            self.assertEqual(hashlib.sha256(restored.encode("utf-8")).hexdigest(),
-                             GOLDEN["planner"][case_id]["first_request"]["prompt_sha256"], f"{case_id}: prompt changed beyond the catalog")
-            self.assertEqual(calls[0]["body"]["generationConfig"], GOLDEN["planner"][case_id]["first_request"]["generationConfig"])
-            checked += 1
-        self.assertGreaterEqual(checked, 9)
+    # test_prompt_is_otherwise_byte_identical_to_the_pre_phase3_prompt (removed): it asserted the LIVE
+    # prompt differed from GOLDEN by exactly the catalog block, which stopped being true the moment any
+    # later phase added unconditional prompt text (the Network Resolver's new 'network' rule). Its
+    # guarantee -- "nothing outside the documented deltas changed" -- is superseded by
+    # TestNetworkResolverOnlyApprovedChanges.test_prompt_gains_exactly_the_new_network_rule_and_nothing_else,
+    # which proves the same thing relative to GOLDEN at the current (later) checkpoint.
 
     def test_only_request_making_planner_cases_changed(self):
         changed = set(DELTAS3.get("planner", {}))
@@ -250,6 +242,140 @@ class TestPhase3OnlyApprovedChanges(unittest.TestCase):
 
     def test_validation_only_gains_the_new_tool_cases(self):
         self.assertEqual(set(DELTAS3.get("validation", {})), ADDED_CASES["validation"])
+
+
+NEW_NETWORK_RULE = (
+    "- 'network' is for a GENERIC supermarket chain/group reference (e.g. 'Edeka', 'AD', "
+    "'Delhaize', 'AD Delhaize', 'Proxy', 'Intermarché', 'Carrefour Market'/'CM', 'Albert "
+    "Heijn'/'AH', 'Plus', 'Jumbo') when the question does not name one specific store/branch. "
+    "Use 'network' for a bare chain name ('How much does Edeka owe?', 'AD debt', 'Edeka "
+    "cameras', 'Proxy projects') and 'project' only when a specific store/branch is also named "
+    "('AD Anderlecht', 'Edeka Preller-Breckerfeld'). Only set 'network' for a tool that "
+    "declares it in the catalog below; for other tools, omit it rather than putting a chain "
+    "name into 'project'.\n"
+)
+# Tool signatures that gained a `network (optional, network)` argument (goal 4's 8 listed tools).
+NETWORK_AWARE_TOOLS = {
+    "get_projects", "count_projects", "get_debt", "get_unpaid_invoices", "get_paid_amount",
+    "get_outstanding_amount", "get_camera_statistics", "get_licenses",
+}
+
+
+class TestNetworkResolverOnlyApprovedChanges(unittest.TestCase):
+    """The Network Resolver feature may change exactly: (1) the 8 listed tools' catalog signatures gaining a
+    `network` argument, (2) one new prompt rule describing it, (3) those same 8 tools' validated-argument
+    dicts gaining a `network: None` key when not used. Tool EXECUTION output (the "tools" section) is
+    untouched for every pre-existing scenario, since `network` defaults to None and is a no-op filter then.
+    Nothing else may differ."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests._ask_data_harness import NewImpl
+        cls.observed = run_scenarios(NewImpl())
+
+    def test_tools_section_is_completely_unaffected(self):
+        """No pre-existing scenario's EXECUTED output changes -- network=None is a no-op filter."""
+        self.assertNotIn("tools", DELTAS_NETWORK)
+        self.assertNotIn("bank", DELTAS_NETWORK)
+        self._check_tools_matches(EXPECTED_PHASE3)
+
+    def _check_tools_matches(self, expected):
+        for section in ("tools", "bank"):
+            self.assertEqual(expected[section], self.observed[section], section)
+
+    def test_catalog_gains_exactly_a_network_argument_on_the_8_listed_tools(self):
+        """`network` is inserted right after `project` for a tool that already declared one (get_debt,
+        get_unpaid_invoices, get_paid_amount, get_outstanding_amount, get_licenses), or as the first
+        argument for a tool that did not (get_projects, count_projects, get_camera_statistics)."""
+        import re
+        old_lines = EXPECTED_PHASE3["catalog"].splitlines()
+        new_lines = EXPECTED["catalog"].splitlines()
+        self.assertEqual(len(old_lines), len(new_lines), "no catalog lines were added or removed, only edited")
+        changed_tools = set()
+        for old_line, new_line in zip(old_lines, new_lines):
+            if old_line == new_line:
+                continue
+            m = re.match(r"- (\w+)\(", new_line)
+            self.assertIsNotNone(m, new_line)
+            changed_tools.add(m.group(1))
+            if "project (optional, project), " in old_line:
+                expected_line = old_line.replace("project (optional, project), ", "project (optional, project), network (optional, network), ", 1)
+            else:
+                expected_line = old_line.replace("(", "(network (optional, network), ", 1)
+            self.assertEqual(new_line, expected_line, new_line)
+        self.assertEqual(changed_tools, NETWORK_AWARE_TOOLS)
+        self.assertEqual(self.observed["catalog"], EXPECTED["catalog"])
+
+    def test_prompt_gains_exactly_the_new_network_rule_and_nothing_else(self):
+        import hashlib
+        from unittest import mock
+        from tests._ask_data_harness import _gemini_ok, _make_post, fake_streamlit
+        checked = 0
+        for case_id, cfg, question, responses in PLANNER_CASES:
+            if not cfg.get("api_key") or not question.strip() or not responses:
+                continue
+            calls = []
+            with fake_streamlit(), NewImpl().env(cfg=cfg), mock.patch("requests.post", _make_post(responses, calls)):
+                NewImpl().parse(question)
+            prompt = calls[0]["body"]["contents"][0]["parts"][0]["text"]
+            self.assertEqual(prompt.count(EXPECTED["catalog"]), 1, case_id)
+            self.assertEqual(prompt.count(NEW_NETWORK_RULE), 1, case_id)
+            restored = prompt.replace(EXPECTED["catalog"], GOLDEN["catalog"]).replace(NEW_NETWORK_RULE, "")
+            self.assertEqual(hashlib.sha256(restored.encode("utf-8")).hexdigest(),
+                             GOLDEN["planner"][case_id]["first_request"]["prompt_sha256"],
+                             f"{case_id}: prompt changed beyond the catalog + the new network rule")
+            checked += 1
+        self.assertGreaterEqual(checked, 9)
+
+    # The ONE pre-existing scenario whose RESOLVED VALUE (not just an added None key) genuinely changes:
+    # get_debt(project="Edeka") used to fuzzy-match the fixture's single "Edeka Epsilon - Town" project
+    # (exactly the anti-pattern goal 2 forbids); it now correctly resolves to network="Edeka" instead.
+    # This is the feature working as intended, not a regression -- approved explicitly, not swept into the
+    # "just gained a None key" bucket below.
+    NETWORK_REDIRECT_CASES = {("validation", "project_substring")}
+
+    def test_bare_network_name_no_longer_fuzzy_matches_a_single_project(self):
+        old = EXPECTED_PHASE3["validation"]["project_substring"]
+        new = DELTAS_NETWORK["validation"]["project_substring"]
+        self.assertEqual(old["cleaned"]["project"], "Edeka Epsilon - Town")
+        self.assertEqual(new["cleaned"], {**old["cleaned"], "project": None, "network": "Edeka"})
+
+    def test_validation_and_router_cases_only_gain_a_network_none_key(self):
+        for section in ("validation", "router"):
+            for case_id, new in DELTAS_NETWORK.get(section, {}).items():
+                if (section, case_id) in self.NETWORK_REDIRECT_CASES:
+                    continue
+                old = EXPECTED_PHASE3[section][case_id]
+                with self.subTest(section=section, case=case_id):
+                    old_json, new_json = json.dumps(old, sort_keys=True), json.dumps(new, sort_keys=True)
+                    self.assertNotEqual(old_json, new_json, "not actually a delta")
+                    # every added/changed leaf is exactly `"network": null` (or its container gaining it)
+                    old_without_network = _strip_network_keys(old)
+                    new_without_network = _strip_network_keys(new)
+                    self.assertEqual(old_without_network, new_without_network, case_id)
+
+    def test_only_the_approved_cases_changed(self):
+        changed = {(section, case) for section in ("validation", "router", "planner") for case in DELTAS_NETWORK.get(section, {})}
+        # every changed planner case is purely a prompt-length/hash fingerprint difference (already proven
+        # byte-for-byte above); every changed validation/router case either gained `network: None` or is the
+        # one explicitly-approved redirect case.
+        self.assertTrue(self.NETWORK_REDIRECT_CASES <= changed)
+
+
+def _strip_network_keys(value):
+    """Recursively remove every `network` dict key (and assert its value was always None/null) so two
+    snapshots can be compared ignoring only that one additive key."""
+    if isinstance(value, dict):
+        out = {}
+        for k, v in value.items():
+            if k == "network":
+                assert v is None, f"expected network=None, got {v!r}"
+                continue
+            out[k] = _strip_network_keys(v)
+        return out
+    if isinstance(value, list):
+        return [_strip_network_keys(v) for v in value]
+    return value
 
 
 class TestPackageIsReadOnly(unittest.TestCase):

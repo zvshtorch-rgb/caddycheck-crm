@@ -4,7 +4,7 @@ Moved verbatim from streamlit_app.py (Ask Data Phase 1). Data only; every tool i
 """
 
 # arg_name -> (kind, required). kind is one of:
-#   "int", "project", "country", "status", "month", or "enum:a,b,c"
+#   "int", "project", "network", "country", "status", "month", or "enum:a,b,c"
 _ASK_DATA_TOOL_SPECS: dict[str, dict[str, tuple[str, bool]]] = {
     "get_invoice": {
         "invoice_number": ("int", True),
@@ -19,6 +19,7 @@ _ASK_DATA_TOOL_SPECS: dict[str, dict[str, tuple[str, bool]]] = {
     },
     "get_unpaid_invoices": {
         "project": ("project", False),
+        "network": ("network", False),
         "year": ("int", False),
         "paid_year": ("int", False),
         "country": ("country", False),
@@ -28,29 +29,34 @@ _ASK_DATA_TOOL_SPECS: dict[str, dict[str, tuple[str, bool]]] = {
         "project": ("project", True),
     },
     "get_projects": {
+        "network": ("network", False),
         "country": ("country", False),
         "status": ("status", False),
         "month": ("month", False),
         "min_cameras": ("int", False),
     },
     "count_projects": {
+        "network": ("network", False),
         "country": ("country", False),
         "status": ("status", False),
     },
     "get_debt": {
         "project": ("project", False),
+        "network": ("network", False),
         "year": ("int", False),
         "country": ("country", False),
         "category": ("enum:trial,y1,y2plus", False),
     },
     "get_paid_amount": {
         "project": ("project", False),
+        "network": ("network", False),
         "year": ("int", False),
         "paid_year": ("int", False),
         "country": ("country", False),
     },
     "get_outstanding_amount": {
         "project": ("project", False),
+        "network": ("network", False),
         "year": ("int", False),
         "country": ("country", False),
     },
@@ -65,6 +71,7 @@ _ASK_DATA_TOOL_SPECS: dict[str, dict[str, tuple[str, bool]]] = {
     },
     "get_next_invoice_number": {},
     "get_camera_statistics": {
+        "network": ("network", False),
         "country": ("country", False),
         "status": ("status", False),
         "camera_type": ("enum:all,TopDown,Backtray,Pushout", False),
@@ -75,6 +82,7 @@ _ASK_DATA_TOOL_SPECS: dict[str, dict[str, tuple[str, bool]]] = {
     },
     "get_licenses": {
         "project": ("project", False),
+        "network": ("network", False),
         "country": ("country", False),
         "license_status": ("enum:Active,Expired,Missing,Update Next Month,Cancelled", False),
         "project_status": ("status", False),

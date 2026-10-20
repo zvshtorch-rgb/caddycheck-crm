@@ -19,6 +19,47 @@ PROJECT_ALIASES: dict[str, str] = {
     "Plus Landgraaf Aarts": "Plus langdraaf Aarts",
 }
 
+# canonical network name -> normalised first-word token(s) that identify a project as a member (deterministic
+# membership -- a project belongs to a network only if its own name starts with one of these tokens; never
+# fuzzy, so a generic network name can never silently collapse onto one specific project -- see resolver.py's
+# NetworkIndex).
+NETWORK_PROJECT_TOKENS: dict[str, list[str]] = {
+    "Edeka": ["edeka"],
+    "AD": ["ad"],
+    "Proxy": ["proxy"],
+    "Intermarché": ["intermarche"],
+    "Carrefour Market": ["cm", "carrefour"],
+    "Albert Heijn": ["ah", "albert heijn"],
+    "Plus": ["plus"],
+    "Jumbo": ["jumbo"],
+}
+
+# free-text alias (normalised: case/accents/punctuation) -> canonical network name. EXACT match only -- see
+# resolve_network(); a network alias is never resolved by fuzzy scoring, so a bare network name can never be
+# silently mistaken for one specific project.
+NETWORK_ALIASES: dict[str, str] = {
+    "Edeka": "Edeka",
+    "AD": "AD",
+    "Delhaize": "AD",
+    "AD Delhaize": "AD",
+    "Proxy": "Proxy",
+    "Intermarche": "Intermarché",
+    "Intermarché": "Intermarché",
+    "Carrefour Market": "Carrefour Market",
+    "CM": "Carrefour Market",
+    "Carrefour": "Carrefour Market",
+    "Albert Heijn": "Albert Heijn",
+    "AH": "Albert Heijn",
+    "Plus": "Plus",
+    "Jumbo": "Jumbo",
+    # Hebrew: best-effort common transliterations only, flagged for review (not verified against real usage
+    # data). Latin brand names typed inside a Hebrew sentence already work without any alias here, since the
+    # tokenizer only ever translates tokens it recognises as Hebrew script.
+    "עדקה": "Edeka",
+    "פלוס": "Plus",
+    "פרוקסי": "Proxy",
+}
+
 # token-level spelling variants applied during normalisation (variant -> canonical token)
 SPELLING_VARIANTS: dict[str, str] = {
     "coplementary": "complementary",
