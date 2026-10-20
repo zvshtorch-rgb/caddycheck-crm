@@ -144,11 +144,36 @@ class TestBuildComparison(unittest.TestCase):
         v2 = ShadowSummary.from_tool_result(_result())
         v3 = ShadowSummary.from_tool_result(_result())
         entry = build_comparison("q", "v2", v2, v3).to_log_entry()
-        for forbidden_key in ("rows", "dataframe", "v2_rows", "v3_rows", "api_key", "gemini"):
+        for forbidden_key in ("rows", "dataframe", "v2_rows", "v3_rows", "api_key", "gemini", "question"):
             self.assertNotIn(forbidden_key, entry)
-        self.assertIn("question", entry)
+        self.assertIn("question_hash", entry)
+        self.assertIn("question_length", entry)
+        self.assertIn("question_word_count", entry)
         self.assertIn("mismatch_flags", entry)
         self.assertIn("primary_mode", entry)
+
+    def test_question_text_is_never_persisted_only_a_hash_and_counts(self):
+        v2 = ShadowSummary.from_tool_result(_result())
+        v3 = ShadowSummary.from_tool_result(_result())
+        secret_question = "What about invoice 8713 for Edeka Herweg, SWIFT ref 8382-CN?"
+        entry = build_comparison(secret_question, "v2", v2, v3).to_log_entry()
+        for value in entry.values():
+            self.assertNotIn("8713", str(value))
+            self.assertNotIn("Edeka", str(value))
+            self.assertNotIn("8382-CN", str(value))
+            self.assertNotIn(secret_question, str(value))
+        self.assertEqual(entry["question_length"], len(secret_question))
+        self.assertEqual(entry["question_word_count"], len(secret_question.split()))
+        self.assertEqual(len(entry["question_hash"]), 16)
+
+    def test_question_hash_is_deterministic_and_distinguishes_different_questions(self):
+        v2 = ShadowSummary.from_tool_result(_result())
+        v3 = ShadowSummary.from_tool_result(_result())
+        e1 = build_comparison("How much debt?", "v2", v2, v3).to_log_entry()
+        e2 = build_comparison("How much debt?", "v2", v2, v3).to_log_entry()
+        e3 = build_comparison("Only Belgium?", "v2", v2, v3).to_log_entry()
+        self.assertEqual(e1["question_hash"], e2["question_hash"])
+        self.assertNotEqual(e1["question_hash"], e3["question_hash"])
 
 
 if __name__ == "__main__":

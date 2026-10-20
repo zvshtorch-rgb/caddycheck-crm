@@ -10,8 +10,11 @@ it is purely an engineering diagnostic, built once a comparison already exists, 
 Privacy: the stored comparison never contains ledger rows, invoice numbers, payment amounts/dates, bank
 details or Gemini API keys. Project names (potentially customer-identifying) are reduced to a short hash so
 "did the two pipelines pick the same project?" can still be answered without storing the name itself. The
-free-text question and the *formatted* financial total (e.g. "EUR 19,999.00", already an aggregate CRM
-figure, not a raw bank record) are kept, since they are what makes the diagnostic useful at all.
+free-text question is NEVER stored either (it may itself contain an invoice number, customer/project name,
+or other business detail) -- only a non-reversible hash plus two harmless counts (character/word count) are
+kept, so repeated/short/ambiguous questions can still be spotted in aggregate. The *formatted* financial
+total (e.g. "EUR 19,999.00", already an aggregate CRM figure, not a raw bank record) is kept, since it is
+what makes a totals-mismatch detectable at all.
 """
 from __future__ import annotations
 
@@ -108,7 +111,9 @@ class ShadowSummary:
 @dataclass
 class ShadowComparison:
     timestamp: str
-    question: str
+    question_hash: str                 # never the raw question text -- see _question_metadata()
+    question_length: int
+    question_word_count: int
     primary_mode: str                  # "v2" or "v3" -- which one the user actually saw
     editor: Optional[str]
     v2: ShadowSummary
@@ -121,13 +126,24 @@ class ShadowComparison:
 
     def to_log_entry(self) -> dict:
         entry = {
-            "timestamp": self.timestamp, "question": self.question, "primary_mode": self.primary_mode,
-            "editor": self.editor, "mismatch_flags": list(self.mismatch_flags), "has_mismatch": self.has_mismatch,
+            "timestamp": self.timestamp, "question_hash": self.question_hash,
+            "question_length": self.question_length, "question_word_count": self.question_word_count,
+            "primary_mode": self.primary_mode, "editor": self.editor,
+            "mismatch_flags": list(self.mismatch_flags), "has_mismatch": self.has_mismatch,
         }
         for prefix, summary in (("v2", self.v2), ("v3", self.v3)):
             for key, value in summary.as_dict().items():
                 entry[f"{prefix}_{key}"] = value
         return entry
+
+
+def _question_metadata(question: str) -> tuple[str, int, int]:
+    """(hash, char count, word count) -- never the question text itself. The question may contain invoice
+    numbers, customer/project names, bank references or other business data, so only a non-reversible
+    fingerprint and two harmless counts (useful to spot "mismatches cluster on short/ambiguous questions",
+    e.g. goal 7's bare follow-ups) are ever persisted."""
+    text = question or ""
+    return _short_hash(text), len(text), len(text.split())
 
 
 def _scope_differs(v2: ShadowSummary, v3: ShadowSummary) -> bool:
@@ -170,7 +186,9 @@ def build_comparison(
     if v2.outcome_kind == "tool" and v3.outcome_kind == "tool" and _scope_differs(v2, v3):
         flags.append(MISMATCH_SCOPE_DIFFERS)
 
+    q_hash, q_length, q_words = _question_metadata(question)
     return ShadowComparison(
         timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        question=question, primary_mode=primary_mode, editor=editor, v2=v2, v3=v3, mismatch_flags=flags,
+        question_hash=q_hash, question_length=q_length, question_word_count=q_words,
+        primary_mode=primary_mode, editor=editor, v2=v2, v3=v3, mismatch_flags=flags,
     )

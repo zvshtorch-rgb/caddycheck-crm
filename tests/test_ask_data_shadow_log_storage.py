@@ -19,17 +19,17 @@ class TestAskDataShadowLogLocalFallback(unittest.TestCase):
                         side_effect=RuntimeError("Supabase credentials not configured")), \
                 mock.patch("services.supabase_service.load_ask_data_shadow_log",
                           side_effect=RuntimeError("Supabase credentials not configured")):
-            settings.append_ask_data_shadow_log({"question": "How much debt?", "primary_mode": "v3"})
+            settings.append_ask_data_shadow_log({"question_hash": "How much debt?", "primary_mode": "v3"})
             loaded = settings.load_ask_data_shadow_log()
         self.assertEqual(len(loaded), 1)
-        self.assertEqual(loaded[0]["question"], "How much debt?")
+        self.assertEqual(loaded[0]["question_hash"], "How much debt?")
 
     def test_missing_table_error_also_falls_back_locally(self):
         with mock.patch("services.supabase_service.append_ask_data_shadow_log",
                         side_effect=Exception("Could not find the table 'public.ask_data_shadow_log'")), \
                 mock.patch("services.supabase_service.load_ask_data_shadow_log",
                           side_effect=Exception("Could not find the table 'public.ask_data_shadow_log'")):
-            settings.append_ask_data_shadow_log({"question": "q1"})
+            settings.append_ask_data_shadow_log({"question_hash": "q1"})
             loaded = settings.load_ask_data_shadow_log()
         self.assertEqual(len(loaded), 1)
 
@@ -40,13 +40,13 @@ class TestAskDataShadowLogLocalFallback(unittest.TestCase):
                 mock.patch("services.supabase_service.load_ask_data_shadow_log",
                           side_effect=RuntimeError("Supabase credentials not configured")):
             for i in range(5):
-                settings.append_ask_data_shadow_log({"question": f"q{i}"})
+                settings.append_ask_data_shadow_log({"question_hash": f"q{i}"})
             loaded = settings.load_ask_data_shadow_log()
         self.assertEqual(len(loaded), 3)
-        self.assertEqual([e["question"] for e in loaded], ["q2", "q3", "q4"])   # kept the most recent 3
+        self.assertEqual([e["question_hash"] for e in loaded], ["q2", "q3", "q4"])   # kept the most recent 3
 
     def test_supabase_success_is_preferred_over_local(self):
-        remote = [{"question": "from supabase"}]
+        remote = [{"question_hash": "from supabase"}]
         with mock.patch("services.supabase_service.load_ask_data_shadow_log", return_value=remote):
             loaded = settings.load_ask_data_shadow_log()
         self.assertEqual(loaded, remote)

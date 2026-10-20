@@ -1666,7 +1666,11 @@ def save_project_change_log(entries: List[Dict[str, Any]]) -> None:
 def _normalize_ask_data_shadow_log_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
     normalized: Dict[str, Any] = {
         "created_at": str(entry.get("timestamp") or datetime.datetime.utcnow().isoformat()),
-        "question": str(entry.get("question") or "").strip() or None,
+        # Never the raw question text (it may contain invoice numbers, customer/project names, bank
+        # references, etc.) -- only a non-reversible hash plus two harmless counts.
+        "question_hash": str(entry.get("question_hash") or "").strip() or None,
+        "question_length": entry.get("question_length"),
+        "question_word_count": entry.get("question_word_count"),
         "editor": str(entry.get("editor") or "").strip() or None,
         "primary_mode": str(entry.get("primary_mode") or "").strip() or None,
         "has_mismatch": bool(entry.get("has_mismatch")),

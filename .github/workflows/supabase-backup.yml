@@ -34,7 +34,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install Python dependencies
-        run: pip install requests
+        run: pip install requests supabase
 
       - name: Run backup and upload to OneDrive
         env:
@@ -54,3 +54,10 @@ jobs:
           # ONEDRIVE_FOLDER: Backups/Supabase
           # BACKUP_KEEP_COUNT: "30"
         run: python backup_to_onedrive.py
+
+      - name: Prune Ask Data shadow log (read-only diagnostics, 30-day retention)
+        env:
+          SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        # Never financial data; safe to run even before the ask_data_shadow_log table exists (no-op then).
+        run: python scripts/prune_ask_data_shadow_log.py --older-than-days 30 --apply

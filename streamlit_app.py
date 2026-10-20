@@ -3785,12 +3785,16 @@ elif page == "❓ Ask Data":
                 f"{len(_ask_data_shadow_mismatches)} with a flagged difference",
                 expanded=False,
             ):
-                st.caption("Read-only v2 vs v3 comparison log. Never shows ledger rows, amounts, or bank data — see services/ask_data/shadow.py.")
+                st.caption(
+                    "Read-only v2 vs v3 comparison log. Never shows ledger rows, amounts, bank data, or the "
+                    "raw question text (only a hash + word/character counts) — see services/ask_data/shadow.py."
+                )
                 st.dataframe(
                     pd.DataFrame([
                         {
                             "When": e.get("timestamp") or e.get("created_at"), "Editor": e.get("editor"),
-                            "Question": e.get("question"), "Primary": e.get("primary_mode"),
+                            "Question hash": str(e.get("question_hash") or "")[:12],
+                            "Question words": e.get("question_word_count"), "Primary": e.get("primary_mode"),
                             "v2 outcome": e.get("v2_outcome_kind"), "v3 outcome": e.get("v3_outcome_kind"),
                             "Mismatch flags": ", ".join(e.get("mismatch_flags") or []),
                         }

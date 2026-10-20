@@ -167,7 +167,8 @@ class TestAskDataV3Page(unittest.TestCase):
         self.assertEqual(len(self.shadow_entries), 1)
         entry = self.shadow_entries[0]
         self.assertEqual(entry["primary_mode"], "v3")
-        self.assertEqual(entry["question"], "Debt in Belgium")
+        self.assertNotIn("question", entry)
+        self.assertEqual(entry["question_word_count"], 3)   # "Debt in Belgium"
         self.assertEqual(entry["v3_outcome_kind"], "tool")
         self.assertEqual(entry["v2_outcome_kind"], "tool")
         self.assertEqual(entry["mismatch_flags"], [])   # same question, same resolved scope -> no divergence

@@ -21,6 +21,7 @@ ALTER TABLE public.project_change_log    ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.license_change_log    ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.license_expiry_alert_log ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.purchase_order_approvals ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.ask_data_shadow_log   ENABLE ROW LEVEL SECURITY;
 
 -- No policies added for the above tables → anon key gets DENIED by default.
 -- Service role key bypasses RLS → Streamlit CRM works unchanged.
