@@ -1,0 +1,70 @@
+﻿ledger_name,rows,paid_eur,cancelled_eur,unpaid_eur,total_eur,first_year,last_year,nearest_project,resolver_status,nearest_country,score,cumulative_share_pct,material
+AD Vlijtingen,4,20468.00,0.00,0.00,20468.00,2020,2022,AD Tielt-Winge; AD Itegem; AD Tienen; AD Vichte,ambiguous,,0.67,5.1,yes
+Plus Landgraaf Arts,8,17508.00,0.00,0.00,17508.00,2018,2025,Plus langdraaf Aarts,accepted,Hol,0.91,9.4,yes
+Jumbo Roden Jansema,5,11241.00,0.00,0.00,11241.00,2016,2021,,not_found,,0.52,12.2,yes
+AD Kalmthout,2,10060.00,0.00,0.00,10060.00,2024,2025,CM Kalmthout,ambiguous,,0.82,14.7,yes
+Coop Bert Stuut,6,9872.00,0.00,0.00,9872.00,2016,2019,,not_found,,0.43,17.1,no
+AD Grobbendonk,3,9872.00,0.00,0.00,9872.00,2020,2021,AD Arendonk,ambiguous,,0.78,19.6,no
+AD Ninove,1,0.00,9336.00,0.00,9336.00,2025,2025,AH Ninove; AD Deinze; AD Knokke,ambiguous,,0.88,21.9,no
+Jumbo Lokerenpassage,5,9114.00,0.00,0.00,9114.00,2017,2022,,not_found,,0.47,24.1,no
+Cactus Bonnevoie,2,9054.00,0.00,0.00,9054.00,2021,2022,,not_found,,0.42,26.4,no
+Eurospar Dadizele,6,8920.00,0.00,0.00,8920.00,2014,2021,Spar Dadizele; Spar Denderleew,ambiguous,,0.86,28.6,no
+AD Ravels,4,8802.00,0.00,0.00,8802.00,2015,2018,,not_found,,0.59,30.7,no
+Plus Harlingen,6,8759.00,0.00,0.00,8759.00,2016,2022,,not_found,,0.54,32.9,no
+CM Moorsel,5,8640.00,0.00,0.00,8640.00,2015,2019,CM Moorslede; CM Oostende,ambiguous,,0.8,35.1,no
+Coop Paanaker,4,8544.00,0.00,0.00,8544.00,2016,2019,,not_found,,0.48,37.2,no
+Plus Meerkerk,4,8048.00,0.00,0.00,8048.00,2017,2018,,not_found,,0.48,39.2,no
+CM Kapelle-op-den-bos,2,8048.00,0.00,0.00,8048.00,2024,2025,CM Kapelle-op-den-bosch,accepted,Bel,0.94,41.2,no
+Plus Elburg,5,7975.00,0.00,0.00,7975.00,2016,2020,,not_found,,0.52,43.1,no
+Plus Maastricht Caberg,5,7950.00,0.00,0.00,7950.00,2018,2021,,not_found,,0.46,45.1,no
+Plus Maastricht Starren,4,7860.00,0.00,0.00,7860.00,2017,2021,,not_found,,0.53,47.0,no
+Jumbo Uden De Laak,6,7856.00,0.00,0.00,7856.00,2018,2022,Jumbo Gravendeel Van Der Hoek,ambiguous,,0.6,49.0,no
+Plus Maastricht Savelkoul,4,7518.00,0.00,0.00,7518.00,2018,2022,,not_found,,0.44,50.8,no
+Plus Cullenburg,4,7310.00,0.00,0.00,7310.00,2016,2018,,not_found,,0.46,52.7,no
+Plus Heeten,4,7310.00,0.00,0.00,7310.00,2016,2019,,not_found,,0.53,54.5,no
+Plus Van Den Horst,4,7310.00,0.00,0.00,7310.00,2016,2019,,not_found,,0.55,56.3,no
+AH Dokkum,4,7310.00,0.00,0.00,7310.00,2018,2022,AD Knokke,ambiguous,,0.62,58.1,no
+Plus Waalwijk,5,6760.00,0.00,0.00,6760.00,2017,2022,,not_found,,0.44,59.8,no
+Plus Brunssum Quaedvlieg,4,6720.00,0.00,0.00,6720.00,2018,2023,,not_found,,0.39,61.4,no
+AH Hulst,1,6224.00,0.00,0.00,6224.00,2018,2018,,not_found,,0.57,63.0,no
+AH Kaatsheuvel,3,6170.00,0.00,0.00,6170.00,2016,2018,,not_found,,0.58,64.5,no
+Plus Waarder Hoogendoorn,5,6152.00,0.00,0.00,6152.00,2018,2022,,not_found,,0.5,66.0,no
+Plus Klazienaveen Fischer,5,6152.00,0.00,0.00,6152.00,2019,2022,,not_found,,0.49,67.5,no
+Jumbo Brielle,2,6036.00,0.00,0.00,6036.00,2018,2018,,not_found,,0.58,69.0,no
+AH Geldermalsen,2,6036.00,0.00,0.00,6036.00,2017,2018,,not_found,,0.59,70.5,no
+Plus Gulpen Kleijnen,4,5980.00,0.00,0.00,5980.00,2019,2022,,not_found,,0.48,72.0,no
+Plus Delft,5,5942.00,0.00,0.00,5942.00,2017,2019,,not_found,,0.52,73.5,no
+Jumbo Olm Krimpen aan den Ijssel,4,5848.00,0.00,0.00,5848.00,2018,2022,,not_found,,0.5,74.9,no
+Eurospar Denderleew,4,5848.00,0.00,0.00,5848.00,2018,2023,Spar Denderleew; Proxy Denderleew; AD Denderleeuw,ambiguous,,0.88,76.4,no
+Proxy Passendale,1,5070.00,0.00,0.00,5070.00,2014,2014,Proxy Denderleew; Proxy Staden; Proxy Veerle; Proxy Veltem,ambiguous,,0.67,77.6,no
+AH Merksem,5,4386.00,684.00,0.00,5070.00,2022,2025,AH Merksem Bredabaan; AH Merksem Maatjes,ambiguous,,0.95,78.9,no
+Emte Brakel,3,4936.00,0.00,0.00,4936.00,2016,2018,,not_found,,0.54,80.1,no
+Plus Thuitman,3,4936.00,0.00,0.00,4936.00,2017,2018,,not_found,,0.43,81.3,no
+Coop Stendeeren,3,4936.00,0.00,0.00,4936.00,2017,2019,CM Oostende; AH Oostende,ambiguous,,0.75,82.5,no
+Jumbo Rotterdam,2,4802.00,0.00,0.00,4802.00,2018,2018,,not_found,,0.5,83.7,no
+AH Asten,1,4668.00,0.00,0.00,4668.00,2017,2017,AH Oostende; AD Asse,ambiguous,,0.71,84.9,no
+Carrefour Express Orange Meer,1,4668.00,0.00,0.00,4668.00,2024,2024,,not_found,,0.45,86.0,no
+Plus Markelo Blankhorst,5,4614.00,0.00,0.00,4614.00,2017,2023,,not_found,,0.49,87.2,no
+Plus Kamerik Romijn,4,4386.00,0.00,0.00,4386.00,2018,2022,,not_found,,0.43,88.3,no
+Jumbo Groningen Pestman,4,4386.00,0.00,0.00,4386.00,2018,2022,,not_found,,0.52,89.3,no
+Jumbo Dedemsvaart,4,4386.00,0.00,0.00,4386.00,2022,2023,,not_found,,0.49,90.4,no
+Jumbo Lemmer,2,4024.00,0.00,0.00,4024.00,2017,2018,,not_found,,0.5,91.4,no
+Plus De Meeren,2,4024.00,0.00,0.00,4024.00,2017,2018,,not_found,,0.56,92.4,no
+AH Waalwijk,2,4024.00,0.00,0.00,4024.00,2018,2019,,not_found,,0.5,93.4,no
+Jumbo Zeeland Eijssermans,3,3702.00,0.00,0.00,3702.00,2019,2022,,not_found,,0.54,94.3,no
+Carrefour Express Rillaar,1,3380.00,0.00,0.00,3380.00,2013,2013,,not_found,,0.43,95.2,no
+CM Berlaar,1,3380.00,0.00,0.00,3380.00,2014,2014,,not_found,,0.58,96.0,no
+Cora Chatelineau,1,3380.00,0.00,0.00,3380.00,2014,2014,,not_found,,0.56,96.8,no
+Coop Kockengen,3,3246.00,0.00,0.00,3246.00,2017,2019,,not_found,,0.52,97.6,no
+Plus Horst,1,3112.00,0.00,0.00,3112.00,2018,2018,,not_found,,0.44,98.4,no
+Jumbo Gouda Hagendoorn,1,3112.00,0.00,0.00,3112.00,2018,2018,,not_found,,0.49,99.2,no
+Jumbo Heesch Wiegmans,1,3112.00,0.00,0.00,3112.00,2019,2019,,not_found,,0.52,100.0,no
+AH Erp,1,3112.00,0.00,0.00,3112.00,2019,2019,,not_found,,0.57,100.7,no
+AD Tessenderlo,2,3018.00,0.00,0.00,3018.00,2016,2017,AD Kessel-Lo; AD Dessel; AD Denderleeuw; AH Dendermonde,ambiguous,,0.7,101.5,no
+Plus Klein,2,3018.00,0.00,0.00,3018.00,2016,2017,,not_found,,0.45,102.2,no
+Proxy Hoevenan,1,2960.00,0.00,0.00,2960.00,2015,2015,Proxy Lovenjoel; Proxy Meeuwen; Proxy Leest,ambiguous,,0.67,103.0,no
+Carrefour Market Kortenberg,2,2736.00,0.00,0.00,2736.00,2023,2023,CM Kortenberg,ambiguous,,0.65,103.6,no
+Jumbo Diemen,3,2470.00,0.00,0.00,2470.00,2016,2019,,not_found,,0.53,104.2,no
+AH Heeze,3,2468.00,0.00,0.00,2468.00,2016,2018,,not_found,,0.59,104.9,no
+AD Bloemmolens,1,456.00,0.00,0.00,456.00,2026,2026,AD Bloemmolen,accepted,Bel,0.96,105.0,no
+CREDIT NOTE #8683,1,-20064.00,0.00,0.00,-20064.00,2026,2026,,not_found,,0.4,100.0,no
