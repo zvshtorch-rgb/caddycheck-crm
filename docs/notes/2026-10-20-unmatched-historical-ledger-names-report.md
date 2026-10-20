@@ -3,7 +3,20 @@
 Status: **report only**. No names were mapped, no aliases added, no data changed. Generated read-only on 2026-10-20
 (Ask Data Phase 3). The full list of all 69 names is in
 [unmatched_ledger_names_2026-10-20.csv](./unmatched_ledger_names_2026-10-20.csv) (rows, paid/cancelled/unpaid amounts, years,
-and what the user-input resolver would suggest, for information only).
+and what the user-input resolver would suggest, for information only). The table and CSV below are the original
+snapshot and are kept as-is for the audit trail; see "Update" for what has since changed.
+
+## Update (2026-10-20, later the same day)
+
+The Landgraaf alias proposed below was **approved and implemented**. `Plus Landgraaf Arts` (8 rows, EUR 17,508.00
+paid) is no longer unmatched: it now resolves to the project `Plus langdraaf Aarts` (Holland) and is counted there in
+paid-country views. The figures below still show the **original 69-name / EUR 394,061.00 snapshot**; with that one
+line resolved, the remaining unmatched total is **68 names, EUR 376,553.00 paid** (verified read-only against the
+live ledger). The other 68 historical names are still **not** mapped, per the instruction to keep this report
+separate and not auto-map them.
+
+The "always show Unassigned, even at zero" behavior (suggestion 4 below) has also been implemented in
+`services/ask_data/breakdown.py` for any country breakdown (unpaid, paid or cancelled), not only `debt_by_country`.
 
 ## What is affected
 
@@ -44,9 +57,9 @@ The 4 largest paid names total EUR 59,277.00 (14.7% of the unmatched amount); th
 - 16 are ambiguous or similar to several different projects. A wrong guess here would put money in the wrong country, which is why ledger matching is never fuzzy.
 - 50 have no resemblance to any current project (former Dutch/Luxembourg sites such as Jumbo, Coop, Plus, Cactus ones).
 
-## Suggested decisions (none taken)
+## Suggested decisions
 
-1. Approve or reject the Landgraaf alias proposal (separate note).
+1. ~~Approve or reject the Landgraaf alias proposal~~ -- **done**, see "Update" above.
 2. Decide individually on the two other near-identical spellings (Kapelle-op-den-bos, Bloemmolens).
 3. For the ~50 former sites, decide whether to keep them as inactive projects with a country in the project master. That is a data change and needs its own approval.
-4. In a later phase, show an "Unassigned" bucket for paid and cancelled country views too, the way debt-by-country already does, so the missing 20.8% is always visible instead of silent.
+4. ~~Show an "Unassigned" bucket for paid and cancelled country views too~~ -- **done**, implemented generally in `breakdown.py`.

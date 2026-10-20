@@ -10,6 +10,13 @@ PROJECT_ALIASES: dict[str, str] = {
     "CM Essen (coplementary)": "CM Essen",
     # Case/accent variant used on a ledger row; also resolved by normalisation, listed explicitly for clarity.
     "intermarché Heusy": "Intermarché Heusy",
+    # The project master misspells "Landgraaf" as "langdraaf"; historical ledger rows (invoices 8130, 8194, 8292,
+    # 8302, 8310, 8434, 8495, 8590) and PPS correspondence use the correct "Landgraaf" with either "Arts" or
+    # "Aarts". Approved 2026-10-20 (docs/notes/2026-10-20-alias-proposal-plus-landgraaf-arts.md); the project
+    # master's own typo is NOT corrected here. "Landgraaf" alone must stay ambiguous with "Plus Landgraaf
+    # Wetzels" (a different store) -- see resolver.py's alias-aware fuzzy scoring.
+    "Plus Landgraaf Arts": "Plus langdraaf Aarts",
+    "Plus Landgraaf Aarts": "Plus langdraaf Aarts",
 }
 
 # token-level spelling variants applied during normalisation (variant -> canonical token)

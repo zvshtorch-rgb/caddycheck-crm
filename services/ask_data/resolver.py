@@ -122,6 +122,20 @@ def project_alias_map(project_names: Iterable[str], aliases: Optional[dict] = No
     return resolved
 
 
+def _alias_candidates_by_canonical(project_names: Iterable[str], aliases: Optional[dict] = None) -> dict[str, list[str]]:
+    """canonical project name -> its own alias source texts (only aliases whose target project exists)."""
+    names_by_key: dict[str, list[str]] = {}
+    for name in project_names:
+        if name:
+            names_by_key.setdefault(compact_key(name), []).append(name)
+    groups: dict[str, list[str]] = {}
+    for alias, canonical in (PROJECT_ALIASES if aliases is None else aliases).items():
+        targets = names_by_key.get(compact_key(canonical), [])
+        if len(targets) == 1:
+            groups.setdefault(targets[0], []).append(alias)
+    return groups
+
+
 # ── projects ─────────────────────────────────────────────────────────────────────────────────────
 def _project_score(text: str, name: str) -> float:
     candidate_key, project_key = compact_key(text), compact_key(name)
@@ -144,7 +158,16 @@ def resolve_project(text: object, project_names: Iterable[str], aliases: Optiona
     if alias_hit:
         return Resolution(ACCEPTED, alias_hit, 1.0, (), "alias")
 
-    scored = sorted(((_project_score(text, n), n) for n in names), key=lambda sn: (-sn[0], sn[1]))
+    # A project's fuzzy score also considers its own alias source spellings (e.g. a ledger/PPS spelling that
+    # differs from the project master), so a word shared ONLY with an alias -- not with any real project name --
+    # still surfaces that project as a genuine competing candidate, instead of silently losing to whichever real
+    # name happens to contain the word.
+    alias_groups = _alias_candidates_by_canonical(names, aliases)
+
+    def best_score(name: str) -> float:
+        return max(_project_score(text, candidate) for candidate in [name] + alias_groups.get(name, []))
+
+    scored = sorted(((best_score(n), n) for n in names), key=lambda sn: (-sn[0], sn[1]))
     top = scored[0][0]
     if top >= 1.0:
         exact = [n for s, n in scored if s >= 1.0]

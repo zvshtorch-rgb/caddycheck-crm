@@ -244,7 +244,7 @@ def _debt_by_country_result(tool_name: str, args: dict, projects, invoices) -> T
     bd = debt_by_country(invoices, projects, row_filter=predicate, year=args.get("year"))
     total = bd.total
     ranked = sorted(bd.countries, key=lambda b: (-b.amount, b.label))
-    buckets = ranked + [b for b in (bd.no_country, bd.unassigned) if b.rows]
+    buckets = ranked + ([bd.no_country] if bd.no_country.rows else []) + [bd.unassigned]  # Unassigned: always shown, even zero
     all_rows = [r for b in buckets for r in b.rows]
     by_code = {b.label: b for b in ranked}
 

@@ -2,8 +2,9 @@
 
 Every row lands in exactly one bucket: a project country, "(country not set)" for a matched project without a
 country, or the separate "Unassigned (no matching project)" bucket for ledger names the resolver cannot attach to a
-project. The unassigned bucket is never merged away or dropped, so country totals + unassigned == total, to the cent.
-Read-only; sums use Decimal so the reconciliation is exact.
+project. The unassigned bucket is ALWAYS shown, even at zero -- so unpaid, paid and cancelled breakdowns never hide
+it -- while "(country not set)" is shown only when it actually has rows. Country totals + unassigned == total, to
+the cent. Read-only; sums use Decimal so the reconciliation is exact.
 """
 from __future__ import annotations
 
@@ -45,8 +46,9 @@ class DebtBreakdown:
 
     @property
     def buckets(self) -> list:
-        extra = [b for b in (self.no_country, self.unassigned) if b.rows]
-        return list(self.countries) + extra
+        """Country buckets, then '(country not set)' if it has rows, then 'Unassigned' -- ALWAYS, even at zero."""
+        no_country = [self.no_country] if self.no_country.rows else []
+        return list(self.countries) + no_country + [self.unassigned]
 
     @property
     def reconciles(self) -> bool:

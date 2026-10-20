@@ -1,7 +1,8 @@
-# Alias proposal (NOT applied): "Plus Landgraaf Arts" / "Plus Landgraaf Aarts" -> "Plus langdraaf Aarts"
+# Alias proposal: "Plus Landgraaf Arts" / "Plus Landgraaf Aarts" -> "Plus langdraaf Aarts"
 
-Status: **proposal only**. Nothing was added to `config/ask_data_aliases.py`, no ledger row and no project record was changed.
-Prepared read-only on 2026-10-20 as part of Ask Data Phase 3.
+Status: **APPROVED and implemented 2026-10-20.** Added to `config/ask_data_aliases.py` on the `feature/ask-data-phase3`
+branch (not yet deployed). No ledger row and no project record were changed; the project master's own "langdraaf"
+typo was deliberately left uncorrected (see "Not implemented" below).
 
 ## The mismatch
 
@@ -21,7 +22,7 @@ The project master spells **Landgraaf** as "langdraaf" (a typo), and the ledger'
 - Camera arithmetic is consistent: 8 cameras x EUR 228 (Y2+ rate) = EUR 1,824 for both invoice 8590 (2025) and invoice 8713 (2026).
 - Only one project in the master could be meant: the other Landgraaf project, `Plus Landgraaf Wetzels` (4 cameras), is a different store with its own ledger rows.
 
-## Proposed aliases (for approval)
+## Proposed aliases (approved; already added to `config/ask_data_aliases.py`)
 
 ```python
 "Plus Landgraaf Arts":  "Plus langdraaf Aarts",
@@ -30,13 +31,18 @@ The project master spells **Landgraaf** as "langdraaf" (a typo), and the ledger'
 
 They map spellings to the existing project only; they never rename or modify ledger rows or the project master.
 
-## Effect if approved
+## Effect now that it is approved (verified read-only against the live ledger)
 
-- The 8 historical ledger rows (EUR 17,508.00, all paid) join **Holland** in country views of paid and cancelled amounts.
-- **Debt is unaffected**: those rows have no unpaid amount, so total outstanding stays EUR 189,998.00 and the country debt split does not change.
-- A user typing just "Landgraaf" would become *ambiguous* (Wetzels or Aarts) and be asked to choose. Today it silently resolves to Wetzels, because the Aarts project name is misspelled.
-- Tests to add with the change: both aliases resolve; "Landgraaf" is ambiguous with both candidates; Wetzels stays separate; 8 rows / EUR 17,508.00 move to Holland; total outstanding unchanged.
+- The 8 historical ledger rows (EUR 17,508.00, all paid) now join **Holland** in country views of paid amounts.
+- **Debt is unaffected**: total outstanding is unchanged at EUR 189,998.00; the new row for invoice 8713 (EUR 1,824.00,
+  unpaid) already used the project's correct spelling and needed no alias.
+- A user typing just "Landgraaf" is **ambiguous** (`Plus Landgraaf Wetzels`, `Plus langdraaf Aarts`) and is asked to
+  choose, instead of silently resolving to Wetzels as it did before the alias existed. Wetzels and "Aarts" alone each
+  still resolve unambiguously on their own.
+- Tests added: `tests/test_ask_data_resolver.py` (`TestAliases`) -- both aliases resolve; "Landgraaf"/"Plus Landgraaf"
+  alone are ambiguous with exactly these two candidates; Wetzels and "Aarts" stay individually unambiguous; ledger
+  matching for both aliases; total outstanding unchanged.
 
-## Not proposed here
+## Not implemented
 
 - Correcting the typo in the project master (`langdraaf` -> `Landgraaf`) is a data change that also touches invoice 8713 and any external references; it needs its own decision.

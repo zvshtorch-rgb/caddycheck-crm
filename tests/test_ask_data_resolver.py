@@ -84,8 +84,13 @@ class TestNormalization(unittest.TestCase):
 
 
 class TestAliases(unittest.TestCase):
-    def test_exactly_the_two_approved_aliases_are_configured(self):
-        self.assertEqual(PROJECT_ALIASES, {"CM Essen (coplementary)": "CM Essen", "intermarché Heusy": "Intermarché Heusy"})
+    def test_exactly_the_four_approved_aliases_are_configured(self):
+        self.assertEqual(PROJECT_ALIASES, {
+            "CM Essen (coplementary)": "CM Essen",
+            "intermarché Heusy": "Intermarché Heusy",
+            "Plus Landgraaf Arts": "Plus langdraaf Aarts",
+            "Plus Landgraaf Aarts": "Plus langdraaf Aarts",
+        })
 
     def test_cm_essen_coplementary_resolves_to_cm_essen(self):
         projects, _ = make_data()
@@ -128,6 +133,41 @@ class TestAliases(unittest.TestCase):
     def test_ledger_matching_is_never_fuzzy(self):
         projects, _ = make_data()
         self.assertIsNone(ProjectIndex(projects).project("AD Alfa"))        # typo: fine for user input, never for ledger rows
+
+    LANDGRAAF_PROJECTS = [_project("Plus langdraaf Aarts", "Hol"), _project("Plus Landgraaf Wetzels", "Hol")]
+
+    def test_landgraaf_aliases_resolve_to_the_misspelled_project(self):
+        names = [p.project_name for p in self.LANDGRAAF_PROJECTS]
+        for text in ("Plus Landgraaf Arts", "Plus Landgraaf Aarts", "plus landgraaf arts"):
+            r = resolve_project(text, names)
+            self.assertEqual((r.status, r.value), (ACCEPTED, "Plus langdraaf Aarts"), text)
+        index = ProjectIndex(self.LANDGRAAF_PROJECTS)
+        self.assertEqual(index.canonical_name("Plus Landgraaf Arts"), "Plus langdraaf Aarts")
+        self.assertEqual(index.canonical_name("Plus Landgraaf Aarts"), "Plus langdraaf Aarts")
+
+    def test_landgraaf_alone_stays_ambiguous_between_the_two_stores(self):
+        """'Landgraaf' alone must NOT silently resolve to Wetzels just because that project's real name
+        happens to contain the word -- the misspelled project's own alias sources also contain it."""
+        names = [p.project_name for p in self.LANDGRAAF_PROJECTS]
+        r = resolve_project("Landgraaf", names)
+        self.assertEqual(r.status, AMBIGUOUS)
+        self.assertEqual(set(r.candidates), {"Plus langdraaf Aarts", "Plus Landgraaf Wetzels"})
+        r = resolve_project("Plus Landgraaf", names)
+        self.assertEqual(r.status, AMBIGUOUS)
+        self.assertEqual(set(r.candidates), {"Plus langdraaf Aarts", "Plus Landgraaf Wetzels"})
+
+    def test_wetzels_and_aarts_remain_individually_unambiguous(self):
+        names = [p.project_name for p in self.LANDGRAAF_PROJECTS]
+        self.assertEqual(resolve_project("Wetzels", names).value, "Plus Landgraaf Wetzels")
+        self.assertEqual(resolve_project("Aarts", names).value, "Plus langdraaf Aarts")
+        # ledger rows: never fuzzy, so the bare "Landgraaf" ambiguity never corrupts country matching
+        index = ProjectIndex(self.LANDGRAAF_PROJECTS)
+        self.assertIsNone(index.canonical_name("Landgraaf"))
+
+    def test_landgraaf_aliases_do_not_affect_the_usual_fixture(self):
+        """The alias table is global config; confirm it's inert when neither Landgraaf project exists."""
+        projects, _ = make_data()
+        self.assertIsNone(resolver.project_alias_map([p.project_name for p in projects]).get(compact_key("Plus Landgraaf Arts")))
 
 
 class TestThresholds(unittest.TestCase):
@@ -283,6 +323,19 @@ class TestCountryTotalsReconcile(unittest.TestCase):
         self.assertEqual(list(frame["Country"])[-1], "Total")
         self.assertEqual(frame.iloc[-1]["Amount (€)"], b.total)
 
+    def test_unassigned_bucket_is_shown_at_zero_for_paid_and_cancelled_breakdowns_too(self):
+        """The 'always show, even at zero' requirement applies to ANY row_filter, not just unpaid debt."""
+        for predicate in (lambda inv: inv.is_paid(), lambda inv: inv.is_cancelled()):
+            b = breakdown.debt_by_country(self.invoices, self.projects, row_filter=predicate)
+            self.assertIn(breakdown.UNASSIGNED_LABEL, [x.label for x in b.buckets])
+            self.assertTrue(b.reconciles)
+        paid = breakdown.debt_by_country(self.invoices, self.projects, row_filter=lambda inv: inv.is_paid())
+        self.assertEqual(paid.unassigned.amount, Decimal("0"))    # "Unknown Shop" row is unpaid, so paid-unassigned is genuinely zero
+        self.assertEqual(sum((b.amount for b in paid.buckets), Decimal("0")), paid.total)
+        cancelled = breakdown.debt_by_country(self.invoices, self.projects, row_filter=lambda inv: inv.is_cancelled())
+        self.assertEqual(cancelled.unassigned.amount, Decimal("0"))
+        self.assertEqual(sum((b.amount for b in cancelled.buckets), Decimal("0")), cancelled.total)
+
     def test_an_alias_without_its_target_project_leaves_the_row_visibly_unassigned(self):
         projects = [p for p in self.projects if p.project_name != "CM Essen"]
         b = breakdown.debt_by_country(self.invoices, projects)
@@ -290,12 +343,13 @@ class TestCountryTotalsReconcile(unittest.TestCase):
         self.assertIn("CM Essen (coplementary)", b.unassigned_names())
         self.assertEqual(b.unassigned.amount, Decimal("111") + Decimal("3112"))
 
-    def test_unassigned_bucket_is_empty_only_when_everything_matches(self):
+    def test_unassigned_bucket_is_always_shown_even_when_empty(self):
         invoices = [i for i in self.invoices if i.project_name != "Unknown Shop"]
         b = breakdown.debt_by_country(invoices, self.projects)
         self.assertEqual((b.unassigned.row_count, b.unassigned.amount), (0, Decimal("0")))
         self.assertTrue(b.reconciles)
-        self.assertNotIn(breakdown.UNASSIGNED_LABEL, [x.label for x in b.buckets])
+        self.assertIn(breakdown.UNASSIGNED_LABEL, [x.label for x in b.buckets])
+        self.assertEqual(b.buckets[-1].label, breakdown.UNASSIGNED_LABEL)  # always last, even at zero
 
     def test_a_matched_project_without_a_country_gets_its_own_visible_bucket(self):
         projects = self.projects + [Project("No Country Shop", country="", status="Active")]
