@@ -235,8 +235,13 @@ from config.settings import (
     load_orders_records,
     save_orders_records,
     get_gemini_config,
-    get_ask_data_v3_enabled,
 )
+try:  # new flag; a running Cloud process can hold a stale config.settings module until rebooted
+    from config.settings import get_ask_data_v3_enabled
+except ImportError:  # pragma: no cover - only hit mid-redeploy before a full reboot
+    def get_ask_data_v3_enabled() -> bool:
+        return False
+
 
 try:
     from config.settings import load_project_change_log, append_project_change_log, save_project_change_log
@@ -1484,7 +1489,14 @@ def _answer_data_turn_v3(question: str, context: ConversationContext, projects, 
 # ══════════════════════════════════════════════════════════════════════════════
 
 from services.ask_data.shadow import ShadowSummary, build_comparison  # noqa: E402
-from config.settings import append_ask_data_shadow_log, load_ask_data_shadow_log  # noqa: E402
+try:  # new functions; a running Cloud process can hold a stale config.settings module until rebooted
+    from config.settings import append_ask_data_shadow_log, load_ask_data_shadow_log
+except ImportError:  # pragma: no cover - only hit mid-redeploy before a full reboot
+    def append_ask_data_shadow_log(entry: dict) -> None:
+        pass
+
+    def load_ask_data_shadow_log() -> list:
+        return []
 
 
 def _ask_data_shadow_v3_summary(question: str, projects, invoices, debt_summaries) -> ShadowSummary:

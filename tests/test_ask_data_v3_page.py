@@ -10,12 +10,30 @@ itself to a no-op so no real file/Supabase write ever happens here).
 import importlib.util
 import os
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from tests._ask_data_harness import BASE_CFG, _gemini_ok, _make_post, build_fixture
 
 HAS_STREAMLIT = importlib.util.find_spec("streamlit") is not None
 APP_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "streamlit_app.py")
+
+
+class TestAppImportsAskDataV3SymbolsTolerantly(unittest.TestCase):
+    """Streamlit Cloud can keep an OLD cached config.settings module in sys.modules while it reloads the new
+    streamlit_app.py on redeploy. A hard top-level import of a brand-new name added to that already-imported
+    module (get_ask_data_v3_enabled, append_ask_data_shadow_log, load_ask_data_shadow_log) would then crash
+    the whole app with ImportError until a full reboot (this happened once already -- see commit 365ae09 for
+    the same issue with the bank-payment PDF helpers). This test does not need streamlit installed."""
+
+    def test_new_config_settings_symbols_are_imported_inside_try_except_importerror(self):
+        source = Path(APP_PATH).read_text(encoding="utf-8")
+        for name in ("get_ask_data_v3_enabled", "append_ask_data_shadow_log", "load_ask_data_shadow_log"):
+            self.assertIn(name, source)
+        self.assertIn("def get_ask_data_v3_enabled() -> bool:\n        return False", source)
+        self.assertIn("def append_ask_data_shadow_log(entry: dict) -> None:\n        pass", source)
+        self.assertIn("def load_ask_data_shadow_log() -> list:\n        return []", source)
+        self.assertGreaterEqual(source.count("except ImportError:  # pragma: no cover - only hit mid-redeploy before a full reboot"), 2)
 
 
 @unittest.skipUnless(HAS_STREAMLIT, "streamlit is not installed")
