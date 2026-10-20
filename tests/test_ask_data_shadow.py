@@ -58,6 +58,13 @@ class TestShadowSummary(unittest.TestCase):
         self.assertEqual(ShadowSummary.from_legacy().outcome_kind, "legacy")
         self.assertEqual(ShadowSummary.from_error().outcome_kind, "error")
 
+    def test_from_historical_unsupported_is_distinct_from_error(self):
+        summary = ShadowSummary.from_historical_unsupported()
+        self.assertEqual(summary.outcome_kind, "historical_unsupported")
+        self.assertNotEqual(summary.outcome_kind, ShadowSummary.from_error().outcome_kind)
+        self.assertFalse(summary.financial)
+        self.assertIsNone(summary.row_count)
+
     def test_row_set_hash_is_order_independent_but_content_sensitive(self):
         a = ShadowSummary.from_tool_result(_result(rows_payload=[{"x": 1}, {"x": 2}]))
         b = ShadowSummary.from_tool_result(_result(rows_payload=[{"x": 2}, {"x": 1}]))

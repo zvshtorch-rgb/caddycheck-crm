@@ -30,6 +30,11 @@ UNVERIFIED_TEXT = (
     "I could not verify the figures in this answer against the ledger rows, so I am not showing a number. See the table below."
 )
 NO_PREVIOUS_RESULT_TEXT = "There's no previous answer to show rows for yet -- ask a question first."
+HISTORICAL_LIMITATION_TEXT = (
+    "I don't yet have a complete historical snapshot for that date, so I can't reliably calculate the change. "
+    "I can instead show you the payments received since then, or the current total debt -- just ask for either "
+    "of those directly."
+)
 
 # Free-text drill-down phrases (goal 6 + goal 2's "Which invoices make that up?" example). Matched as a
 # substring so this NEVER calls the model: it is answered purely from the stored ToolResult.
@@ -41,10 +46,38 @@ _ROWS_PHRASES_HE = ("הצג חשבוניות", "אילו חשבוניות", "ת�
 _BREAKDOWN_PHRASES_EN = ("show breakdown", "show the breakdown", "show components")
 _BREAKDOWN_PHRASES_HE = ("הצג פירוט", "פירוט", "פילוח")
 
+# Historical/change-over-time questions (e.g. "What changed since September 1?", "How has debt changed this
+# month?", "What was the debt last week?"). Phase 5 (a daily history-snapshot table) is not
+# implemented yet, so there is no reliable prior-point-in-time data to answer these from -- routing them to
+# an unrelated current-state tool (the production bug this guards against) would silently return a wrong,
+# unrelated answer. Detected deterministically (no model call) as CHANGE-word + TIME-word, so a plain
+# current-state question that merely happens to mention a month/week ("invoices from last month") does NOT
+# false-positive: it needs a word that implies comparison/change too.
+_HISTORICAL_CHANGE_WORDS_EN = (
+    "what changed", "what's changed", "what has changed", "how has", "how much has", "what was the",
+    "what were the", "has changed", "have changed", "changed since", "change since", "compared to last",
+    "versus last", "vs last", "used to be",
+)
+_HISTORICAL_TIME_WORDS_EN = (
+    "since", "last week", "last month", "yesterday", "this month", "this week", " ago", "previously", "before today",
+)
+_HISTORICAL_CHANGE_WORDS_HE = ("השתנה", "השתנו", "שינוי", "היה", "היו", "היתה")
+_HISTORICAL_TIME_WORDS_HE = ("מאז", "לפני", "אתמול", "שבוע", "חודש")
+
 
 def _matches_any(text: str, phrases_en: tuple, phrases_he: tuple) -> bool:
     lowered = (text or "").strip().lower()
     return any(p in lowered for p in phrases_en) or any(p in (text or "") for p in phrases_he)
+
+
+def is_historical_question(question: str) -> bool:
+    """True for a historical/change-over-time question (goal 1) -- needs both a CHANGE word and a TIME
+    word, so plain current-state questions that merely mention a time period never false-positive."""
+    lowered = (question or "").strip().lower()
+    raw = question or ""
+    has_change = any(w in lowered for w in _HISTORICAL_CHANGE_WORDS_EN) or any(w in raw for w in _HISTORICAL_CHANGE_WORDS_HE)
+    has_time = any(w in lowered for w in _HISTORICAL_TIME_WORDS_EN) or any(w in raw for w in _HISTORICAL_TIME_WORDS_HE)
+    return has_change and has_time
 
 
 def detect_drilldown_kind(question: str) -> Optional[str]:
@@ -81,7 +114,7 @@ class TurnOutcome:
     in `text`/`dataframe` (both of which are the normal, grounded ToolResult display)."""
     text: str
     dataframe: Optional[pd.DataFrame]
-    kind: str                       # "tool" | "drilldown" | "clarification" | "legacy"
+    kind: str                       # "tool" | "drilldown" | "clarification" | "legacy" | "historical_unsupported"
     tool: Optional[str] = None
     result: Optional[ToolResult] = None
 
@@ -139,6 +172,13 @@ def answer_turn(
         else:
             text, df = rows_table_for_result(previous, store)
         return TurnOutcome(text, df, "drilldown", tool=previous.tool, result=previous)
+
+    if is_historical_question(question):
+        # No Phase 5 history source yet -- never let the planner silently pick an unrelated current-state
+        # tool for a trend/change-over-time question (the production bug this guards against). A stale
+        # clarification (if any) is abandoned, since this is clearly a different, unrelated question.
+        context.clarification = None
+        return TurnOutcome(HISTORICAL_LIMITATION_TEXT, None, "historical_unsupported")
 
     if context.clarification is not None:
         pending = context.clarification

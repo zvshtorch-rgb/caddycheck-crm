@@ -12,7 +12,8 @@ from services.ask_data.context import (
     CARRYABLE_FILTER_KEYS, Clarification, ConversationContext, is_reset_phrase, resolve_clarification_reply,
 )
 from services.ask_data.conversation import (
-    TurnOutcome, answer_turn, breakdown_table_for_result, detect_drilldown_kind, rows_table_for_result,
+    HISTORICAL_LIMITATION_TEXT, TurnOutcome, answer_turn, breakdown_table_for_result, detect_drilldown_kind,
+    is_historical_question, rows_table_for_result,
 )
 from services.ask_data.money import fmt_eur, sum_money
 from services.ask_data.planner import _llm_parse_data_question
@@ -392,6 +393,74 @@ class TestGroundingAndLegacyFallbackStillWork(unittest.TestCase):
             outcome = run_turn("total debt", '{"tool": "get_debt", "arguments": {}}', ctx)
         self.assertEqual(outcome.text, conversation_module.UNVERIFIED_TEXT)
         self.assertIsNotNone(outcome.dataframe)
+
+
+class TestHistoricalQuestionsAreNotMisrouted(unittest.TestCase):
+    """Regression test for the production bug: "What changed since September 1?" was silently routed to a
+    license-status tool and returned unrelated project data. Phase 5 (invoice_snapshots history) does not
+    exist yet, so these questions must get a deterministic limitation message instead of ANY tool call."""
+
+    def test_is_historical_question_detects_the_reported_examples(self):
+        for question in (
+            "What changed since September 1?",
+            "How has debt changed this month?",
+            "What was the debt last week?",
+            "What changed since yesterday?",
+            "כמה השתנה החוב מאז תחילת החודש?",
+            "מה היה החוב לפני שבוע?",
+        ):
+            with self.subTest(question=question):
+                self.assertTrue(is_historical_question(question))
+
+    def test_plain_current_state_questions_are_not_false_positives(self):
+        for question in (
+            "How much debt do we have?",
+            "Show unpaid invoices for AD Anderlecht",
+            "Which country has the most cameras?",
+            "Show invoices from last month",          # has a time word but no change/comparison word
+            "What is the debt for Belgium?",           # "what is", not "what was"
+            HE_GERMANY,
+        ):
+            with self.subTest(question=question):
+                self.assertFalse(is_historical_question(question))
+
+    def test_a_historical_question_never_calls_gemini_and_returns_the_limitation_text(self):
+        ctx = ConversationContext()
+        outcome = run_turn("What changed since September 1?", None, ctx)   # payload=None -> any Gemini call fails the test
+        self.assertEqual(outcome.kind, "historical_unsupported")
+        self.assertEqual(outcome.text, HISTORICAL_LIMITATION_TEXT)
+        self.assertIsNone(outcome.dataframe)
+        self.assertIsNone(outcome.result)
+
+    def test_hebrew_historical_question_never_calls_gemini(self):
+        ctx = ConversationContext()
+        outcome = run_turn("כמה השתנה החוב מאז תחילת החודש?", None, ctx)
+        self.assertEqual(outcome.kind, "historical_unsupported")
+        self.assertEqual(outcome.text, HISTORICAL_LIMITATION_TEXT)
+
+    def test_does_not_offer_drilldown_buttons_tool_or_result(self):
+        """Goal 4: no "Show invoices"/"Show breakdown" buttons -- those only ever attach to kind == "tool"
+        in the chat UI (streamlit_app.py), so a non-"tool" kind with no result is the enforcement point here."""
+        ctx = ConversationContext()
+        outcome = run_turn("What was the debt last week?", None, ctx)
+        self.assertNotEqual(outcome.kind, "tool")
+        self.assertIsNone(outcome.result)
+
+    def test_does_not_poison_the_conversation_context(self):
+        ctx = ConversationContext()
+        run_turn("Debt in Belgium", '{"tool": "get_debt", "arguments": {"country": "Belgium"}}', ctx)
+        previous_result_id, previous_filters = ctx.previous_result_id, dict(ctx.filters)
+        run_turn("What changed since September 1?", None, ctx)
+        self.assertEqual(ctx.previous_result_id, previous_result_id)   # untouched -- still points at Belgium's answer
+        self.assertEqual(ctx.filters, previous_filters)
+
+    def test_abandons_a_pending_clarification_instead_of_trying_to_resolve_it_as_a_reply(self):
+        ctx = ConversationContext()
+        run_turn("debt for Edeka", '{"tool": "get_debt", "arguments": {"project": "Edeka"}}', ctx, data=make_data())
+        self.assertIsNotNone(ctx.clarification)
+        outcome = run_turn("What changed since September 1?", None, ctx, data=make_data())
+        self.assertEqual(outcome.kind, "historical_unsupported")
+        self.assertIsNone(ctx.clarification)
 
 
 class TestFeatureFlag(unittest.TestCase):
