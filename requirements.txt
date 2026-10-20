@@ -9,3 +9,7 @@ pdfplumber>=0.10.0
 requests>=2.31.0
 pyotp>=2.9.0
 qrcode[pil]>=7.4.2
+# touch: force a full Streamlit Cloud environment rebuild/process restart (2026-10-20) --
+# a lightweight script-only redeploy left services/ask_data/conversation.py's module object
+# cached from before the historical-question routing fix (3333bde), so the fix silently did
+# not take effect until a genuine process restart. Safe to remove this comment later.
