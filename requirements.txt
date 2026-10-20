@@ -13,3 +13,7 @@ qrcode[pil]>=7.4.2
 # a lightweight script-only redeploy left services/ask_data/conversation.py's module object
 # cached from before the historical-question routing fix (3333bde), so the fix silently did
 # not take effect until a genuine process restart. Safe to remove this comment later.
+# touch: Ask Data Phase 5 deploy (invoice_snapshots history, ask_data_history=false) --
+# proactively forcing a full rebuild again so the same known stale-module class of bug
+# cannot silently leave conversation.py/context.py/planner.py/tool_specs.py/executor.py on
+# their pre-Phase-5 cached versions.
