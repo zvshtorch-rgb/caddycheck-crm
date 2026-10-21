@@ -61,3 +61,22 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         # Never financial data; safe to run even before the ask_data_shadow_log table exists (no-op then).
         run: python scripts/prune_ask_data_shadow_log.py --older-than-days 30 --apply
+
+      - name: Run daily Ask Data invoice history snapshot (Phase 5)
+        if: always()
+        env:
+          SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        # Captures today's (UTC) invoices-table state into invoice_snapshots/invoice_snapshot_runs so Ask
+        # Data's historical/trend tools (get_debt_at, get_debt_change, etc. -- gated behind
+        # ask_data_history, editor/admin-only for now) can answer "what was the debt on date X" without
+        # ever touching the live invoices/projects tables. See snapshot_invoice_history.py's module
+        # docstring for the full idempotency/audit-log/failure-handling design.
+        #
+        # `if: always()` makes this step run independently of the backup/prune steps above: a backup
+        # hiccup must never silently skip today's snapshot, and vice versa. Read-only against
+        # invoices/projects/bank_payments/invoice_change_log; the ONLY tables ever written are the two new,
+        # purely-additive history tables above -- a failure here can never affect the CRM. The script exits
+        # non-zero on failure, which marks this step (and so this workflow run) as failed in the Actions
+        # tab rather than leaving a silent gap.
+        run: python snapshot_invoice_history.py
