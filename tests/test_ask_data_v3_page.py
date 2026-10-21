@@ -73,7 +73,7 @@ class TestAskDataV3Page(unittest.TestCase):
         app.session_state["role"] = role
         app.run()
         self.assertFalse(app.exception, [e.value for e in app.exception])
-        app.sidebar.radio[0].set_value("❓ Ask Data").run()
+        app.sidebar.radio[0].set_value("❓ Caddy Chat").run()
         self.assertFalse(app.exception, [e.value for e in app.exception])
         return app
 
@@ -105,16 +105,16 @@ class TestAskDataV3Page(unittest.TestCase):
         """Goal 1 + 4: off by default even for an approved editor; a switcher lets them opt into v3."""
         app = self.open_page(v3_enabled=True, role="admin")
         self.assertEqual(len(app.main.radio), 1)
-        self.assertEqual(app.main.radio[0].value, "Ask Data v2")
+        self.assertEqual(app.main.radio[0].value, "Caddy Chat v2")
         self.assertEqual(len(app.chat_input), 0, "still on v2 until the editor explicitly switches")
         self.assertTrue(any(b.label == "Ask" for b in app.button))
 
     def test_editor_can_switch_to_v3_and_back(self):
         app = self.open_page(v3_enabled=True, role="admin")
-        app.main.radio[0].set_value("Ask Data v3 (preview)").run()
+        app.main.radio[0].set_value("Caddy Chat v3 (preview)").run()
         self.assertFalse(app.exception, [e.value for e in app.exception])
         self.assertEqual(len(app.chat_input), 1)
-        app.main.radio[0].set_value("Ask Data v2").run()
+        app.main.radio[0].set_value("Caddy Chat v2").run()
         self.assertFalse(app.exception, [e.value for e in app.exception])
         self.assertEqual(len(app.chat_input), 0)
         self.assertTrue(any(b.label == "Ask" for b in app.button))
@@ -122,7 +122,7 @@ class TestAskDataV3Page(unittest.TestCase):
     # ── Chat UI behaviour (editor, v3 selected) ──────────────────────────────────────────────────
 
     def _select_v3(self, app):
-        app.main.radio[0].set_value("Ask Data v3 (preview)").run()
+        app.main.radio[0].set_value("Caddy Chat v3 (preview)").run()
         self.assertFalse(app.exception, [e.value for e in app.exception])
         return app
 

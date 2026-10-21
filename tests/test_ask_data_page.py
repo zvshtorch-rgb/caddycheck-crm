@@ -45,7 +45,7 @@ class TestAskDataPage(unittest.TestCase):
         app.session_state["role"] = "viewer"
         app.run()
         self.assertFalse(app.exception, [e.value for e in app.exception])
-        app.sidebar.radio[0].set_value("❓ Ask Data").run()
+        app.sidebar.radio[0].set_value("❓ Caddy Chat").run()
         self.assertFalse(app.exception, [e.value for e in app.exception])
         return app
 
