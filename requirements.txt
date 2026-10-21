@@ -35,3 +35,6 @@ qrcode[pil]>=7.4.2
 # full rebuild for the same known stale-module reason.
 # touch: Order Approvals -- warn + editable field for unreliable filename-derived project names
 # (streamlit_app.py); forcing another full rebuild for the same known stale-module reason.
+# touch: Order Approvals -- new "Preview order confirmation (dry run)" button (Year-1 invoice/PDF/
+# confirmation-email preview, no writes; live send is a separate, not-yet-enabled step) --
+# forcing another full rebuild for the same known stale-module reason.

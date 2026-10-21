@@ -277,6 +277,38 @@ def get_email_config() -> dict:
     return defaults
 
 
+def get_order_confirmation_config() -> dict:
+    """Load the order-confirmation-email config (sender mailbox + To/CC recipients) for the Order
+    Approvals auto-confirmation feature.
+
+    Checked, in order: st.secrets["order_confirmation"] (preferred -- a dedicated section, deliberately
+    separate from the generic [email] section used for monthly invoices/license alerts), then
+    ORDER_CONFIRMATION_SENDER/TO/CC env vars. Returns {"sender": "", "to": [], "cc": []} when nothing is
+    configured -- callers must report a clear, actionable validation error rather than hardcoding or
+    guessing real recipient addresses (see services/order_confirmation_service.py)."""
+    defaults = {"sender": "", "to": [], "cc": []}
+    try:
+        import streamlit as st
+        cfg = st.secrets.get("order_confirmation", {})
+        if cfg:
+            for k, v in cfg.items():
+                if k in ("to", "cc") and isinstance(v, str):
+                    v = [x.strip() for x in v.split(",") if x.strip()]
+                defaults[k] = v
+    except Exception:
+        pass
+    env_sender = os.environ.get("ORDER_CONFIRMATION_SENDER", "").strip()
+    if env_sender:
+        defaults["sender"] = env_sender
+    env_to = os.environ.get("ORDER_CONFIRMATION_TO", "").strip()
+    if env_to:
+        defaults["to"] = [x.strip() for x in env_to.split(",") if x.strip()]
+    env_cc = os.environ.get("ORDER_CONFIRMATION_CC", "").strip()
+    if env_cc:
+        defaults["cc"] = [x.strip() for x in env_cc.split(",") if x.strip()]
+    return defaults
+
+
 def get_gemini_config() -> dict:
     """Load Gemini API config (used to help Ask Data understand free-text questions)."""
     defaults = {"api_key": "", "model": "gemini-flash-latest"}

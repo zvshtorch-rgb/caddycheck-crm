@@ -37,6 +37,33 @@ REQUIRED_INTAKE_SCHEMA_VERSION = 20261015
 
 _client = None
 
+_UNRELIABLE_PROJECT_NAME_WORDS = {
+    "document", "doc", "file", "scan", "copy", "invoice", "order", "po", "purchase", "attachment", "untitled",
+}
+
+
+def _project_name_looks_unreliable(name: Optional[str]) -> bool:
+    """True when a filename-derived project name still looks like raw filename noise (a generic word
+    and/or an unstripped date/reference number) rather than an actual project/store name.
+
+    Production incident this guards against: a PO's PDF was named
+    'document_iretailche_20260923_2026-0047-2.pdf' (not the usual 'YYYY-MM-NNN_ProjectName.pdf'
+    convention), so _project_name_from_filename() (order_intake_poll.py) only stripped the extension and
+    swapped underscores for spaces -- producing the literal garbage name
+    'document iretailche 20260923 2026-0047-2', which then flowed untouched into the auto-created
+    invoice, project, and order record on approval. Used by both the Order Approvals page (to warn +
+    offer an editable field before approving) and the order-confirmation validator (as a hard blocker --
+    see services/order_confirmation_service.py)."""
+    text = (name or "").strip()
+    if not text:
+        return True
+    first_word = text.split(" ", 1)[0].strip().lower()
+    if first_word in _UNRELIABLE_PROJECT_NAME_WORDS:
+        return True
+    if re.search(r"\d{6,}", text):  # an unstripped date/reference number, e.g. 20260923, 2026-0047-2
+        return True
+    return False
+
 
 # ── Supabase client (works in Streamlit *and* standalone scripts) ─────────────
 def _get_client():

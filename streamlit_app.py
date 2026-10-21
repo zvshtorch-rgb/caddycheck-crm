@@ -1896,32 +1896,7 @@ def _guess_order_country(project_name: str) -> str:
     return ""
 
 
-_UNRELIABLE_PROJECT_NAME_WORDS = {
-    "document", "doc", "file", "scan", "copy", "invoice", "order", "po", "purchase", "attachment", "untitled",
-}
-
-
-def _project_name_looks_unreliable(name: str) -> bool:
-    """True when a filename-derived project name still looks like raw filename noise (a generic word
-    and/or an unstripped date/reference number) rather than an actual project/store name.
-
-    Production incident this guards against: a PO's PDF was named
-    'document_iretailche_20260923_2026-0047-2.pdf' (not the usual 'YYYY-MM-NNN_ProjectName.pdf'
-    convention), so _project_name_from_filename() (order_intake_poll.py) only stripped the extension and
-    swapped underscores for spaces -- producing the literal garbage name
-    'document iretailche 20260923 2026-0047-2', which then flowed untouched into the auto-created
-    invoice, project, and order record on approval. This check surfaces a warning + an editable field
-    (see the Order Approvals page) so an admin can fix the name BEFORE approving, instead of a developer
-    having to rename the resulting records after the fact."""
-    text = _safe_str(name).strip()
-    if not text:
-        return True
-    first_word = text.split(" ", 1)[0].strip().lower()
-    if first_word in _UNRELIABLE_PROJECT_NAME_WORDS:
-        return True
-    if re.search(r"\d{6,}", text):  # an unstripped date/reference number, e.g. 20260923, 2026-0047-2
-        return True
-    return False
+from services.order_approval_service import _project_name_looks_unreliable  # noqa: E402 - shared with order_confirmation_service
 
 
 def _guess_project_name_from_order_filename(filename: str) -> str:
@@ -8553,6 +8528,49 @@ elif page == "✅ Order Approvals":
                             st.session_state["_flash_success"] = f"Project name updated to '{_trimmed_name}'."
                             st.session_state["_flash_success_page"] = "✅ Order Approvals"
                             st.rerun()
+
+                    if st.button(
+                        "🔍 Preview order confirmation (dry run)", key=f"preview_confirm_{_o['id']}",
+                        use_container_width=True,
+                        help="Shows what the Year-1 invoice/PDF/confirmation email WOULD look like -- "
+                             "nothing is saved, no invoice is created, and no email is sent.",
+                    ):
+                        from services import order_confirmation_service as _ocs
+                        st.session_state[f"_confirm_preview_{_o['id']}"] = _ocs.build_dry_run_preview(_o["id"])
+
+                    _confirm_preview = st.session_state.get(f"_confirm_preview_{_o['id']}")
+                    if _confirm_preview is not None:
+                        with st.expander(
+                            "📋 Order confirmation preview (dry run -- nothing has been sent or saved)",
+                            expanded=True,
+                        ):
+                            for _preview_err in _confirm_preview.get("errors", []):
+                                st.error(_preview_err)
+                            for _preview_warn in _confirm_preview.get("warnings", []):
+                                st.warning(_preview_warn)
+                            if _confirm_preview.get("ok"):
+                                st.markdown(
+                                    f"**Sender:** {_confirm_preview['sender']}  \n"
+                                    f"**To:** {', '.join(_confirm_preview['to'])}  \n"
+                                    f"**CC:** {', '.join(_confirm_preview['cc']) or '—'}  \n"
+                                    f"**Invoice number (preview, not yet created):** {_confirm_preview['invoice_number_preview']}  \n"
+                                    f"**Year-1 amount:** €{_confirm_preview['amount']:,.2f}"
+                                )
+                                _mailbox_check = _confirm_preview.get("mailbox_check") or {}
+                                if _mailbox_check.get("ok"):
+                                    st.success(f"✅ {_mailbox_check.get('message')}")
+                                else:
+                                    st.warning(f"⚠️ {_mailbox_check.get('message')}")
+                                st.markdown(f"**Subject:** {_confirm_preview['subject']}")
+                                st.code(_confirm_preview["body"], language=None)
+                                if _confirm_preview.get("pdf_bytes"):
+                                    st.download_button(
+                                        "📄 Download preview invoice PDF",
+                                        data=_confirm_preview["pdf_bytes"],
+                                        file_name=f"invoice_preview_{_confirm_preview['invoice_number_preview']}.pdf",
+                                        mime="application/pdf",
+                                        key=f"preview_pdf_{_o['id']}",
+                                    )
 
                     st.markdown("**Manual decision (admin):**")
                     _ac1, _ac2, _ac3 = st.columns(3)

@@ -2,37 +2,16 @@
 
 Runs the real app script with all network-facing calls mocked. Skipped when Streamlit is not installed.
 """
-import ast
 import importlib.util
 import os
-import re
 import unittest
-from pathlib import Path
 from unittest.mock import patch
 
 from services import order_approval_service as oas
-from services.ask_data.helpers import _safe_str
+from services.order_approval_service import _project_name_looks_unreliable
 
 HAS_STREAMLIT = importlib.util.find_spec("streamlit") is not None
 APP_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "streamlit_app.py")
-
-
-def _load_project_name_looks_unreliable():
-    """Pure helper extracted via ast (streamlit_app.py is an entry-point script with top-level UI code,
-    so a plain `import streamlit_app` would boot the whole app -- see test_license_update_confirmation.py
-    for the same pattern)."""
-    tree = ast.parse(Path(APP_PATH).read_text(encoding="utf-8"))
-    nodes = [node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.Assign))
-             and (getattr(node, "name", None) == "_project_name_looks_unreliable"
-                  or any(isinstance(t, ast.Name) and t.id == "_UNRELIABLE_PROJECT_NAME_WORDS" for t in getattr(node, "targets", [])))]
-    module = ast.Module(body=nodes, type_ignores=[])
-    code = compile(module, "<extracted-project-name-check>", "exec")
-    namespace = {"re": re, "_safe_str": _safe_str}
-    exec(code, namespace)
-    return namespace["_project_name_looks_unreliable"]
-
-
-_project_name_looks_unreliable = _load_project_name_looks_unreliable()
 
 ORDER = {
     "id": "po-1", "status": "pending_approval", "project_name": "Test Project",
@@ -207,6 +186,91 @@ class TestOrderApprovalsUnreliableNameWarningAndEdit(unittest.TestCase):
     def test_viewer_does_not_see_the_editable_field(self):
         app, _ = self.open_page(self.UNRELIABLE_ORDER, role="viewer")
         self.assertEqual([t for t in app.text_input if t.key == "edit_name_po-2"], [])
+
+
+@unittest.skipUnless(HAS_STREAMLIT, "streamlit is not installed")
+class TestOrderConfirmationDryRunButton(unittest.TestCase):
+    """Order Approvals page: the "Preview order confirmation (dry run)" button renders the preview
+    (errors/warnings/sender/To/CC/subject/body/PDF download) without ever creating an invoice, updating
+    the purchase order, or sending an email."""
+
+    PREVIEW_ORDER = dict(ORDER, id="po-3")
+    OK_PREVIEW = {
+        "ok": True, "errors": [], "warnings": ["Country is unknown for this project -- it will be omitted."],
+        "sender": "orders.chaddycheck@video-inform.com", "to": ["tom@example.com", "karen@example.com"],
+        "cc": ["yoram@example.com"], "project_name": "Test Project", "amount": 2334.0,
+        "invoice_number_preview": 8719,
+        "subject": "Order Confirmation \u2013 CaddyCheck \u2013 Test Project \u2013 Invoice 8719",
+        "body": "Dear Tom and Karen,\n\nThank you for your order.",
+        "pdf_bytes": b"%PDF-1.4 fake",
+        "mailbox_check": {"ok": True, "message": "Mailbox 'orders.chaddycheck@video-inform.com' found in the tenant."},
+    }
+    FAILED_PREVIEW = {
+        "ok": False, "errors": ["Neither a camera count nor an explicit amount is available on this order."],
+        "warnings": [],
+    }
+
+    def open_page(self, preview_result, role="admin"):
+        from streamlit.testing.v1 import AppTest
+
+        patches = [
+            patch("services.supabase_service.load_projects", return_value=[]),
+            patch("services.supabase_service.load_invoices", return_value=[]),
+            patch.object(oas, "list_purchase_orders", return_value=[self.PREVIEW_ORDER]),
+            patch.object(oas, "get_order_delivery_state", return_value=HEALTHY),
+            patch.object(oas, "create_purchase_order_signed_url", return_value=None),
+            patch.object(oas, "count_unread_notifications", return_value=0),
+            patch.object(oas, "list_notifications", return_value=[]),
+            patch.object(oas, "update_purchase_order"),
+            patch.object(oas, "auto_create_invoice_for_approved_order"),
+            patch("services.order_confirmation_service.build_dry_run_preview", return_value=preview_result),
+            patch("services.supabase_service.replace_invoice_rows"),   # index -2: must stay un-called
+            patch("services.email_service.send_graph_email"),         # index -1: must stay un-called
+        ]
+        mocks = [p.start() for p in patches]
+        self.addCleanup(lambda: [p.stop() for p in patches])
+        app = AppTest.from_file(APP_PATH, default_timeout=90)
+        app.session_state["role"] = role
+        app.run()
+        self.assertFalse(app.exception, [e.value for e in app.exception])
+        app.sidebar.radio[0].set_value("✅ Order Approvals").run()
+        self.assertFalse(app.exception, [e.value for e in app.exception])
+        return app, {"replace_rows": mocks[-2], "send_email": mocks[-1]}
+
+    def test_preview_button_exists_for_admin(self):
+        app, _ = self.open_page(self.OK_PREVIEW)
+        self.assertTrue(any(b.key == "preview_confirm_po-3" for b in app.button))
+
+    def test_clicking_preview_shows_sender_to_cc_subject_body_and_pdf_download(self):
+        app, mocks = self.open_page(self.OK_PREVIEW)
+        [b for b in app.button if b.key == "preview_confirm_po-3"][0].click().run()
+        self.assertFalse(app.exception, [e.value for e in app.exception])
+        markdowns = "\n".join(m.value for m in app.markdown)
+        self.assertIn("orders.chaddycheck@video-inform.com", markdowns)
+        self.assertIn("tom@example.com", markdowns)
+        self.assertIn("yoram@example.com", markdowns)
+        self.assertIn("8719", markdowns)
+        self.assertTrue(any("Dear Tom and Karen" in c.value for c in app.code))
+        self.assertTrue(any(b.key == "preview_pdf_po-3" for b in app.download_button))
+        mocks["replace_rows"].assert_not_called()
+        mocks["send_email"].assert_not_called()
+
+    def test_failed_validation_shows_errors_and_no_sendable_content(self):
+        app, mocks = self.open_page(self.FAILED_PREVIEW)
+        [b for b in app.button if b.key == "preview_confirm_po-3"][0].click().run()
+        self.assertFalse(app.exception, [e.value for e in app.exception])
+        self.assertTrue(any("camera count nor an explicit amount" in e.value for e in app.error))
+        self.assertEqual([b for b in app.download_button if b.key == "preview_pdf_po-3"], [])
+        mocks["replace_rows"].assert_not_called()
+        mocks["send_email"].assert_not_called()
+
+    def test_approving_still_uses_the_existing_flow_unchanged(self):
+        """The dry-run preview must not change the existing Approve button's behavior in this step."""
+        app, mocks = self.open_page(self.OK_PREVIEW)
+        [b for b in app.button if b.key == "appr_po-3"][0].click().run()
+        self.assertFalse(app.exception, [e.value for e in app.exception])
+        mocks["replace_rows"].assert_not_called()
+        mocks["send_email"].assert_not_called()
 
 
 if __name__ == "__main__":
