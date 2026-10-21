@@ -2780,7 +2780,7 @@ st.sidebar.title("📊 CaddyCheck CRM")
 st.sidebar.markdown("---")
 page = st.sidebar.radio(
     "Navigation",
-    ["📊 Dashboard", "❓ Ask Data", "🏗️ Projects", "📦 Orders", "📡 Job Capacity", "🔐 Licenses", "🧾 Invoice Details", "💸 Debt Report", "📅 Monthly Invoice", "🎫 Tickets", "🏦 Bank Payment", "✅ Order Approvals", "⚙️ Settings"],
+    ["📊 Dashboard", "❓ Caddy Chat", "🏗️ Projects", "📦 Orders", "📡 Job Capacity", "🔐 Licenses", "🧾 Invoice Details", "💸 Debt Report", "📅 Monthly Invoice", "🎫 Tickets", "🏦 Bank Payment", "✅ Order Approvals", "⚙️ Settings"],
     label_visibility="collapsed",
 )
 st.sidebar.markdown("---")
@@ -3761,8 +3761,8 @@ if page == "📊 Dashboard":
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE: ASK DATA
 # ══════════════════════════════════════════════════════════════════════════════
-elif page == "❓ Ask Data":
-    st.title("❓ Ask Data")
+elif page == "❓ Caddy Chat":
+    st.title("❓ Caddy Chat")
     if CAN_EDIT:
         with st.expander("🔧 Deployment diagnostics (temporary)", expanded=False):
             _diag = _deployment_diagnostics_snapshot()
@@ -3782,10 +3782,10 @@ elif page == "❓ Ask Data":
     _ask_data_use_v3 = False
 
     if _ask_data_editor_pilot:
-        st.session_state.setdefault("_ask_data_mode_choice", "Ask Data v2")
+        st.session_state.setdefault("_ask_data_mode_choice", "Caddy Chat v2")
         _ask_data_mode_choice = st.radio(
             "Mode (editor-only preview)",
-            ["Ask Data v2", "Ask Data v3 (preview)"],
+            ["Caddy Chat v2", "Caddy Chat v3 (preview)"],
             key="_ask_data_mode_choice",
             horizontal=True,
             help=(
@@ -3794,7 +3794,7 @@ elif page == "❓ Ask Data":
                 "background (read-only shadow log) so we can catch differences before a wider rollout."
             ),
         )
-        _ask_data_use_v3 = _ask_data_mode_choice == "Ask Data v3 (preview)"
+        _ask_data_use_v3 = _ask_data_mode_choice == "Caddy Chat v3 (preview)"
 
         _ask_data_shadow_entries = []
         try:
