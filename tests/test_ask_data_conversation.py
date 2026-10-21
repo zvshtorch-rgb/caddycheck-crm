@@ -632,6 +632,60 @@ class TestHistoryFlagOnRouting(unittest.TestCase):
         self._run("start over", None, ctx)   # reset is detected before any tool/model call
         self.assertEqual(ctx.filters, {})
 
+    def test_follow_up_still_works_when_gemini_echoes_the_resolved_at_date_back_verbatim(self):
+        """Regression (Step 4 production bug): planner_hint() tells the model the previous turn's
+        at_date as a plain ISO string (e.g. "2026-09-01"), since that is all that is safe to show it (see
+        context.py). In real production traffic Gemini commonly copies that exact string straight back as
+        its OWN 'at_date' argument on a follow-up (instructed to "keep any filter the new question does not
+        mention"), rather than omitting it. Before the fix, that echoed ISO string failed
+        resolve_single_date_phrase() (it only parses phrases, not ISO dates) and the WHOLE tool call was
+        rejected, silently falling through to the unrelated legacy fallback -- exactly the "current data
+        for a historical question" failure Phase 5 exists to prevent. Fixed in validation.py by recognising
+        an exact echo of the already-resolved carried-over value."""
+        ctx = ConversationContext()
+        self._run("What was the debt on September 1?", '{"tool": "get_debt_at", "arguments": {"at_date": "September 1"}}', ctx)
+        first_at_date = ctx.filters.get("at_date")
+        self.assertEqual(first_at_date, datetime.date(2026, 9, 1))
+        outcome = self._run(
+            "Only Belgium?",
+            # Gemini echoes the hint's ISO string verbatim, exactly as observed in production.
+            '{"tool": "get_debt_at", "arguments": {"at_date": "2026-09-01", "country": "Bel"}}', ctx,
+        )
+        self.assertEqual(outcome.kind, "tool")
+        self.assertEqual(outcome.tool, "get_debt_at")
+        self.assertEqual(ctx.filters.get("at_date"), first_at_date)
+        self.assertEqual(outcome.result.filters.get("country"), "Bel")
+
+    def test_follow_up_still_works_when_gemini_echoes_the_resolved_period_label_back_verbatim(self):
+        """Same regression as above, for the 'period' kind (get_debt_change / get_invoice_changes /
+        get_payments_in_period / get_new_invoices_in_period): the hint's period value is
+        PeriodResolution.__str__() (a human-readable label like "this month (2026-10-01 to 2026-10-21)"),
+        which Gemini can also copy back verbatim on a follow-up."""
+        import json as _json
+        ctx = ConversationContext()
+        self._run("How much has debt increased this month?", '{"tool": "get_debt_change", "arguments": {"period": "this month"}}', ctx)
+        first_period = ctx.filters.get("period")
+        echoed_label = str(first_period)
+        payload = _json.dumps({"tool": "get_debt_change", "arguments": {"period": echoed_label, "country": "Bel"}})
+        outcome = self._run("Only Belgium?", payload, ctx)
+        self.assertEqual(outcome.kind, "tool")
+        self.assertEqual(outcome.tool, "get_debt_change")
+        self.assertIs(ctx.filters.get("period"), first_period)
+        self.assertEqual(outcome.result.filters.get("country"), "Bel")
+
+    def test_a_genuinely_new_unparseable_date_on_a_follow_up_still_fails_normally(self):
+        """The echo-recovery must only fire on a PROVABLE exact echo of the carried-over value -- a
+        follow-up that supplies a different, still-unparseable date phrase must continue to fail validation
+        (and thus fall through to the legacy path) exactly as before the fix, never silently keep the old
+        date instead."""
+        ctx = ConversationContext()
+        self._run("What was the debt on September 1?", '{"tool": "get_debt_at", "arguments": {"at_date": "September 1"}}', ctx)
+        outcome = self._run(
+            "What about nonsense-date?",
+            '{"tool": "get_debt_at", "arguments": {"at_date": "nonsense-date"}}', ctx,
+        )
+        self.assertEqual(outcome.kind, "legacy")
+
 
 class TestFeatureFlag(unittest.TestCase):
     def test_defaults_to_off(self):
