@@ -280,6 +280,113 @@ class TestGetNewInvoicesInPeriod(_PatchedTestCase):
         self.assertIn("No new invoices", result.text)
 
 
+class TestHistoricalDrillDown(_PatchedTestCase):
+    """"Show invoices" after a historical answer must render the actual historical/snapshot rows already
+    retained on the ToolResult -- never re-query the live invoices table. Covers all 6 historical tools."""
+
+    def _drilldown(self, result):
+        from services.ask_data.tool_result import ResultStore
+        store = ResultStore()
+        store.add(result)
+        return store.get_result_rows(result.result_id)
+
+    def test_get_debt_at_drilldown_renders_matching_rows(self):
+        result = self._exec("get_debt_at", {"at_date": date(2026, 10, 1)})
+        rows = self._drilldown(result)
+        self.assertIsNotNone(rows.dataframe)
+        self.assertFalse(rows.dataframe.empty)
+        self.assertEqual(rows.row_count, result.row_count)
+        self.assertEqual(rows.total, result.value)
+
+    def test_compare_debt_dates_drilldown_renders_matching_rows(self):
+        result = self._exec("compare_debt_dates", {"date_a": date(2026, 10, 1), "date_b": date(2026, 10, 20)})
+        rows = self._drilldown(result)
+        self.assertIsNotNone(rows.dataframe)
+        self.assertFalse(rows.dataframe.empty)
+        self.assertEqual(rows.row_count, result.row_count)
+
+    def test_get_debt_change_drilldown_renders_matching_rows(self):
+        period = resolve_period_phrase("this month", date(2026, 10, 20))
+        result = self._exec("get_debt_change", {"period": period})
+        rows = self._drilldown(result)
+        self.assertIsNotNone(rows.dataframe)
+        self.assertFalse(rows.dataframe.empty)
+        self.assertEqual(rows.row_count, result.row_count)
+
+    def test_get_invoice_changes_drilldown_renders_matching_rows(self):
+        period = resolve_period_phrase("this month", date(2026, 10, 20))
+        result = self._exec("get_invoice_changes", {"period": period})
+        rows = self._drilldown(result)
+        self.assertIsNotNone(rows.dataframe)
+        self.assertFalse(rows.dataframe.empty)
+        self.assertEqual(rows.row_count, result.row_count)
+
+    def test_get_payments_in_period_drilldown_renders_matching_rows(self):
+        bank_payments = [{"id": 1, "payment_date": "2026-10-10", "applied_amount": 300.0}]
+        allocations = [{"payment_id": 1, "invoice_number": 101, "project_name": "AD Zwevegem",
+                        "amount_applied": 300.0, "year": 2026}]
+        period = resolve_period_phrase("this month", date(2026, 10, 20))
+        result = self._exec("get_payments_in_period", {"period": period}, bank_payments=bank_payments, allocations=allocations)
+        rows = self._drilldown(result)
+        self.assertIsNotNone(rows.dataframe)
+        self.assertFalse(rows.dataframe.empty)
+        self.assertEqual(rows.row_count, result.row_count)
+
+    def test_get_new_invoices_in_period_drilldown_renders_matching_rows(self):
+        period = resolve_period_phrase("this month", date(2026, 10, 20))
+        result = self._exec("get_new_invoices_in_period", {"period": period})
+        rows = self._drilldown(result)
+        self.assertIsNotNone(rows.dataframe)
+        self.assertFalse(rows.dataframe.empty)
+        self.assertEqual(rows.row_count, result.row_count)
+
+    def test_belgium_then_germany_followup_drilldown_preserves_historical_scope(self):
+        belgium = self._exec("get_debt_at", {"at_date": date(2026, 10, 1), "country": "Belgium"})
+        germany = self._exec("get_debt_at", {"at_date": date(2026, 10, 1), "country": "Germany"})
+        belgium_rows = self._drilldown(belgium)
+        germany_rows = self._drilldown(germany)
+        self.assertTrue(all(r.get("project_name") in ("AD Anderlecht", "AD Zwevegem") for r in belgium_rows.rows))
+        self.assertTrue(all(r.get("project_name") == "Edeka Herweg" for r in germany_rows.rows))
+        # Still scoped to the SAME requested snapshot date (10-01), never silently different dates.
+        self.assertIn("2026-10-01", belgium.text)
+        self.assertIn("2026-10-01", germany.text)
+
+    def test_reset_clears_historical_drilldown_state(self):
+        from services.ask_data.context import ConversationContext
+        from services.ask_data.conversation import reset_conversation
+        from services.ask_data.tool_result import ResultStore, UnknownResultError
+
+        result = self._exec("get_debt_at", {"at_date": date(2026, 10, 1)})
+        old_store = ResultStore()
+        old_store.add(result)
+        self.assertIsNotNone(old_store.get_result_rows(result.result_id).dataframe)
+
+        new_store = reset_conversation(ConversationContext())
+        self.assertIsInstance(new_store, ResultStore)
+        with self.assertRaises(UnknownResultError):
+            new_store.get_result_rows(result.result_id)
+
+    def test_current_state_drilldown_unchanged(self):
+        """Regression guard: adding historical frame_builders must not change current-state drill-down."""
+        from services.ask_data.tool_result import ResultStore
+        result = execute_tool("get_debt", {}, self.projects, self.invoices, [])
+        store = ResultStore()
+        store.add(result)
+        rows = store.get_result_rows(result.result_id)
+        self.assertIsNotNone(rows.dataframe)
+        self.assertIn("Invoice #", rows.dataframe.columns)
+
+    def test_no_live_invoice_requery_during_historical_drilldown(self):
+        """Drill-down must be built purely from the rows already retained on the ToolResult -- not by
+        calling back into the live invoices/projects loaders."""
+        result = self._exec("get_debt_at", {"at_date": date(2026, 10, 1)})
+        with mock.patch("services.supabase_service.load_invoices", side_effect=AssertionError("must not re-query live invoices")), \
+             mock.patch("services.supabase_service.load_projects", side_effect=AssertionError("must not re-query live projects")):
+            rows = self._drilldown(result)
+        self.assertFalse(rows.dataframe.empty)
+        self.assertEqual(rows.row_count, result.row_count)
+
+
 class TestHistoryFlagOffPromptUnchanged(unittest.TestCase):
     """The single most important Phase 5 guarantee: with the flag off (the default), the planner prompt is
     byte-identical to pre-Phase-5 -- structurally guaranteed by `history_enabled` defaulting to False, not

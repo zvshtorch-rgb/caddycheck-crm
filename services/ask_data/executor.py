@@ -24,8 +24,10 @@ from services.ask_data.resolver import NetworkIndex, ProjectIndex
 from services.ask_data.tool_result import Component, ToolResult, new_result_id
 from services.excel_service import get_projects_for_month
 from services.ask_data.helpers import (
+    _build_bank_allocation_df,
     _build_invoice_answer_df,
     _build_project_answer_df,
+    _build_snapshot_row_df,
     _is_maintenance_category,
     _is_new_installation_category,
     _is_paid_trial_category,
@@ -405,6 +407,7 @@ def _get_debt_at_result(tool_name: str, args: dict, projects) -> ToolResult:
         tool=tool_name, financial=True, value=total, text=text, row_count=len(rows), rows=rows,
         calculation=f"sum of {len(rows)} unpaid snapshot row(s) = {fmt_eur(total)}",
         components=[Component("Outstanding", total, len(rows), tuple(rows))], warnings=warnings,
+        frame_builder=lambda r: _build_snapshot_row_df(r, projects),
     )
 
 
@@ -443,6 +446,7 @@ def _compare_debt_dates_result(tool_name: str, args: dict, projects) -> ToolResu
         components=[Component(date_a.isoformat(), total_a, len(rows_a), tuple(rows_a)),
                    Component(date_b.isoformat(), total_b, len(rows_b), tuple(rows_b))],
         derived_amounts=[diff], warnings=list(warn_a) + list(warn_b),
+        frame_builder=lambda r: _build_snapshot_row_df(r, projects),
     )
 
 
@@ -517,6 +521,7 @@ def _get_debt_change_result(tool_name: str, args: dict, projects, invoices) -> T
         calculation=(f"{fmt_eur(bridge.opening)} + {fmt_eur(bridge.new_invoices)} - {fmt_eur(bridge.payments)} - "
                     f"{fmt_eur(bridge.credit_notes)} - {fmt_eur(bridge.cancellations)} = {fmt_eur(bridge.closing)}"),
         components=components, derived_amounts=[bridge.change, bridge.unexplained], warnings=warnings,
+        frame_builder=lambda r: _build_snapshot_row_df(r, projects),
     )
 
 
@@ -574,6 +579,7 @@ def _get_invoice_changes_result(tool_name: str, args: dict, projects, invoices) 
                    Component("Payments", bridge.payments, len(bridge.payments_rows), tuple(bridge.payments_rows)),
                    Component("Cancellations", bridge.cancellations, len(bridge.cancellations_rows), tuple(bridge.cancellations_rows))],
         warnings=warnings,
+        frame_builder=lambda r: _build_snapshot_row_df(r, projects),
     )
 
 
@@ -607,11 +613,7 @@ def _get_payments_in_period_result(tool_name: str, args: dict, projects, invoice
     if not matched_allocations and total == ZERO:
         text = f"No recorded bank payments were found for {period.label} ({period.date_from.isoformat()} to {period.date_to.isoformat()})."
         return ToolResult(tool=tool_name, financial=True, value=ZERO, text=text, warnings=warnings)
-    frame = pd.DataFrame([
-        {"Invoice #": a.get("invoice_number"), "Project": a.get("project_name"),
-         "Amount (€)": to_money(a.get("amount_applied")), "Year": a.get("year")}
-        for a in matched_allocations
-    ]) if matched_allocations else None
+    frame = _build_bank_allocation_df(matched_allocations) if matched_allocations else None
     text = (f"Payments received for {period.label} ({period.date_from.isoformat()} to {period.date_to.isoformat()}): "
             f"{fmt_eur(total)} across {len(matched_allocations)} allocation line(s).")
     return ToolResult(
@@ -620,6 +622,7 @@ def _get_payments_in_period_result(tool_name: str, args: dict, projects, invoice
         calculation=f"sum of {len(matched_allocations)} bank-payment allocation line(s) = {fmt_eur(total)}",
         components=[Component("Payments", total, len(matched_allocations), tuple(matched_allocations))],
         warnings=warnings,
+        frame_builder=_build_bank_allocation_df,
     )
 
 
@@ -664,6 +667,7 @@ def _get_new_invoices_in_period_result(tool_name: str, args: dict, projects, inv
         tool=tool_name, financial=True, value=total, text=text, dataframe=frame, row_count=len(new_rows), rows=new_rows,
         calculation=f"sum of {len(new_rows)} new snapshot row(s) = {fmt_eur(total)}",
         components=[Component("New invoices", total, len(new_rows), tuple(new_rows))], warnings=warnings,
+        frame_builder=lambda r: _build_snapshot_row_df(r, projects),
     )
 
 

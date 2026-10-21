@@ -284,6 +284,43 @@ def _build_invoice_answer_df(invoice_rows, projects) -> pd.DataFrame:
     ])
 
 
+def _build_snapshot_row_df(rows, projects) -> pd.DataFrame:
+    """Drill-down table for historical/snapshot ledger rows (plain dicts from `invoice_snapshots`, as
+    produced by the Phase 5 historical tools). Built ONLY from the row dicts already retained on the
+    ToolResult -- no live invoice table is re-queried. Country is resolved against the already-loaded
+    `projects` (current ProjectIndex/NetworkIndex), falling back to each row's own frozen
+    `country_at_capture`/`network_at_capture`, matching the same rule used when the rows were filtered."""
+    from services.ask_data import history
+    resolved = history.resolve_snapshot_rows(rows, projects) if rows else []
+    return pd.DataFrame([
+        {
+            "Invoice #": str(int(row["invoice_number"])) if row.get("invoice_number") else "—",
+            "Project": row.get("project_name"),
+            "Country": r.country or "",
+            "Maint. Year": row.get("maintenance_year"),
+            "Amount (€)": to_money(row.get("payment_amount")),
+            "Paid": row.get("paid"),
+            "Payment Date": str(row.get("payment_date") or ""),
+            "Year": row.get("year") or "",
+        }
+        for row, r in zip(rows, resolved)
+    ])
+
+
+def _build_bank_allocation_df(rows) -> pd.DataFrame:
+    """Drill-down table for `bank_payment_allocations` rows (used by get_payments_in_period), built only
+    from the already-retained allocation dicts -- no live table is re-queried."""
+    return pd.DataFrame([
+        {
+            "Invoice #": row.get("invoice_number"),
+            "Project": row.get("project_name"),
+            "Amount (€)": to_money(row.get("amount_applied")),
+            "Year": row.get("year"),
+        }
+        for row in rows
+    ])
+
+
 def _build_project_answer_df(project_rows) -> pd.DataFrame:
     return pd.DataFrame([
         {
