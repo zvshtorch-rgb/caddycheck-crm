@@ -1476,13 +1476,18 @@ from services.ask_data.tool_result import ResultStore  # noqa: E402
 
 
 def _answer_data_turn_v3(question: str, context: ConversationContext, projects, invoices, debt_summaries):
-    """Thin wrapper: v3's turn orchestrator now lives in services/ask_data/conversation.py."""
+    """Thin wrapper: v3's turn orchestrator now lives in services/ask_data/conversation.py.
+
+    `history_enabled` stays editor/admin-only (CAN_EDIT) even though v3 itself is now shown to every
+    user: this preserves the exact pre-existing permission boundary from when only editors could reach
+    v3 at all -- viewers must never get the Phase 5 historical tools, regardless of the ask_data_history
+    flag."""
     return answer_turn(
         question, projects, invoices, debt_summaries, context,
         legacy_normalize_question=_llm_normalize_question,
         legacy_answer=_answer_data_question,
         next_invoice_number=lambda: _get_next_invoice_number(invoices, _data_path),
-        history_enabled=get_ask_data_history_enabled(),
+        history_enabled=(get_ask_data_history_enabled() if CAN_EDIT else False),
     )
 
 
@@ -3773,29 +3778,19 @@ elif page == "❓ Caddy Chat":
                 language=None,
             )
 
-    # Ask Data v3 is only ever offered to approved editors (CAN_EDIT), and only while the ask_data_v3 flag
-    # is on in secrets/env (the global kill switch -- flipping it off instantly hides v3 and the switcher for
-    # everyone, no redeploy needed). Even then, every session defaults back to v2; editors must opt in each
-    # time (goal 1 + 2 + 4). Viewers never see the switcher and are completely unaffected (goal 3).
+    # Caddy Chat v3 (the conversational chat UI with follow-ups/drill-down) is now the default and ONLY
+    # user-facing mode while the ask_data_v3 flag is on in secrets/env. The flag remains the global kill
+    # switch: flipping it off instantly reverts EVERYONE (viewers and editors alike) to the original v2
+    # one-shot form below, no redeploy needed -- v2's code is untouched and kept exactly as an internal
+    # fallback/rollback path. There is no longer a user-visible v2/v3 selector.
     _ask_data_v3_master_enabled = get_ask_data_v3_enabled()
+    _ask_data_use_v3 = _ask_data_v3_master_enabled
+    # Shadow diagnostics (read-only v2-vs-v3 comparison log) stay editor/admin-only: whichever pipeline
+    # an editor is NOT shown (now always v2, since v3 is their real path too) is still run in the
+    # background on the same question so differences keep being caught while v2 is kept around.
     _ask_data_editor_pilot = CAN_EDIT and _ask_data_v3_master_enabled
-    _ask_data_use_v3 = False
 
     if _ask_data_editor_pilot:
-        st.session_state.setdefault("_ask_data_mode_choice", "Caddy Chat v2")
-        _ask_data_mode_choice = st.radio(
-            "Mode (editor-only preview)",
-            ["Caddy Chat v2", "Caddy Chat v3 (preview)"],
-            key="_ask_data_mode_choice",
-            horizontal=True,
-            help=(
-                "v3 adds conversation follow-ups and drill-down and is only shown to editors while it is "
-                "being piloted. Every question asked here is also compared against the other version in the "
-                "background (read-only shadow log) so we can catch differences before a wider rollout."
-            ),
-        )
-        _ask_data_use_v3 = _ask_data_mode_choice == "Caddy Chat v3 (preview)"
-
         _ask_data_shadow_entries = []
         try:
             _ask_data_shadow_entries = load_ask_data_shadow_log()

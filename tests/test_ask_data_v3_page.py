@@ -1,11 +1,13 @@
-"""End-to-end smoke test of the Ask Data v3 chat UI (Streamlit AppTest): the feature flag, the editor-only
-gate (shadow-deployment plan), and the chat UI itself -- history, follow-ups, and the "Show invoices"/"Show
-breakdown" drill-down buttons.
+"""End-to-end smoke test of the Caddy Chat v3 chat UI (Streamlit AppTest): the feature flag (now the sole
+v2/v3 switch -- v3 is the only user-facing mode while it is on, for every role; v2 is kept only as an
+internal fallback reachable by flipping the flag off), and the chat UI itself -- history, follow-ups, and
+the "Show invoices"/"Show breakdown" drill-down buttons.
 
-Flag-off behaviour (the existing v2 one-shot form) is already fully covered by test_ask_data_page.py.
-Shadow-comparison logging itself (summaries, mismatch flags) is covered by test_ask_data_shadow.py; this
-file only checks that the page WIRES one up for every editor-pilot question (it patches the logging call
-itself to a no-op so no real file/Supabase write ever happens here).
+Flag-off behaviour (the existing v2 one-shot form, shown to everyone while the flag is off) is already
+fully covered by test_ask_data_page.py. Shadow-comparison logging itself (summaries, mismatch flags) is
+covered by test_ask_data_shadow.py; this file only checks that the page WIRES one up for every
+editor-pilot question (it patches the logging call itself to a no-op so no real file/Supabase write ever
+happens here).
 """
 import importlib.util
 import os
@@ -92,43 +94,30 @@ class TestAskDataV3Page(unittest.TestCase):
         app = self.open_page(v3_enabled=False, role="admin")
         self.assertEqual(len(app.chat_input), 0)
         self.assertTrue(any(b.label == "Ask" for b in app.button))
-        self.assertEqual(len(app.main.radio), 0, "no mode switcher when the flag is off, even for an editor")
+        self.assertEqual(len(app.main.radio), 0, "no mode switcher any more, regardless of the flag")
 
-    def test_viewer_never_sees_v3_or_the_switcher_even_when_the_flag_is_on(self):
-        """Goal 2: v3 is editor-only. A viewer session must stay on the v2 form regardless of the flag."""
+    def test_viewer_now_sees_v3_directly_when_the_flag_is_on(self):
+        """v3 was de-piloted: the v2/v3 selector is gone and v3 is the only user-facing mode once the flag
+        is on, for every role -- including viewers (goal 2 changed on purpose; see goal 7 for what is
+        still preserved: history stays editor/admin-only, see TestHistoryPermissionBoundaryPreserved
+        below)."""
         app = self.open_page(v3_enabled=True, role="viewer")
-        self.assertEqual(len(app.chat_input), 0)
-        self.assertTrue(any(b.label == "Ask" for b in app.button))
-        self.assertEqual(len(app.main.radio), 0, "no mode switcher for a viewer")
-
-    def test_editor_with_flag_on_sees_the_switcher_defaulting_to_v2(self):
-        """Goal 1 + 4: off by default even for an approved editor; a switcher lets them opt into v3."""
-        app = self.open_page(v3_enabled=True, role="admin")
-        self.assertEqual(len(app.main.radio), 1)
-        self.assertEqual(app.main.radio[0].value, "Caddy Chat v2")
-        self.assertEqual(len(app.chat_input), 0, "still on v2 until the editor explicitly switches")
-        self.assertTrue(any(b.label == "Ask" for b in app.button))
-
-    def test_editor_can_switch_to_v3_and_back(self):
-        app = self.open_page(v3_enabled=True, role="admin")
-        app.main.radio[0].set_value("Caddy Chat v3 (preview)").run()
-        self.assertFalse(app.exception, [e.value for e in app.exception])
         self.assertEqual(len(app.chat_input), 1)
-        app.main.radio[0].set_value("Caddy Chat v2").run()
-        self.assertFalse(app.exception, [e.value for e in app.exception])
-        self.assertEqual(len(app.chat_input), 0)
-        self.assertTrue(any(b.label == "Ask" for b in app.button))
+        self.assertEqual(len(app.main.radio), 0, "no mode switcher any more")
+        self.assertFalse(any(b.label == "Ask" for b in app.button), "the old one-shot form is not shown")
 
-    # ── Chat UI behaviour (editor, v3 selected) ──────────────────────────────────────────────────
+    def test_editor_with_flag_on_sees_v3_directly_with_no_switcher(self):
+        """v3 is now shown immediately, with no opt-in switcher and no more defaulting to v2."""
+        app = self.open_page(v3_enabled=True, role="admin")
+        self.assertEqual(len(app.main.radio), 0, "no mode switcher any more")
+        self.assertEqual(len(app.chat_input), 1, "v3 is shown directly, no opt-in needed")
+        self.assertFalse(any(b.label == "Ask" for b in app.button))
 
-    def _select_v3(self, app):
-        app.main.radio[0].set_value("Caddy Chat v3 (preview)").run()
-        self.assertFalse(app.exception, [e.value for e in app.exception])
-        return app
+    # ── Chat UI behaviour (editor, v3 shown directly) ────────────────────────────────────────────
 
     def test_a_question_and_answer_appear_as_chat_messages(self):
         payload = '{"tool": "get_debt", "arguments": {}}'
-        app = self._select_v3(self.open_page(v3_enabled=True, gemini_responses=[_gemini_ok(payload), _gemini_ok(payload)]))
+        app = self.open_page(v3_enabled=True, gemini_responses=[_gemini_ok(payload), _gemini_ok(payload)])
         app.chat_input[0].set_value("How much debt do we have?").run()
         self.assertFalse(app.exception, [e.value for e in app.exception])
         roles_and_texts = self.chat_texts(app)
@@ -141,7 +130,7 @@ class TestAskDataV3Page(unittest.TestCase):
         payload2 = '{"tool": "get_debt", "arguments": {"country": "Belgium"}}'
         # order of Gemini calls: v3(q1), shadow-v2(q1), v3(q2), shadow-v2(q2)
         responses = [_gemini_ok(payload1), _gemini_ok(payload1), _gemini_ok(payload2), _gemini_ok(payload2)]
-        app = self._select_v3(self.open_page(v3_enabled=True, gemini_responses=responses))
+        app = self.open_page(v3_enabled=True, gemini_responses=responses)
         app.chat_input[0].set_value("How much debt do we have?").run()
         app.chat_input[0].set_value("Only Belgium?").run()
         self.assertFalse(app.exception, [e.value for e in app.exception])
@@ -157,7 +146,7 @@ class TestAskDataV3Page(unittest.TestCase):
         historical-question guard) on the same text in the background for comparison -- that is a deliberate,
         separate feature (see test_ask_data_shadow.py), not v3 itself calling the model."""
         shadow_v2_payload = '{"tool": "get_license_payment_status", "arguments": {}}'
-        app = self._select_v3(self.open_page(v3_enabled=True, gemini_responses=[_gemini_ok(shadow_v2_payload)]))
+        app = self.open_page(v3_enabled=True, gemini_responses=[_gemini_ok(shadow_v2_payload)])
         app.chat_input[0].set_value("What changed since September 1?").run()
         self.assertFalse(app.exception, [e.value for e in app.exception])
         roles_and_texts = self.chat_texts(app)
@@ -169,7 +158,7 @@ class TestAskDataV3Page(unittest.TestCase):
 
     def test_show_invoices_button_drills_down_without_calling_gemini_again(self):
         payload = '{"tool": "get_debt", "arguments": {"country": "Belgium"}}'
-        app = self._select_v3(self.open_page(v3_enabled=True, gemini_responses=[_gemini_ok(payload), _gemini_ok(payload)]))
+        app = self.open_page(v3_enabled=True, gemini_responses=[_gemini_ok(payload), _gemini_ok(payload)])
         app.chat_input[0].set_value("Debt in Belgium").run()
         posts_after_question = len(self.posts)
         [b for b in app.button if b.label == "📄 Show invoices"][0].click().run()
@@ -184,7 +173,7 @@ class TestAskDataV3Page(unittest.TestCase):
 
     def test_new_conversation_button_clears_history_and_context(self):
         payload = '{"tool": "get_debt", "arguments": {"country": "Belgium"}}'
-        app = self._select_v3(self.open_page(v3_enabled=True, gemini_responses=[_gemini_ok(payload), _gemini_ok(payload)]))
+        app = self.open_page(v3_enabled=True, gemini_responses=[_gemini_ok(payload), _gemini_ok(payload)])
         app.chat_input[0].set_value("Debt in Belgium").run()
         self.assertEqual(len(self.chat_texts(app)), 2)
         [b for b in app.button if b.label == "🧹 New conversation"][0].click().run()
@@ -195,9 +184,9 @@ class TestAskDataV3Page(unittest.TestCase):
 
     def test_v3_primary_question_logs_a_shadow_comparison_against_v2(self):
         payload = '{"tool": "get_debt", "arguments": {"country": "Belgium"}}'
-        app = self._select_v3(self.open_page(
+        app = self.open_page(
             v3_enabled=True, gemini_responses=[_gemini_ok(payload), _gemini_ok(payload)], log_shadow=True,
-        ))
+        )
         app.chat_input[0].set_value("Debt in Belgium").run()
         self.assertFalse(app.exception, [e.value for e in app.exception])
         self.assertEqual(len(self.shadow_entries), 1)
@@ -211,27 +200,15 @@ class TestAskDataV3Page(unittest.TestCase):
 
     def test_drilldown_button_does_not_log_a_shadow_comparison(self):
         payload = '{"tool": "get_debt", "arguments": {"country": "Belgium"}}'
-        app = self._select_v3(self.open_page(
+        app = self.open_page(
             v3_enabled=True, gemini_responses=[_gemini_ok(payload), _gemini_ok(payload)], log_shadow=True,
-        ))
+        )
         app.chat_input[0].set_value("Debt in Belgium").run()
         self.assertEqual(len(self.shadow_entries), 1)
         [b for b in app.button if b.label == "📄 Show invoices"][0].click().run()
         self.assertFalse(app.exception, [e.value for e in app.exception])
         self.assertEqual(len(self.shadow_entries), 1,
                           "the drill-down is answered from the result store, not a new comparable question")
-
-    def test_v2_primary_question_logs_a_shadow_comparison_against_v3(self):
-        payload = '{"tool": "get_debt", "arguments": {"country": "Belgium"}}'
-        app = self.open_page(v3_enabled=True, gemini_responses=[_gemini_ok(payload), _gemini_ok(payload)], log_shadow=True)
-        app.text_area[0].set_value("Debt in Belgium")
-        [b for b in app.button if b.label == "Ask"][0].click().run()
-        self.assertFalse(app.exception, [e.value for e in app.exception])
-        self.assertEqual(len(self.shadow_entries), 1)
-        entry = self.shadow_entries[0]
-        self.assertEqual(entry["primary_mode"], "v2")
-        self.assertEqual(entry["v2_outcome_kind"], "tool")
-        self.assertEqual(entry["v3_outcome_kind"], "tool")
 
     def test_viewer_or_flag_off_never_logs_a_shadow_comparison(self):
         payload = '{"tool": "get_debt", "arguments": {}}'
@@ -240,6 +217,27 @@ class TestAskDataV3Page(unittest.TestCase):
         [b for b in app.button if b.label == "Ask"][0].click().run()
         self.assertFalse(app.exception, [e.value for e in app.exception])
         self.assertEqual(self.shadow_entries, [])
+
+    def test_viewer_with_flag_on_never_logs_a_shadow_comparison_either(self):
+        """Shadow diagnostics stay editor/admin-only (goal 5): a viewer now reaches v3 directly, but must
+        never trigger the background v2 shadow-run/log (that would be extra, unnecessary compute and
+        exposure for a role that was never meant to see it)."""
+        payload = '{"tool": "get_debt", "arguments": {}}'
+        app = self.open_page(v3_enabled=True, role="viewer", gemini_responses=[_gemini_ok(payload)], log_shadow=True)
+        app.chat_input[0].set_value("How much debt do we have?").run()
+        self.assertFalse(app.exception, [e.value for e in app.exception])
+        self.assertEqual(self.shadow_entries, [])
+
+
+class TestHistoryPermissionBoundaryPreservedAfterDepilotingV3(unittest.TestCase):
+    """v3 is now shown to every user (not just editors), but the Phase 5 historical tools must remain
+    editor/admin-only regardless -- this is a source-level regression guard for that gating line, since
+    simulating a full historical-tool round trip through the page needs invoice_snapshot mocking this
+    smoke-test file does not otherwise set up (see tests/test_ask_data_history_tools.py for that)."""
+
+    def test_history_enabled_is_still_gated_by_can_edit_in_the_v3_wrapper(self):
+        source = Path(APP_PATH).read_text(encoding="utf-8")
+        self.assertIn("history_enabled=(get_ask_data_history_enabled() if CAN_EDIT else False)", source)
 
 
 if __name__ == "__main__":
