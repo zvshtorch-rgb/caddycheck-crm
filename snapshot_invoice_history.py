@@ -23,7 +23,9 @@ Usage:
     python snapshot_invoice_history.py --date 2026-10-20
     python snapshot_invoice_history.py --dry-run        # compute and print row count, write nothing
 
-NOT yet scheduled/wired into .github/workflows/supabase-backup.yml -- see the Phase 5 rollout plan.
+Scheduled daily (Step 5 of the Phase 5 rollout plan): see the "Run daily Ask Data invoice history
+snapshot" step in .github/workflows/supabase-backup.yml, which runs this with no arguments once per day
+(same 02:00 UTC schedule as the Supabase backup, independently of it via `if: always()`).
 """
 from __future__ import annotations
 
