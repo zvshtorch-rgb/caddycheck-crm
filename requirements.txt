@@ -33,3 +33,5 @@ qrcode[pil]>=7.4.2
 # touch: Caddy Chat UI simplification -- removed the v2/v3 mode selector, v3 is now the default
 # and only user-facing mode while the ask_data_v3 flag is on (streamlit_app.py); forcing another
 # full rebuild for the same known stale-module reason.
+# touch: Order Approvals -- warn + editable field for unreliable filename-derived project names
+# (streamlit_app.py); forcing another full rebuild for the same known stale-module reason.
