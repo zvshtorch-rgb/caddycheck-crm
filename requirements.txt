@@ -30,3 +30,6 @@ qrcode[pil]>=7.4.2
 # same known stale-module reason.
 # touch: renamed the "Ask Data" feature's displayed name to "Caddy Chat" (streamlit_app.py) --
 # forcing another full rebuild for the same known stale-module reason.
+# touch: Caddy Chat UI simplification -- removed the v2/v3 mode selector, v3 is now the default
+# and only user-facing mode while the ask_data_v3 flag is on (streamlit_app.py); forcing another
+# full rebuild for the same known stale-module reason.
