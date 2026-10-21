@@ -1896,6 +1896,34 @@ def _guess_order_country(project_name: str) -> str:
     return ""
 
 
+_UNRELIABLE_PROJECT_NAME_WORDS = {
+    "document", "doc", "file", "scan", "copy", "invoice", "order", "po", "purchase", "attachment", "untitled",
+}
+
+
+def _project_name_looks_unreliable(name: str) -> bool:
+    """True when a filename-derived project name still looks like raw filename noise (a generic word
+    and/or an unstripped date/reference number) rather than an actual project/store name.
+
+    Production incident this guards against: a PO's PDF was named
+    'document_iretailche_20260923_2026-0047-2.pdf' (not the usual 'YYYY-MM-NNN_ProjectName.pdf'
+    convention), so _project_name_from_filename() (order_intake_poll.py) only stripped the extension and
+    swapped underscores for spaces -- producing the literal garbage name
+    'document iretailche 20260923 2026-0047-2', which then flowed untouched into the auto-created
+    invoice, project, and order record on approval. This check surfaces a warning + an editable field
+    (see the Order Approvals page) so an admin can fix the name BEFORE approving, instead of a developer
+    having to rename the resulting records after the fact."""
+    text = _safe_str(name).strip()
+    if not text:
+        return True
+    first_word = text.split(" ", 1)[0].strip().lower()
+    if first_word in _UNRELIABLE_PROJECT_NAME_WORDS:
+        return True
+    if re.search(r"\d{6,}", text):  # an unstripped date/reference number, e.g. 20260923, 2026-0047-2
+        return True
+    return False
+
+
 def _guess_project_name_from_order_filename(filename: str) -> str:
     stem = _safe_str(Path(filename).stem).strip()
     stem = stem.replace("_", " ")
@@ -8505,6 +8533,27 @@ elif page == "✅ Order Approvals":
                             st.rerun()
 
                 if CAN_EDIT and _o.get("status") == "pending_approval":
+                    _current_proj_name = _o.get("project_name") or ""
+                    if _project_name_looks_unreliable(_current_proj_name):
+                        st.warning(
+                            f"⚠️ The project name derived from the PDF filename looks unreliable: "
+                            f"'{_current_proj_name}'. Approving will immediately auto-create an invoice, a "
+                            "project, and an order record using this exact name -- please verify/correct it "
+                            "below first."
+                        )
+                    _name_col1, _name_col2 = st.columns([3, 1])
+                    _new_proj_name_input = _name_col1.text_input(
+                        "Project name (used for the auto-created invoice/project/order)",
+                        value=_current_proj_name, key=f"edit_name_{_o['id']}",
+                    )
+                    if _name_col2.button("💾 Save name", key=f"save_name_{_o['id']}", use_container_width=True):
+                        _trimmed_name = _new_proj_name_input.strip()
+                        if _trimmed_name and _trimmed_name != _current_proj_name:
+                            _oas.update_purchase_order(_o["id"], project_name=_trimmed_name)
+                            st.session_state["_flash_success"] = f"Project name updated to '{_trimmed_name}'."
+                            st.session_state["_flash_success_page"] = "✅ Order Approvals"
+                            st.rerun()
+
                     st.markdown("**Manual decision (admin):**")
                     _ac1, _ac2, _ac3 = st.columns(3)
                     if _ac1.button("✅ Approve", key=f"appr_{_o['id']}", use_container_width=True):
