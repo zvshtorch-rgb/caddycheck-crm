@@ -209,7 +209,7 @@ def answer_turn(
         pending = context.clarification
         answered = resolve_clarification_reply(pending, question)
         if answered is not None:
-            validation = validate_tool_call(answered, projects)
+            validation = validate_tool_call(answered, projects, context=context)
             if validation.clarification is not None:
                 context.set_clarification(validation.clarification)
                 return TurnOutcome(clarification_question(validation.clarification), None, "clarification")
@@ -228,7 +228,7 @@ def answer_turn(
 
     parsed = _llm_parse_data_question(question, context=context.planner_hint(), history_enabled=history_enabled)
     if parsed is not None:
-        validation = validate_tool_call(parsed, projects)
+        validation = validate_tool_call(parsed, projects, context=context)
         if validation.clarification is not None:
             context.set_clarification(validation.clarification)
             return TurnOutcome(clarification_question(validation.clarification), None, "clarification")

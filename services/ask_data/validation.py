@@ -111,8 +111,13 @@ def _redirect_network_text(raw_args: dict, spec: dict) -> dict:
     return raw_args
 
 
-def _resolve_arg_ex(kind: str, value: object, projects) -> tuple[bool, object, Optional[dict]]:
-    """Validate + resolve one tool argument. Returns (ok, resolved_value, clarification)."""
+def _resolve_arg_ex(kind: str, value: object, projects, *, carried_over: object = None) -> tuple[bool, object, Optional[dict]]:
+    """Validate + resolve one tool argument. Returns (ok, resolved_value, clarification).
+
+    `carried_over` is this same argument's already-resolved value from the previous turn's
+    ConversationContext (Phase 5 at_date/period/date_a/date_b only; see `_resolve_ask_data_arg`'s
+    "echoed carry-over" handling below), or None for a standalone question / a non-historical argument.
+    """
     if value is None:
         return True, None, None
     if kind in ("project", "country", "network"):
@@ -128,11 +133,11 @@ def _resolve_arg_ex(kind: str, value: object, projects) -> tuple[bool, object, O
         if text and resolution.status == AMBIGUOUS:
             return False, None, {"kind": kind, "value": text, "candidates": list(resolution.candidates)}
         return False, None, None
-    ok, resolved = _resolve_ask_data_arg(kind, value, projects)
+    ok, resolved = _resolve_ask_data_arg(kind, value, projects, carried_over=carried_over)
     return ok, resolved, None
 
 
-def _resolve_ask_data_arg(kind: str, value: object, projects) -> tuple[bool, object]:
+def _resolve_ask_data_arg(kind: str, value: object, projects, *, carried_over: object = None) -> tuple[bool, object]:
     """Validate + resolve one tool argument. Returns (ok, resolved_value)."""
     if value is None:
         return True, None
@@ -155,7 +160,20 @@ def _resolve_ask_data_arg(kind: str, value: object, projects) -> tuple[bool, obj
         if not text:
             return False, None
         resolution = resolve_single_date_phrase(text, datetime.date.today())
-        return (True, resolution.value) if resolution.status == DATE_PHRASE_ACCEPTED else (False, None)
+        if resolution.status == DATE_PHRASE_ACCEPTED:
+            return True, resolution.value
+        # Follow-up echo: ConversationContext.planner_hint() tells the model the previous turn's ALREADY-
+        # RESOLVED at_date as a plain ISO string (e.g. "2026-10-20"), not a phrase the resolver above can
+        # re-parse. When a follow-up ("Only Belgium?") reuses the same tool, the model commonly copies that
+        # exact string straight back as its own 'at_date' argument (as instructed: "keep any filter the new
+        # question does not mention"). Recognise this exact, provable echo (the resolved date's own
+        # isoformat matches verbatim) and silently reuse the already-resolved date instead of failing the
+        # whole tool call out to an unrelated current-state fallback -- the single most important bug this
+        # guards against. A genuinely different (but unparseable) new phrase never matches here and still
+        # fails validation normally.
+        if carried_over is not None and hasattr(carried_over, "isoformat") and carried_over.isoformat() == text:
+            return True, carried_over
+        return False, None
     if kind == "period":
         # Same principle as "at_date", but resolves to a (date_from, date_to) range -- see
         # services/ask_data/history_dates.py's PeriodResolution.
@@ -163,7 +181,13 @@ def _resolve_ask_data_arg(kind: str, value: object, projects) -> tuple[bool, obj
         if not text:
             return False, None
         resolution = resolve_period_phrase(text, datetime.date.today())
-        return (True, resolution) if resolution.status == DATE_PHRASE_ACCEPTED else (False, None)
+        if resolution.status == DATE_PHRASE_ACCEPTED:
+            return True, resolution
+        # Same follow-up echo recovery as "at_date" above, but the hint value is PeriodResolution.__str__()
+        # (a human-readable label, e.g. "this month (2026-10-01 to 2026-10-21)"), not an ISO date.
+        if carried_over is not None and str(carried_over) == text:
+            return True, carried_over
+        return False, None
     if kind == "project":
         resolved = _resolve_project_arg(value, projects)
         return (True, resolved) if resolved else (False, None)
@@ -194,13 +218,17 @@ def _resolve_ask_data_arg(kind: str, value: object, projects) -> tuple[bool, obj
     return False, None
 
 
-def validate_tool_call(parsed: object, projects) -> ValidationResult:
+def validate_tool_call(parsed: object, projects, context=None) -> ValidationResult:
     """
     Validate a parsed {"tool": ..., "arguments": {...}} payload against
     `_ASK_DATA_TOOL_SPECS`. Rejects unknown tools, unresolvable/mistyped
     arguments, and missing required arguments. Unknown argument keys are
     silently ignored. An argument that matches several projects/countries (or only
     weakly) yields a `clarification` instead of a guess; nothing is ever executed then.
+
+    `context` (optional, a ConversationContext) is used only to recognise a follow-up turn's exact echo of
+    an already-resolved Phase 5 at_date/period/date_a/date_b -- see `_resolve_ask_data_arg`'s "follow-up
+    echo" handling. It never widens acceptance for anything else.
     """
     if not isinstance(parsed, dict):
         return ValidationResult(None, {}, "LLM response was not a JSON object.")
@@ -215,10 +243,12 @@ def validate_tool_call(parsed: object, projects) -> ValidationResult:
 
     spec = _ASK_DATA_TOOL_SPECS[tool_name]
     raw_args = _redirect_network_text(raw_args, spec)
+    carried_filters = context.filters if context is not None else {}
     cleaned: dict = {}
     for arg_name, (kind, required) in spec.items():
         raw_value = raw_args.get(arg_name)
-        ok, resolved, clarification = _resolve_arg_ex(kind, raw_value, projects)
+        carried_over = carried_filters.get(arg_name) if kind in ("at_date", "period") else None
+        ok, resolved, clarification = _resolve_arg_ex(kind, raw_value, projects, carried_over=carried_over)
         if clarification is not None:
             clarification = {"arg": arg_name, "tool": tool_name, "raw_arguments": dict(raw_args), **clarification}
             return ValidationResult(None, {}, f"Ambiguous argument '{arg_name}'={raw_value!r} for tool '{tool_name}'.", clarification)
