@@ -25,6 +25,8 @@ qrcode[pil]>=7.4.2
 # production bug where a follow-up after a historical debt question ("Only Belgium?") fell
 # through to the legacy current-state fallback instead of reusing the historical tool/date;
 # forcing another full rebuild for the same known stale-module reason.
+# touch: Order confirmation dry-run corrections -- canonical network, source-PDF camera quantity,
+# and clearly unreserved proposed invoice number; reload cached service modules on deployment.
 # touch: historical Ask Data drill-down frame_builder fix (executor.py/helpers.py) -- "Show
 # invoices" after a historical answer rendered no table; forcing another full rebuild for the
 # same known stale-module reason.

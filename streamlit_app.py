@@ -8531,12 +8531,16 @@ elif page == "✅ Order Approvals":
 
                     if st.button(
                         "🔍 Preview order confirmation (dry run)", key=f"preview_confirm_{_o['id']}",
-                        use_container_width=True,
+                        width="stretch",
                         help="Shows what the Year-1 invoice/PDF/confirmation email WOULD look like -- "
                              "nothing is saved, no invoice is created, and no email is sent.",
                     ):
                         from services import order_confirmation_service as _ocs
-                        st.session_state[f"_confirm_preview_{_o['id']}"] = _ocs.build_dry_run_preview(_o["id"])
+                        st.session_state.pop(f"_confirm_preview_{_o['id']}", None)
+                        try:
+                            st.session_state[f"_confirm_preview_{_o['id']}"] = _ocs.build_dry_run_preview(_o["id"])
+                        except Exception as _preview_exc:
+                            st.error(f"Could not build order confirmation preview: {_preview_exc}")
 
                     _confirm_preview = st.session_state.get(f"_confirm_preview_{_o['id']}")
                     if _confirm_preview is not None:
@@ -8553,9 +8557,13 @@ elif page == "✅ Order Approvals":
                                     f"**Sender:** {_confirm_preview['sender']}  \n"
                                     f"**To:** {', '.join(_confirm_preview['to'])}  \n"
                                     f"**CC:** {', '.join(_confirm_preview['cc']) or '—'}  \n"
-                                    f"**Invoice number (preview, not yet created):** {_confirm_preview['invoice_number_preview']}  \n"
+                                    f"**Proposed invoice number:** {_confirm_preview['invoice_number_preview']}  \n"
                                     f"**Year-1 amount:** €{_confirm_preview['amount']:,.2f}"
                                 )
+                                st.caption("Proposed number only: not reserved, saved, or consumed. "
+                                           "The committed invoice may receive a different number.")
+                                if _confirm_preview.get("cameras"):
+                                    st.markdown(f"**Number of cameras:** {_confirm_preview['cameras']}")
                                 _mailbox_check = _confirm_preview.get("mailbox_check") or {}
                                 if _mailbox_check.get("ok"):
                                     st.success(f"✅ {_mailbox_check.get('message')}")

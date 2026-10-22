@@ -199,7 +199,7 @@ class TestOrderConfirmationDryRunButton(unittest.TestCase):
         "ok": True, "errors": [], "warnings": ["Country is unknown for this project -- it will be omitted."],
         "sender": "orders.chaddycheck@video-inform.com", "to": ["tom@example.com", "karen@example.com"],
         "cc": ["yoram@example.com"], "project_name": "Test Project", "amount": 2334.0,
-        "invoice_number_preview": 8719,
+        "invoice_number_preview": 8719, "cameras": 12,
         "subject": "Order Confirmation \u2013 CaddyCheck \u2013 Test Project \u2013 Invoice 8719",
         "body": "Dear Tom and Karen,\n\nThank you for your order.",
         "pdf_bytes": b"%PDF-1.4 fake",
@@ -223,7 +223,8 @@ class TestOrderConfirmationDryRunButton(unittest.TestCase):
             patch.object(oas, "list_notifications", return_value=[]),
             patch.object(oas, "update_purchase_order"),
             patch.object(oas, "auto_create_invoice_for_approved_order"),
-            patch("services.order_confirmation_service.build_dry_run_preview", return_value=preview_result),
+            patch("services.order_confirmation_service.build_dry_run_preview", return_value=preview_result,
+                  side_effect=preview_result if isinstance(preview_result, Exception) else None),
             patch("services.supabase_service.replace_invoice_rows"),   # index -2: must stay un-called
             patch("services.email_service.send_graph_email"),         # index -1: must stay un-called
         ]
@@ -249,7 +250,9 @@ class TestOrderConfirmationDryRunButton(unittest.TestCase):
         self.assertIn("orders.chaddycheck@video-inform.com", markdowns)
         self.assertIn("tom@example.com", markdowns)
         self.assertIn("yoram@example.com", markdowns)
-        self.assertIn("8719", markdowns)
+        self.assertIn("**Proposed invoice number:** 8719", markdowns)
+        self.assertIn("**Number of cameras:** 12", markdowns)
+        self.assertTrue(any("not reserved, saved, or consumed" in c.value for c in app.caption))
         self.assertTrue(any("Dear Tom and Karen" in c.value for c in app.code))
         self.assertTrue(any(b.key == "preview_pdf_po-3" for b in app.download_button))
         mocks["replace_rows"].assert_not_called()
@@ -269,6 +272,16 @@ class TestOrderConfirmationDryRunButton(unittest.TestCase):
         app, mocks = self.open_page(self.OK_PREVIEW)
         [b for b in app.button if b.key == "appr_po-3"][0].click().run()
         self.assertFalse(app.exception, [e.value for e in app.exception])
+        mocks["replace_rows"].assert_not_called()
+        mocks["send_email"].assert_not_called()
+
+    def test_preview_read_failure_is_explicit_and_clears_stale_preview(self):
+        app, mocks = self.open_page(RuntimeError("source lookup failed"))
+        app.session_state["_confirm_preview_po-3"] = self.OK_PREVIEW
+        [b for b in app.button if b.key == "preview_confirm_po-3"][0].click().run()
+        self.assertFalse(app.exception, [e.value for e in app.exception])
+        self.assertTrue(any("source lookup failed" in e.value for e in app.error))
+        self.assertEqual([b for b in app.download_button if b.key == "preview_pdf_po-3"], [])
         mocks["replace_rows"].assert_not_called()
         mocks["send_email"].assert_not_called()
 

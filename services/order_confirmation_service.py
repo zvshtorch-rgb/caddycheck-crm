@@ -13,10 +13,16 @@ creates the invoice/PDF/email and marks the order approved is a deliberately sep
 
 No recipient addresses are hardcoded here: Tom/Karen/Yoram's real addresses live in
 st.secrets["order_confirmation"] (see config.settings.get_order_confirmation_config), never in source.
+
+Customer/Network uses the canonical project-network mapping or a non-email customer name. Pending-order
+camera quantities can be recovered read-only from the stored source PDF text. The displayed invoice
+number is only a proposed candidate from a SELECT: it is never reserved or consumed by a preview.
 """
 from __future__ import annotations
 
 import datetime
+import re
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
 from config.settings import canonical_project_name, get_order_confirmation_config
@@ -72,26 +78,59 @@ def resolve_project_country(project_name: str) -> str:
 
 
 def resolve_ordered_cameras(order: Dict[str, Any]) -> int:
-    """Best-effort camera count. `purchase_orders` itself has no ordered_cameras column (confirmed
-    against the live schema), so when the order dict doesn't already carry one, fall back to the matching
-    auto-provisioned Orders-page record -- streamlit_app.py's `_auto_provision_order_and_project` tags its
-    'notes' field with the exact purchase_order_id, which is how we find it back here. Returns 0, never
-    raises, when nothing is found; the amount still falls back correctly in that case."""
+    """Read camera units from the order, its linked Orders record, or its stored source PDF text.
+
+    Pending orders may not have an Orders record yet. Only explicit camera quantities in the source
+    text are accepted: checkout counts and amount/rate arithmetic are not evidence of camera units.
+    """
     direct = _safe_int(order.get("ordered_cameras") or order.get("num_cams"), default=0)
     if direct > 0:
         return direct
     purchase_order_id = _safe_str(order.get("id"))
     if not purchase_order_id:
         return 0
-    try:
-        from services.supabase_service import load_orders
+    from services.supabase_service import load_orders
 
-        for row in load_orders():
-            if purchase_order_id in _safe_str(row.get("notes")):
-                return _safe_int(row.get("ordered_cameras"), default=0)
-    except Exception:
-        pass
-    return 0
+    for row in load_orders():
+        if purchase_order_id in _safe_str(row.get("notes")):
+            cameras = _safe_int(row.get("ordered_cameras"), default=0)
+            if cameras > 0:
+                return cameras
+
+    incoming_email_id = _safe_str(order.get("incoming_email_id"))
+    if not incoming_email_id:
+        return 0
+    from services.order_approval_service import get_incoming_email
+
+    incoming = get_incoming_email(incoming_email_id)
+    text = _safe_str((incoming or {}).get("extracted_text"))
+    patterns = (
+        r"\bCaddyCheck\s+Camera\s*-\s*starting\s+licen[cs]e\s+(\d{1,4})\b",
+        r"\b(?:number\s+of\s+cameras|camera\s+count|cameras|cams)\s*:\s*(\d{1,4})\b",
+    )
+    quantities = {
+        int(match.group(1))
+        for pattern in patterns
+        for match in re.finditer(pattern, text, re.IGNORECASE)
+        if int(match.group(1)) > 0
+    }
+    if len(quantities) > 1:
+        raise ValueError("Conflicting camera quantities in the source PDF; verify the order before previewing.")
+    return next(iter(quantities), 0)
+
+
+def _customer_label(value: object) -> str:
+    label = _safe_str(value)
+    return label if "@" not in label and "\n" not in label and "\r" not in label else ""
+
+
+def resolve_customer_network(order: Dict[str, Any]) -> str:
+    """Use the existing deterministic network mapping, never a contact or sender email."""
+    from services.ask_data.resolver import NetworkIndex
+
+    project_name = canonical_project_name(_safe_str(order.get("project_name")))
+    network = NetworkIndex([SimpleNamespace(project_name=project_name)]).network_of(project_name)
+    return _customer_label(network) or _customer_label(order.get("customer_name"))
 
 
 def compute_year1_amount(order: Dict[str, Any]) -> tuple[int, float]:
@@ -132,9 +171,9 @@ def validate_order_for_year1_invoicing(order: Dict[str, Any]) -> Dict[str, List[
     if not country:
         warnings.append("Country is unknown for this project -- it will be omitted from the confirmation email.")
 
-    customer_display = _safe_str(order.get("customer_name")) or _safe_str(order.get("customer_email"))
+    customer_display = resolve_customer_network(order)
     if not customer_display:
-        warnings.append("No customer name/email is recorded on this order -- 'Customer/Network' will be omitted.")
+        warnings.append("No customer/network name is resolved for this order -- 'Customer/Network' will be omitted.")
 
     return {"errors": errors, "warnings": warnings}
 
@@ -148,8 +187,9 @@ def render_confirmation_email(
     subject = f"Order Confirmation \u2013 CaddyCheck \u2013 {project_name} \u2013 Invoice {invoice_number}"
 
     detail_lines = [f"- Project/Site: {project_name}"]
-    if customer_display:
-        detail_lines.append(f"- Customer/Network: {customer_display}")
+    customer_label = _customer_label(customer_display)
+    if customer_label:
+        detail_lines.append(f"- Customer/Network: {customer_label}")
     if country:
         detail_lines.append(f"- Country: {country}")
     if po_reference:
@@ -157,7 +197,7 @@ def render_confirmation_email(
     if cameras:
         detail_lines.append(f"- Number of cameras: {cameras}")
     detail_lines.append(f"- Year-1 amount: \u20ac{amount:,.2f}")
-    detail_lines.append(f"- Invoice number: {invoice_number}")
+    detail_lines.append(f"- Proposed invoice number: {invoice_number}")
 
     body_lines = [
         "Dear Tom and Karen,",
@@ -310,7 +350,7 @@ def build_dry_run_preview(purchase_order_id: str) -> Dict[str, Any]:
     project_name = canonical_project_name(_safe_str(order.get("project_name")))
     cameras, amount = compute_year1_amount(order)
     country = resolve_project_country(project_name)
-    customer_display = _safe_str(order.get("customer_name")) or _safe_str(order.get("customer_email"))
+    customer_display = resolve_customer_network(order)
     po_reference = _fallback_order_reference(purchase_order_id, _safe_str(order.get("order_reference")))
     invoice_number_preview = _next_invoice_number_preview()
 

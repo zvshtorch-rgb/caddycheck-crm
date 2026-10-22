@@ -40,6 +40,19 @@ class TestResolveOrderedCameras(unittest.TestCase):
             cameras = ocs.resolve_ordered_cameras({"id": "po-1", "ordered_cameras": 0})
         self.assertEqual(cameras, 3)
 
+    def test_pending_order_resolves_twelve_camera_licenses_from_stored_pdf_text(self):
+        order = dict(ORDER, ordered_cameras=0, incoming_email_id="incoming-1", amount=9336)
+        text = (
+            "Installation Type CaddyCheck 6 Checkouts TD + BT\n"
+            "IRC-CC-SW-901 CaddyCheck Camera - starting license 12 EUR 550,00 EUR 6.600,00\n"
+            "IRC-CC-SW-902 CaddyCheck - Maintenance & Licensing - 1Y 12 EUR 228,00 EUR 2.736,00"
+        )
+        with mock.patch("services.supabase_service.load_orders", return_value=[]), \
+             mock.patch("services.order_approval_service.get_incoming_email",
+                        return_value={"extracted_text": text}):
+            cameras = ocs.resolve_ordered_cameras(order)
+        self.assertEqual(cameras, 12, "count cameras, not checkouts or repeated maintenance units")
+
     def test_no_id_returns_zero_without_calling_load_orders(self):
         with mock.patch("services.supabase_service.load_orders") as load_orders:
             cameras = ocs.resolve_ordered_cameras({"ordered_cameras": 0})
@@ -51,10 +64,21 @@ class TestResolveOrderedCameras(unittest.TestCase):
             cameras = ocs.resolve_ordered_cameras({"id": "po-1", "ordered_cameras": 0})
         self.assertEqual(cameras, 0)
 
-    def test_load_orders_failure_is_swallowed(self):
+    def test_load_orders_failure_is_not_silently_treated_as_missing_quantity(self):
         with mock.patch("services.supabase_service.load_orders", side_effect=RuntimeError("no creds")):
-            cameras = ocs.resolve_ordered_cameras({"id": "po-1", "ordered_cameras": 0})
-        self.assertEqual(cameras, 0)
+            with self.assertRaisesRegex(RuntimeError, "no creds"):
+                ocs.resolve_ordered_cameras({"id": "po-1", "ordered_cameras": 0})
+
+    def test_amount_alone_does_not_prove_camera_quantity(self):
+        with mock.patch("services.supabase_service.load_orders", return_value=[]):
+            self.assertEqual(ocs.resolve_ordered_cameras({"id": "po-1", "amount": 9336}), 0)
+
+    def test_conflicting_pdf_quantities_are_reported(self):
+        with mock.patch("services.supabase_service.load_orders", return_value=[]), \
+             mock.patch("services.order_approval_service.get_incoming_email",
+                        return_value={"extracted_text": "Cameras: 12\nCamera count: 6"}):
+            with self.assertRaisesRegex(ValueError, "Conflicting camera quantities"):
+                ocs.resolve_ordered_cameras({"id": "po-1", "incoming_email_id": "incoming-1"})
 
 
 class TestComputeYear1Amount(unittest.TestCase):
@@ -103,7 +127,7 @@ class TestValidateOrderForYear1Invoicing(unittest.TestCase):
         self.assertTrue(any("Country" in w for w in result["warnings"]), result["warnings"])
 
     def test_missing_customer_details_is_a_soft_warning_not_an_error(self):
-        bad_order = dict(ORDER, customer_name="", customer_email="")
+        bad_order = dict(ORDER, project_name="Unknown Site", customer_name="", customer_email="")
         with mock.patch.object(ocs, "resolve_project_country", return_value="Germany"):
             result = ocs.validate_order_for_year1_invoicing(bad_order)
         self.assertEqual(result["errors"], [])
@@ -111,6 +135,16 @@ class TestValidateOrderForYear1Invoicing(unittest.TestCase):
 
 
 class TestRenderConfirmationEmail(unittest.TestCase):
+    def test_email_address_can_never_render_as_customer_network(self):
+        for value in ("Karen.Duhoux@profit-protection.com", "Karen <karen@example.com>"):
+            with self.subTest(value=value):
+                _, body = ocs.render_confirmation_email(
+                    project_name="Unknown Site", customer_display=value, country="",
+                    po_reference="PO-1", cameras=12, amount=9336, invoice_number=8719,
+                    sender="sender@example.com",
+                )
+                self.assertNotIn("Customer/Network:", body)
+
     def test_subject_matches_the_required_format(self):
         subject, _ = ocs.render_confirmation_email(
             project_name="Edeka Steinebach Hohn", customer_display="iRetailCheck", country="Germany",
@@ -132,7 +166,7 @@ class TestRenderConfirmationEmail(unittest.TestCase):
         self.assertIn("- Order / PO reference: PO-301737ff", body)
         self.assertIn("- Number of cameras: 3", body)
         self.assertIn("- Year-1 amount: \u20ac2,334.00", body)
-        self.assertIn("- Invoice number: 8719", body)
+        self.assertIn("- Proposed invoice number: 8719", body)
         self.assertIn("orders.chaddycheck@video-inform.com", body)
 
     def test_unavailable_fields_are_omitted_not_shown_blank(self):
@@ -254,6 +288,20 @@ class TestBuildDryRunPreview(unittest.TestCase):
         self.assertEqual(result["to"], ["tom@example.com", "karen@example.com"])
         self.assertEqual(result["cc"], ["yoram@example.com"])
 
+    def test_ad_network_and_twelve_cameras_are_shown_in_preview_and_body(self):
+        order = dict(ORDER, project_name="AD DELHAIZE Roeselare (Mandel)",
+                     customer_name="", customer_email="karen@example.com",
+                     ordered_cameras=12, amount=9336)
+        patches = self._patches(order=order)
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+            result = ocs.build_dry_run_preview("po-1")
+        self.assertEqual(result["customer_display"], "AD")
+        self.assertEqual(result["cameras"], 12)
+        self.assertEqual(result["amount"], 9336)
+        self.assertIn("- Customer/Network: AD\n", result["body"])
+        self.assertIn("- Number of cameras: 12", result["body"])
+        self.assertIn("- Proposed invoice number: 8719", result["body"])
+
     def test_missing_recipient_config_blocks_before_building_anything(self):
         patches = self._patches(cfg={"sender": "", "to": [], "cc": []})
         with patches[0], patches[1], patches[2], patches[3], patches[4]:
@@ -288,6 +336,67 @@ class TestBuildDryRunPreview(unittest.TestCase):
         replace_rows.assert_not_called()
         update_po.assert_not_called()
         send_email.assert_not_called()
+
+    def test_repeated_previews_only_select_candidate_without_reserving_or_consuming_it(self):
+        class ReadOnlyClient:
+            def __init__(self):
+                self.reads = []
+                self.invoices = [{"invoice_number": "8718"}]
+                self.registry = []
+
+            def table(self, name):
+                if name != "invoices":
+                    raise AssertionError(f"Unexpected table access: {name}")
+                return self
+
+            def select(self, columns):
+                if columns != "invoice_number":
+                    raise AssertionError(f"Unexpected projection: {columns}")
+                self.reads.append(("invoices", columns))
+                return self
+
+            def execute(self):
+                return mock.Mock(data=self.invoices.copy())
+
+            def __getattr__(self, name):
+                raise AssertionError(f"Forbidden client operation: {name}")
+
+        client = ReadOnlyClient()
+        patches = self._patches()
+        with patches[0], patches[1], patches[2], patches[4], \
+             mock.patch("services.order_approval_service._get_client", return_value=client), \
+             mock.patch("services.supabase_service.replace_invoice_rows") as replace_rows, \
+             mock.patch("services.order_approval_service.update_purchase_order") as update_po, \
+             mock.patch("services.email_service.send_graph_email") as send_email:
+            first = ocs.build_dry_run_preview("po-1")
+            second = ocs.build_dry_run_preview("po-1")
+        self.assertEqual(first["invoice_number_preview"], 8719)
+        self.assertEqual(second["invoice_number_preview"], 8719)
+        self.assertEqual(client.invoices, [{"invoice_number": "8718"}])
+        self.assertEqual(client.registry, [])
+        self.assertEqual(client.reads, [("invoices", "invoice_number")] * 2)
+        replace_rows.assert_not_called()
+        update_po.assert_not_called()
+        send_email.assert_not_called()
+
+
+class TestResolveCustomerNetwork(unittest.TestCase):
+    def test_canonical_network_precedes_contact_or_customer_email(self):
+        for customer in ("", "Karen <karen@example.com>", "karen@example.com"):
+            with self.subTest(customer=customer):
+                order = dict(ORDER, project_name="AD DELHAIZE Roeselare (Mandel)",
+                             customer_name=customer)
+                self.assertEqual(ocs.resolve_customer_network(order), "AD")
+
+    def test_unknown_network_uses_real_customer_name(self):
+        self.assertEqual(ocs.resolve_customer_network(
+            {"project_name": "Unknown Site", "customer_name": "Customer Ltd"}), "Customer Ltd")
+
+    def test_contact_and_sender_emails_are_never_customer_network(self):
+        order = {"project_name": "Unknown Site", "customer_name": "name@example.com",
+                 "customer_email": "customer@example.com", "contact_email": "contact@example.com",
+                 "sender_email": "sender@example.com"}
+        self.assertEqual(ocs.resolve_customer_network(order), "")
 
 
 if __name__ == "__main__":
