@@ -8070,6 +8070,11 @@ elif page == "💸 Debt Report":
 elif page == "📅 Monthly Invoice":
     st.title("📅 Monthly Invoice")
 
+    if ROLE == "admin":
+        from ui.billing_mapping_review import render_billing_mapping_review
+        with st.expander("Admin bill-to mapping review", expanded=False):
+            render_billing_mapping_review(ROLE, str(_current_user))
+
     col1, col2 = st.columns([2, 1])
     with col1:
         sel_month = st.selectbox("Month", MONTH_ORDER, index=datetime.date.today().month - 1)
