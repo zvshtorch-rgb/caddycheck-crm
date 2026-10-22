@@ -8072,6 +8072,9 @@ elif page == "📅 Monthly Invoice":
 
     if ROLE == "admin":
         from ui.billing_mapping_review import render_billing_mapping_review
+        from ui.monthly_candidate_preview import render_monthly_candidate_preview
+        with st.expander("Admin monthly candidate preview - project 93", expanded=False):
+            render_monthly_candidate_preview(ROLE)
         with st.expander("Admin bill-to mapping review", expanded=False):
             render_billing_mapping_review(ROLE, str(_current_user))
 

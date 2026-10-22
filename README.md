@@ -123,6 +123,31 @@ All generated files are saved to the `output/` directory:
 
 ## Scheduled Monthly Sending
 
+### Read-only mapped candidate canary
+
+The Streamlit Monthly Invoice admin page includes **Admin monthly candidate
+preview - project 93**, restricted to AD Aartselar and July 2027. Load / refresh
+performs SELECTs only and retains the result in the current session. It resolves
+the effective approved bill-to mapping, requires an active verified account,
+and validates recipients from the account's configuration key. Both planned
+invoice and send dates are 2027-06-01, separate from billing period 2027-07.
+This remains annual maintenance grouped by billing month, not a monthly charge.
+
+The payload uses installation-year maintenance numbering and the existing
+override-aware `Project.get_rate()` precedence (local override entry, database
+override, global EUR rate). Unit price and total are canonical decimal strings.
+Any future PDF, ledger, or email implementation must consume that payload;
+those integrations are not enabled by this preview.
+
+Eligibility checks ledger period metadata, maintenance-year references, and
+remote/local sent history. Unscoped sent batches, unknown target-year ledger
+identities, conflicting periods, or existing coverage block eligibility for
+review. Payment/send timestamps are never treated as billing periods.
+No candidate database row, invoice number, invoice, PDF, or email is created.
+Legacy manual/scheduled actions remain separate and unchanged; preview
+eligibility is not an execution gate or a reservation and must be revalidated
+before any future write.
+
 Use `monthly_auto_send.py` to generate and email the monthly invoice automatically on the 1st of the month.
 
 Default behavior:
