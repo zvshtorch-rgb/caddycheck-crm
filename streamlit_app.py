@@ -8569,6 +8569,18 @@ elif page == "✅ Order Approvals":
                                     st.success(f"✅ {_mailbox_check.get('message')}")
                                 else:
                                     st.warning(f"⚠️ {_mailbox_check.get('message')}")
+                                if _mailbox_check.get("diagnostics"):
+                                    with st.expander("Read-only Graph diagnostics"):
+                                        st.json(_mailbox_check["diagnostics"])
+                                if _confirm_preview.get("config_diagnostics"):
+                                    with st.expander("Confirmation recipient configuration sources"):
+                                        st.json(_confirm_preview["config_diagnostics"])
+                                if _confirm_preview.get("pdf_validation"):
+                                    _pdf_validation = _confirm_preview["pdf_validation"]
+                                    st.caption(
+                                        f"PDF verified in memory: {_pdf_validation['byte_count']} bytes, "
+                                        f"{_pdf_validation['page_count']} page(s), valid signature and parser check."
+                                    )
                                 st.markdown(f"**Subject:** {_confirm_preview['subject']}")
                                 st.code(_confirm_preview["body"], language=None)
                                 if _confirm_preview.get("pdf_bytes"):

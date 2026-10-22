@@ -21,6 +21,10 @@ number is only a proposed candidate from a SELECT: it is never reserved or consu
 from __future__ import annotations
 
 import datetime
+import base64
+import binascii
+import io
+import json
 import re
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
@@ -273,10 +277,67 @@ def generate_year1_invoice_pdf_bytes(invoice_number: int, rows: List[Dict[str, A
         description=rows[0].get("description") if rows else None,
     )
 
+def validate_invoice_pdf_bytes(pdf_bytes: bytes) -> Dict[str, int]:
+    """Parse the generated in-memory document without downloading, saving, or writing CRM records."""
+    import pdfplumber
+
+    if not pdf_bytes:
+        raise ValueError("Generated invoice PDF is empty.")
+    if not re.match(rb"%PDF-[12]\.\d", pdf_bytes):
+        raise ValueError("Generated invoice document has no valid PDF signature.")
+    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+        if not pdf.pages:
+            raise ValueError("Generated invoice PDF has no pages.")
+        for page in pdf.pages:
+            page.extract_text()
+        return {"byte_count": len(pdf_bytes), "page_count": len(pdf.pages)}
+
+
+def _graph_token_diagnostics(token: str, tenant_id: str, client_id: str) -> Dict[str, Any]:
+    """Allowlisted claims for diagnosis only, not token validation or authorization decisions."""
+    try:
+        payload = token.split(".")[1]
+        claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+        if not isinstance(claims, dict):
+            raise ValueError("Token claims are not an object.")
+    except (IndexError, ValueError, binascii.Error, UnicodeDecodeError):
+        return {"claims_available": False, "note": "Token claims could not be decoded; authorization not inferred."}
+    return {
+        "claims_available": True,
+        "application_roles": claims.get("roles", []),
+        "delegated_scopes": claims.get("scp", ""),
+        "tenant_matches_config": claims.get("tid", "").lower() == tenant_id.lower(),
+        "client_matches_config": str(claims.get("azp") or claims.get("appid") or "").lower() == client_id.lower(),
+        "note": "Decoded claims are diagnostic only; Exchange policy/RBAC scope is not tested.",
+    }
+
+
+def _graph_error_details(response, *sensitive_values: str) -> Dict[str, str]:
+    try:
+        body = response.json()
+    except ValueError:
+        return {"code": "NonJsonResponse", "message": "Graph returned a non-JSON error response."}
+    error = body.get("error", {}) if isinstance(body, dict) else {}
+    if isinstance(error, dict):
+        details = {"code": str(error.get("code", "")), "message": str(error.get("message", ""))}
+    else:
+        details = {"code": str(error), "message": str(body.get("error_description", ""))}
+    for key, value in details.items():
+        for sensitive in sensitive_values:
+            if sensitive:
+                value = value.replace(sensitive, "[REDACTED]")
+        details[key] = value[:1000]
+    return details
+
 
 def check_graph_mailbox_reachable(mailbox: str) -> Dict[str, Any]:
-    """Safe, READ-ONLY check that the existing Graph app credentials can resolve the given mailbox
-    (GET /users/{mailbox}) -- never sends mail. Never raises; returns {'ok': bool, 'message': str}."""
+    """Read-only directory lookup, NOT a mailbox or send-authorization test. Never sends mail."""
+    diagnostics: Dict[str, Any] = {
+        "endpoint": f"https://graph.microsoft.com/v1.0/users/{mailbox}",
+        "method": "GET", "permission_model": "application (client_credentials, scope .default)",
+        "required_lookup_permission": "User.Read.All (or a higher directory-read application permission)",
+        "send_authorization": "Not tested. This directory GET does not test Mail.Send or Exchange scope.",
+    }
     if not mailbox:
         return {"ok": False, "message": "No sender mailbox configured."}
     try:
@@ -298,16 +359,27 @@ def check_graph_mailbox_reachable(mailbox: str) -> Dict[str, Any]:
             },
             timeout=15,
         )
-        token_resp.raise_for_status()
+        if token_resp.status_code != 200:
+            diagnostics.update({
+                "stage": "token", "http_status": token_resp.status_code,
+                "error": _graph_error_details(token_resp, client_secret),
+            })
+            return {"ok": False, "message": "Graph token request failed; see safe diagnostics.",
+                    "diagnostics": diagnostics}
         access_token = token_resp.json()["access_token"]
+        diagnostics["token"] = _graph_token_diagnostics(access_token, tenant_id, client_id)
 
         resp = requests.get(
-            f"https://graph.microsoft.com/v1.0/users/{mailbox}",
+            diagnostics["endpoint"],
             headers={"Authorization": f"Bearer {access_token}"}, timeout=15,
         )
+        diagnostics.update({"stage": "directory_lookup", "http_status": resp.status_code})
         if resp.status_code == 200:
-            return {"ok": True, "message": f"Mailbox '{mailbox}' found in the tenant."}
-        return {"ok": False, "message": f"Graph could not resolve mailbox '{mailbox}' (HTTP {resp.status_code})."}
+            return {"ok": True, "message": f"Directory user '{mailbox}' found. Mailbox/send authorization is not verified.",
+                    "diagnostics": diagnostics}
+        diagnostics["error"] = _graph_error_details(resp, client_secret, access_token)
+        return {"ok": False, "message": f"Graph directory lookup failed for '{mailbox}' (HTTP {resp.status_code}); "
+                "this does not determine whether mail sending is permitted.", "diagnostics": diagnostics}
     except Exception as exc:
         return {"ok": False, "message": f"Could not verify mailbox reachability: {exc}"}
 
@@ -332,7 +404,7 @@ def build_dry_run_preview(purchase_order_id: str) -> Dict[str, Any]:
         return {"ok": False, "errors": ["Purchase order not found."], "warnings": []}
 
     validation = validate_order_for_year1_invoicing(order)
-    cfg = get_order_confirmation_config()
+    cfg = get_order_confirmation_config(include_diagnostics=True)
     config_errors = []
     if not cfg.get("sender"):
         config_errors.append("No sender mailbox configured (st.secrets['order_confirmation']['sender']).")
@@ -361,12 +433,14 @@ def build_dry_run_preview(purchase_order_id: str) -> Dict[str, Any]:
     )
     rows = build_year1_invoice_rows(order, invoice_number_preview)
     pdf_bytes = generate_year1_invoice_pdf_bytes(invoice_number_preview, rows)
+    pdf_validation = validate_invoice_pdf_bytes(pdf_bytes)
     mailbox_check = check_graph_mailbox_reachable(cfg.get("sender", ""))
 
     result.update({
         "project_name": project_name, "country": country, "customer_display": customer_display,
         "po_reference": po_reference, "cameras": cameras, "amount": amount,
         "invoice_number_preview": invoice_number_preview, "subject": subject, "body": body,
-        "pdf_bytes": pdf_bytes, "mailbox_check": mailbox_check,
+        "pdf_bytes": pdf_bytes, "pdf_validation": pdf_validation, "mailbox_check": mailbox_check,
+        "config_diagnostics": cfg.get("config_diagnostics", {}),
     })
     return result

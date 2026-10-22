@@ -277,16 +277,18 @@ def get_email_config() -> dict:
     return defaults
 
 
-def get_order_confirmation_config() -> dict:
+def get_order_confirmation_config(*, include_diagnostics: bool = False) -> dict:
     """Load the order-confirmation-email config (sender mailbox + To/CC recipients) for the Order
     Approvals auto-confirmation feature.
 
-    Checked, in order: st.secrets["order_confirmation"] (preferred -- a dedicated section, deliberately
-    separate from the generic [email] section used for monthly invoices/license alerts), then
-    ORDER_CONFIRMATION_SENDER/TO/CC env vars. Returns {"sender": "", "to": [], "cc": []} when nothing is
+    Loads st.secrets["order_confirmation"] (a dedicated section separate from generic [email]), then
+    applies non-empty ORDER_CONFIRMATION_SENDER/TO/CC environment overrides.
+    Returns {"sender": "", "to": [], "cc": []} when nothing is
     configured -- callers must report a clear, actionable validation error rather than hardcoding or
     guessing real recipient addresses (see services/order_confirmation_service.py)."""
     defaults = {"sender": "", "to": [], "cc": []}
+    sources = {key: "not configured" for key in defaults}
+    secret_values = {}
     try:
         import streamlit as st
         cfg = st.secrets.get("order_confirmation", {})
@@ -295,17 +297,25 @@ def get_order_confirmation_config() -> dict:
                 if k in ("to", "cc") and isinstance(v, str):
                     v = [x.strip() for x in v.split(",") if x.strip()]
                 defaults[k] = v
+                if k in sources:
+                    sources[k] = f"st.secrets['order_confirmation']['{k}']"
+                    secret_values[k] = v
     except Exception:
         pass
     env_sender = os.environ.get("ORDER_CONFIRMATION_SENDER", "").strip()
     if env_sender:
         defaults["sender"] = env_sender
+        sources["sender"] = "ORDER_CONFIRMATION_SENDER environment override"
     env_to = os.environ.get("ORDER_CONFIRMATION_TO", "").strip()
     if env_to:
         defaults["to"] = [x.strip() for x in env_to.split(",") if x.strip()]
+        sources["to"] = "ORDER_CONFIRMATION_TO environment override"
     env_cc = os.environ.get("ORDER_CONFIRMATION_CC", "").strip()
     if env_cc:
         defaults["cc"] = [x.strip() for x in env_cc.split(",") if x.strip()]
+        sources["cc"] = "ORDER_CONFIRMATION_CC environment override"
+    if include_diagnostics:
+        defaults["config_diagnostics"] = {"sources": sources, "secret_values": secret_values}
     return defaults
 
 

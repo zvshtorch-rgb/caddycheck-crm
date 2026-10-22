@@ -27,6 +27,8 @@ qrcode[pil]>=7.4.2
 # forcing another full rebuild for the same known stale-module reason.
 # touch: Order confirmation dry-run corrections -- canonical network, source-PDF camera quantity,
 # and clearly unreserved proposed invoice number; reload cached service modules on deployment.
+# touch: Approved read-only order preview diagnostics -- Graph error details, recipient sources,
+# and in-memory PDF parser validation; no permission, recipient, approval, or send changes.
 # touch: historical Ask Data drill-down frame_builder fix (executor.py/helpers.py) -- "Show
 # invoices" after a historical answer rendered no table; forcing another full rebuild for the
 # same known stale-module reason.

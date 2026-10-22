@@ -8,6 +8,9 @@ the invoice/PDF/email and marks the order approved is a deliberately separate, l
 covered here.
 """
 import os
+import base64
+import io
+import json
 import unittest
 from unittest import mock
 
@@ -212,6 +215,7 @@ class TestCheckGraphMailboxReachable(unittest.TestCase):
     SECRET = "s3cr3t"
 
     class _Ok:
+        status_code = 200
         def raise_for_status(self):
             return None
 
@@ -221,6 +225,10 @@ class TestCheckGraphMailboxReachable(unittest.TestCase):
     class _Resp:
         def __init__(self, status_code):
             self.status_code = status_code
+
+        def json(self):
+            return {"error": {"code": "Authorization_RequestDenied",
+                              "message": "Insufficient privileges to complete the operation."}}
 
     def test_no_mailbox_given(self):
         result = ocs.check_graph_mailbox_reachable("")
@@ -258,6 +266,101 @@ class TestCheckGraphMailboxReachable(unittest.TestCase):
             result = ocs.check_graph_mailbox_reachable("orders.chaddycheck@video-inform.com")
         self.assertFalse(result["ok"])
         self.assertIn("network down", result["message"])
+
+    def test_403_exposes_safe_error_and_does_not_claim_send_is_denied(self):
+        env = {"ORDER_INTAKE_GRAPH_TENANT_ID": "t", "ORDER_INTAKE_GRAPH_CLIENT_ID": "c",
+               "ORDER_INTAKE_GRAPH_CLIENT_SECRET": self.SECRET}
+        payload = {"tid": "t", "appid": "c", "roles": ["Mail.Send", "Mail.Read"]}
+        encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
+        token = f"header.{encoded}.signature"
+        token_response = mock.Mock(status_code=200)
+        token_response.json.return_value = {"access_token": token}
+        with mock.patch.dict(os.environ, env), \
+             mock.patch("requests.post", return_value=token_response) as post, \
+             mock.patch("requests.get", return_value=self._Resp(403)) as get, \
+             mock.patch("services.email_service.send_graph_email") as send:
+            result = ocs.check_graph_mailbox_reachable("orders.chaddycheck@video-inform.com")
+        diagnostics = result["diagnostics"]
+        self.assertEqual(diagnostics["http_status"], 403)
+        self.assertEqual(diagnostics["error"], {
+            "code": "Authorization_RequestDenied",
+            "message": "Insufficient privileges to complete the operation.",
+        })
+        self.assertEqual(diagnostics["token"]["application_roles"], ["Mail.Send", "Mail.Read"])
+        self.assertTrue(diagnostics["token"]["tenant_matches_config"])
+        self.assertTrue(diagnostics["token"]["client_matches_config"])
+        self.assertIn("Not tested", diagnostics["send_authorization"])
+        self.assertNotIn(token, json.dumps(result))
+        self.assertNotIn(self.SECRET, json.dumps(result))
+        self.assertEqual(post.call_count, 1)
+        self.assertIn("/oauth2/v2.0/token", post.call_args.args[0])
+        self.assertEqual(get.call_args.args[0],
+                         "https://graph.microsoft.com/v1.0/users/orders.chaddycheck@video-inform.com")
+        send.assert_not_called()
+
+    def test_safe_error_redacts_tokens_and_secrets(self):
+        response = mock.Mock()
+        response.json.return_value = {
+            "error": {"code": "Denied", "message": "Do not expose my-secret or my-token"}}
+        details = ocs._graph_error_details(response, "my-secret", "my-token")
+        self.assertNotIn("my-secret", details["message"])
+        self.assertNotIn("my-token", details["message"])
+
+    def test_opaque_token_has_explicit_unavailable_diagnostics(self):
+        self.assertFalse(ocs._graph_token_diagnostics("opaque", "t", "c")["claims_available"])
+
+
+class TestInvoicePdfValidation(unittest.TestCase):
+    def test_generated_pdf_parses_and_contains_expected_invoice_details(self):
+        import pdfplumber
+
+        order = dict(ORDER, project_name="AD DELHAIZE Roeselare (Mandel)",
+                     ordered_cameras=12, amount=9336, order_reference="2026-01-005")
+        rows = ocs.build_year1_invoice_rows(order, 8719)
+        pdf_bytes = ocs.generate_year1_invoice_pdf_bytes(8719, rows)
+        validation = ocs.validate_invoice_pdf_bytes(pdf_bytes)
+        self.assertEqual(validation["byte_count"], len(pdf_bytes))
+        self.assertGreater(validation["page_count"], 0)
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            text = "\n".join(page.extract_text() or "" for page in pdf.pages)
+        self.assertIn("8719", text)
+        self.assertIn("Roeselare", text)
+        self.assertIn("TOTAL DUE", text)
+        self.assertIn("9,336", text)
+
+    def test_empty_pdf_rejected(self):
+        with self.assertRaisesRegex(ValueError, "empty"):
+            ocs.validate_invoice_pdf_bytes(b"")
+
+    def test_non_pdf_rejected(self):
+        with self.assertRaisesRegex(ValueError, "signature"):
+            ocs.validate_invoice_pdf_bytes(b"<html>Authentication required</html>")
+
+    def test_signature_alone_does_not_pass_parser(self):
+        from pdfplumber.utils.exceptions import PdfminerException
+
+        with self.assertRaises(PdfminerException):
+            ocs.validate_invoice_pdf_bytes(b"%PDF-1.4\nnot a PDF document")
+
+
+class TestConfirmationConfigDiagnostics(unittest.TestCase):
+    def test_secret_cc_and_environment_override_provenance(self):
+        from config.settings import get_order_confirmation_config
+
+        secrets = {"order_confirmation": {
+            "sender": "sender@example.com", "to": ["tom@example.com", "karen@example.com"],
+            "cc": ["yoram@example.com", "zvika@example.com"],
+        }}
+        with mock.patch("streamlit.secrets", secrets), \
+             mock.patch.dict(os.environ, {"ORDER_CONFIRMATION_CC": "override@example.com"}, clear=True):
+            result = get_order_confirmation_config(include_diagnostics=True)
+        self.assertEqual(result["cc"], ["override@example.com"])
+        self.assertEqual(result["config_diagnostics"]["secret_values"]["cc"],
+                         ["yoram@example.com", "zvika@example.com"])
+        self.assertEqual(result["config_diagnostics"]["sources"]["cc"],
+                         "ORDER_CONFIRMATION_CC environment override")
+        self.assertEqual(result["config_diagnostics"]["sources"]["to"],
+                         "st.secrets['order_confirmation']['to']")
 
 
 class TestBuildDryRunPreview(unittest.TestCase):

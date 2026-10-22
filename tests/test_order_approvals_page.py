@@ -203,7 +203,11 @@ class TestOrderConfirmationDryRunButton(unittest.TestCase):
         "subject": "Order Confirmation \u2013 CaddyCheck \u2013 Test Project \u2013 Invoice 8719",
         "body": "Dear Tom and Karen,\n\nThank you for your order.",
         "pdf_bytes": b"%PDF-1.4 fake",
-        "mailbox_check": {"ok": True, "message": "Mailbox 'orders.chaddycheck@video-inform.com' found in the tenant."},
+        "mailbox_check": {"ok": True, "message": "Directory user found; send authorization not verified.",
+                          "diagnostics": {"method": "GET", "http_status": 200}},
+        "pdf_validation": {"byte_count": 3335, "page_count": 1},
+        "config_diagnostics": {"sources": {"cc": "st.secrets['order_confirmation']['cc']"},
+                               "secret_values": {"cc": ["yoram@example.com"]}},
     }
     FAILED_PREVIEW = {
         "ok": False, "errors": ["Neither a camera count nor an explicit amount is available on this order."],
@@ -253,6 +257,8 @@ class TestOrderConfirmationDryRunButton(unittest.TestCase):
         self.assertIn("**Proposed invoice number:** 8719", markdowns)
         self.assertIn("**Number of cameras:** 12", markdowns)
         self.assertTrue(any("not reserved, saved, or consumed" in c.value for c in app.caption))
+        self.assertTrue(any("3335 bytes, 1 page(s)" in c.value for c in app.caption))
+        self.assertEqual(len(app.json), 2)
         self.assertTrue(any("Dear Tom and Karen" in c.value for c in app.code))
         self.assertTrue(any(b.key == "preview_pdf_po-3" for b in app.download_button))
         mocks["replace_rows"].assert_not_called()
