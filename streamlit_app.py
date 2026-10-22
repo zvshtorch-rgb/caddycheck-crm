@@ -2840,7 +2840,7 @@ def _build_confirmed_invoices_zip(invoice_numbers: list[int]) -> tuple[bytes, li
     return buf.getvalue(), included
 
 
-def _auto_provision_order_and_project(purchase_order_id: str) -> list[str]:
+def _auto_provision_order_and_project(purchase_order_id: str, *, saved_invoice_row: Optional[dict] = None) -> list[str]:
     """After a purchase order is approved: ensure a Project exists and create an Orders record.
 
     Best-effort — never raises. Returns a list of human-readable status messages.
@@ -2856,7 +2856,9 @@ def _auto_provision_order_and_project(purchase_order_id: str) -> list[str]:
     if not po:
         return ["Purchase order not found."]
 
-    project_name = canonical_project_name(_safe_str(po.get("project_name")).strip())
+    project_name = canonical_project_name(_safe_str(
+        saved_invoice_row.get("project_name") if saved_invoice_row else po.get("project_name")
+    ).strip())
     if not project_name:
         return ["No project name on the purchase order — skipped Order/Project creation."]
 
@@ -2879,6 +2881,9 @@ def _auto_provision_order_and_project(purchase_order_id: str) -> list[str]:
     ordered_cameras = _extract_order_camera_total_from_text(text) if text else 0
     if not ordered_cameras:
         ordered_cameras = _infer_order_camera_total_from_amount(amount)
+    if saved_invoice_row:
+        amount = _safe_float(saved_invoice_row.get("payment_amount"), default=0.0)
+        ordered_cameras = _safe_int(saved_invoice_row.get("cameras_number"), default=0)
 
     # 2. Create the Project if none matches yet.
     project_name_choices = [p.project_name for p in projects if _safe_str(p.project_name).strip()]
@@ -8432,6 +8437,14 @@ elif page == "✅ Order Approvals":
     st.caption("Customer purchase orders received by email and their approval status.")
 
     from services import order_approval_service as _oas
+    from services import order_confirmation_workflow as _confirmation_workflow
+    _live_confirmation = ROLE == "admin" and _confirmation_workflow.live_approval_enabled()
+    if CAN_EDIT and not _live_confirmation:
+        st.info("Global live approval is OFF. Only the explicitly selected AD DELHAIZE Roeselare "
+                "(Mandel) canary can be reviewed for one approval. No automatic retries.")
+    _confirmation_feedback = st.session_state.pop("_confirmation_feedback", None)
+    if _confirmation_feedback:
+        st.error(_confirmation_feedback)
 
     if CAN_EDIT:
         from services import order_confirmation_service as _ocs_test
@@ -8549,6 +8562,10 @@ elif page == "✅ Order Approvals":
                             st.rerun()
 
                 if CAN_EDIT and _o.get("status") == "pending_approval":
+                    if _o.get("confirmation_error"):
+                        st.error(f"Confirmation incomplete: {_o['confirmation_error']}")
+                    if _o.get("confirmation_lock_token"):
+                        st.warning("Confirmation is in progress or needs manual review. Do not submit another approval.")
                     _current_proj_name = _o.get("project_name") or ""
                     if _project_name_looks_unreliable(_current_proj_name):
                         st.warning(
@@ -8635,15 +8652,63 @@ elif page == "✅ Order Approvals":
                                         key=f"preview_pdf_{_o['id']}",
                                     )
 
+                    _order_live = ROLE == "admin" and _confirmation_workflow.order_approval_enabled(_o)
+                    _review_key = f"_final_approval_review_{_o['id']}"
+                    if _order_live and st.button("Review final approval", key=f"review_approval_{_o['id']}"):
+                        st.session_state.pop(_review_key, None)
+                        try:
+                            st.session_state[_review_key] = _confirmation_workflow.build_approval_review(_o["id"])
+                        except Exception as _review_error:
+                            st.error(f"Final review unavailable: {_review_error}")
+                    _final_review = st.session_state.get(_review_key)
+                    if _order_live and _final_review:
+                        with st.container(border=True):
+                            st.markdown("**Final approval confirmation**")
+                            st.markdown(
+                                f"**Project/Site:** {_final_review['project_name']}  \n"
+                                f"**Network:** {_final_review['customer_display']}  \n"
+                                f"**PO reference:** {_final_review['po_reference']}  \n"
+                                f"**Camera count:** {_final_review['cameras']}  \n"
+                                f"**Final Y1 amount:** €{_final_review['amount']:,.2f}  \n"
+                                f"**Proposed real invoice number:** {_final_review['invoice_number_preview']}  \n"
+                                f"**Sender:** {_final_review['sender']}  \n"
+                                f"**To:** {', '.join(_final_review['to'])}  \n"
+                                f"**CC:** {', '.join(_final_review['cc']) or '—'}  \n"
+                                f"**Email subject:** {_final_review['subject']}"
+                            )
+                            st.caption("Number is not reserved until final Approve. The final PDF will be "
+                                       "generated from the committed invoice and attached. "
+                                       "Clicking Approve authorizes one invoice and one Graph email attempt. "
+                                       "Any failure stops the canary; no automatic retry.")
                     st.markdown("**Manual decision (admin):**")
                     _ac1, _ac2, _ac3 = st.columns(3)
-                    if _ac1.button("✅ Approve", key=f"appr_{_o['id']}", use_container_width=True):
-                        _oas.update_purchase_order(_o["id"], status="approved")
-                        _oas.auto_create_invoice_for_approved_order(_o["id"])
-                        _provision_messages = _auto_provision_order_and_project(_o["id"])
-                        st.session_state["_flash_success"] = " | ".join(_provision_messages) or "Purchase order approved."
-                        st.session_state["_flash_success_page"] = "✅ Order Approvals"
-                        st.rerun()
+                    if _ac1.button("✅ Approve", key=f"appr_{_o['id']}", width="stretch",
+                                   disabled=not _order_live or not _final_review
+                                   or bool(_o.get("confirmation_lock_token"))):
+                        try:
+                            _approval_result = _confirmation_workflow.approve_order(
+                                _o["id"], str(_current_user),
+                                review_fingerprint=_final_review["fingerprint"],
+                            )
+                        except Exception as _approval_error:
+                            st.error(f"Approval did not complete: {_approval_error}")
+                        else:
+                            if _approval_result["status"] == "sent" and not _approval_result.get("already_sent"):
+                                _provision_messages = _auto_provision_order_and_project(
+                                    _o["id"], saved_invoice_row=_approval_result.get("saved_invoice_row"),
+                                )
+                                for _provision_message in _provision_messages:
+                                    st.info(_provision_message)
+                            if _approval_result["status"] == "sent":
+                                st.session_state["_flash_success"] = _approval_result["message"]
+                                st.session_state["_flash_success_page"] = "✅ Order Approvals"
+                                st.cache_data.clear()
+                                st.rerun()
+                            else:
+                                if _approval_result.get("approved"):
+                                    st.session_state["_confirmation_feedback"] = _approval_result["message"]
+                                    st.rerun()
+                                st.error(_approval_result["message"])
                     if _ac2.button("❌ Reject", key=f"rej_{_o['id']}", use_container_width=True):
                         _oas.update_purchase_order(_o["id"], status="rejected")
                         st.rerun()
@@ -8652,6 +8717,32 @@ elif page == "✅ Order Approvals":
                         st.rerun()
 
                 if CAN_EDIT and _o.get("status") == "approved":
+                    _confirmation_status = _o.get("confirmation_status")
+                    if _confirmation_status == "sent":
+                        st.success(
+                            f"Order approved · Invoice {_o.get('confirmation_invoice_number')} created · "
+                            "Graph send accepted (202); delivery not confirmed"
+                        )
+                    elif _confirmation_status in ("failed", "pending"):
+                        st.warning(
+                            f"Invoice {_o.get('confirmation_invoice_number')} retained. "
+                            f"Confirmation {_confirmation_status}: {_o.get('confirmation_error') or 'in progress / outcome needs review'}"
+                        )
+                    if (_confirmation_status == "failed" and _o.get("confirmation_retry_safe")
+                            and not _o.get("confirmation_lock_token") and _live_confirmation):
+                        if st.button("Resend confirmation", key=f"resend_confirmation_{_o['id']}"):
+                            try:
+                                _resend_result = _confirmation_workflow.approve_order(
+                                    _o["id"], str(_current_user), resend=True,
+                                )
+                            except Exception as _resend_error:
+                                st.error(f"Resend did not complete: {_resend_error}")
+                            else:
+                                if _resend_result["status"] == "sent":
+                                    st.success(_resend_result["message"])
+                                    st.rerun()
+                                else:
+                                    st.error(_resend_result["message"])
                     if st.button("🔁 (Re-)create Order + Project record", key=f"provision_{_o['id']}"):
                         _provision_messages = _auto_provision_order_and_project(_o["id"])
                         for _pm in _provision_messages:

@@ -1,15 +1,15 @@
 """Order confirmation email (Order Approvals extension).
 
 When an admin approves a pending purchase order in the CRM, a Year-1 invoice should be created, a PDF
-generated from it, and a confirmation email sent to the customer contacts -- reusing the EXISTING,
-already-guarded invoice-ledger write (`services.supabase_service.replace_invoice_rows`) and PDF renderer
-(`services.pdf_service.generate_invoice_pdf_from_rows`), never a separate invoice-generation path.
+generated from it, and a confirmation email sent to the customer contacts. Canonical Y1 payloads and the
+shared PDF renderer are reused by order_confirmation_workflow; the insert-only ledger RPC uses the
+existing registry/audit protections rather than the destructive replace_invoice_rows helper.
 
 This module currently implements the DRY-RUN preview only (`build_dry_run_preview`): it performs every
 step up to and including PDF bytes generation without a directory-read prerequisite,
 but never writes to the invoice ledger, never updates the purchase order, and never sends an email. It is
 the first of two rollout steps (see the Order Approvals page); the live orchestrator that actually
-creates the invoice/PDF/email and marks the order approved is a deliberately separate, later change.
+creates the invoice/PDF/email and marks the order approved is separately gated and disabled by default.
 
 No recipient addresses are hardcoded here: Tom/Karen/Yoram's real addresses live in
 st.secrets["order_confirmation"] (see config.settings.get_order_confirmation_config), never in source.
@@ -187,7 +187,7 @@ def validate_order_for_year1_invoicing(order: Dict[str, Any]) -> Dict[str, List[
 
 def render_confirmation_email(
     *, project_name: str, customer_display: str, country: str, po_reference: str,
-    cameras: int, amount: float, invoice_number: int, sender: str,
+    cameras: int, amount: float, invoice_number: int, sender: str, proposed: bool = True,
 ) -> tuple[str, str]:
     """(subject, body) for the order-confirmation email. Fields that are genuinely unavailable (empty
     string / zero) are OMITTED from the body entirely, never shown as a blank placeholder."""
@@ -204,7 +204,8 @@ def render_confirmation_email(
     if cameras:
         detail_lines.append(f"- Number of cameras: {cameras}")
     detail_lines.append(f"- Year-1 amount: \u20ac{amount:,.2f}")
-    detail_lines.append(f"- Proposed invoice number: {invoice_number}")
+    label = "Proposed invoice number" if proposed else "Invoice number"
+    detail_lines.append(f"- {label}: {invoice_number}")
 
     body_lines = [
         "Dear Tom and Karen,",

@@ -240,7 +240,8 @@ class TestOrderConfirmationDryRunButton(unittest.TestCase):
         self.assertFalse(app.exception, [e.value for e in app.exception])
         app.sidebar.radio[0].set_value("✅ Order Approvals").run()
         self.assertFalse(app.exception, [e.value for e in app.exception])
-        return app, {"replace_rows": mocks[-2], "send_email": mocks[-1]}
+        return app, {"replace_rows": mocks[-2], "send_email": mocks[-1],
+                     "legacy_auto_invoice": mocks[8], "update_order": mocks[7]}
 
     def test_preview_button_exists_for_admin(self):
         app, _ = self.open_page(self.OK_PREVIEW)
@@ -296,13 +297,74 @@ class TestOrderConfirmationDryRunButton(unittest.TestCase):
         mocks["replace_rows"].assert_not_called()
         mocks["send_email"].assert_not_called()
 
-    def test_approving_still_uses_the_existing_flow_unchanged(self):
-        """The dry-run preview must not change the existing Approve button's behavior in this step."""
+    def test_live_approval_is_disabled_without_explicit_gate(self):
         app, mocks = self.open_page(self.OK_PREVIEW)
-        [b for b in app.button if b.key == "appr_po-3"][0].click().run()
+        self.assertTrue(app.button(key="appr_po-3").disabled)
         self.assertFalse(app.exception, [e.value for e in app.exception])
         mocks["replace_rows"].assert_not_called()
         mocks["send_email"].assert_not_called()
+
+    def test_only_selected_canary_has_review_and_viewer_has_no_action(self):
+        from services import order_confirmation_workflow as workflow
+
+        selected = dict(self.PREVIEW_ORDER, project_name="AD DELHAIZE Roeselare (Mandel)",
+                        order_reference="2026-01-005", confirmation_status="none")
+        with patch.object(self, "PREVIEW_ORDER", selected), \
+             patch.object(workflow, "CANARY_ORDER_ID", "po-3"), \
+             patch.object(workflow, "live_approval_enabled", return_value=False), \
+             patch.object(workflow, "approve_order") as approve:
+            app, _ = self.open_page(self.OK_PREVIEW)
+            self.assertTrue(any(b.key == "review_approval_po-3" for b in app.button))
+            self.assertTrue(app.button(key="appr_po-3").disabled)
+            approve.assert_not_called()
+            viewer, _ = self.open_page(self.OK_PREVIEW, role="viewer")
+            self.assertFalse(any(b.key == "review_approval_po-3" for b in viewer.button))
+            approve.assert_not_called()
+
+    def test_enabled_admin_approve_calls_only_new_orchestrator(self):
+        from services import order_confirmation_workflow as workflow
+
+        with patch.object(workflow, "live_approval_enabled", return_value=True), \
+             patch.object(workflow, "build_approval_review", return_value={
+                 **self.OK_PREVIEW, "customer_display": "AD", "po_reference": "2026-01-005",
+                 "fingerprint": "reviewed",
+             }), \
+             patch.object(workflow, "approve_order",
+                          return_value={"status": "sent", "message": "Order approved · Invoice 8719 created · Confirmation email sent"}) as approve, \
+             patch.object(oas, "create_invoice_from_purchase_order") as old_create:
+            app, boundary_mocks = self.open_page(self.OK_PREVIEW)
+            self.assertTrue(app.button(key="appr_po-3").disabled)
+            app.button(key="review_approval_po-3").click().run()
+            self.assertFalse(app.button(key="appr_po-3").disabled)
+            approve.assert_not_called()
+            markdowns = "\n".join(m.value for m in app.markdown)
+            for label in ("Project/Site", "Network", "PO reference", "Camera count",
+                          "Final Y1 amount", "Proposed real invoice number", "Sender", "To", "CC", "Email subject"):
+                self.assertIn(label, markdowns)
+            app.button(key="appr_po-3").click().run()
+            self.assertFalse(app.exception, [e.value for e in app.exception])
+            approve.assert_called_once()
+            self.assertEqual(approve.call_args.args[0], "po-3")
+            self.assertEqual(approve.call_args.kwargs, {"review_fingerprint": "reviewed"})
+            old_create.assert_not_called()
+            boundary_mocks["legacy_auto_invoice"].assert_not_called()
+            boundary_mocks["update_order"].assert_not_called()
+
+    def test_safe_failed_confirmation_exposes_resend_without_legacy_invoice_creation(self):
+        from services import order_confirmation_workflow as workflow
+
+        failed_order = dict(self.PREVIEW_ORDER, status="approved", confirmation_status="failed",
+                            confirmation_retry_safe=True, confirmation_invoice_number="8719",
+                            confirmation_error="Graph rejected")
+        with patch.object(self, "PREVIEW_ORDER", failed_order), \
+             patch.object(workflow, "live_approval_enabled", return_value=True), \
+             patch.object(workflow, "approve_order",
+                          return_value={"status": "sent", "message": "Confirmation sent"}) as approve:
+            app, _ = self.open_page(self.OK_PREVIEW)
+            app.button(key="resend_confirmation_po-3").click().run()
+            self.assertFalse(app.exception)
+            approve.assert_called_once()
+            self.assertEqual(approve.call_args.kwargs, {"resend": True})
 
     def test_preview_read_failure_is_explicit_and_clears_stale_preview(self):
         app, mocks = self.open_page(RuntimeError("source lookup failed"))
