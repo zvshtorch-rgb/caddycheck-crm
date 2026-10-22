@@ -246,6 +246,29 @@ class TestOrderConfirmationDryRunButton(unittest.TestCase):
         app, _ = self.open_page(self.OK_PREVIEW)
         self.assertTrue(any(b.key == "preview_confirm_po-3" for b in app.button))
 
+    def test_internal_send_requires_confirmation_and_runs_only_once_per_session(self):
+        from services import order_confirmation_service as ocs
+
+        cfg = {"ok": True, "errors": [], "sender": ocs.TEST_CONFIRMATION_SENDER,
+               "recipient": "zvika-test@video-inform.com", "subject": ocs.TEST_CONFIRMATION_SUBJECT}
+        with patch.object(ocs, "get_confirmation_send_test_config", return_value=cfg), \
+             patch.object(ocs, "send_order_confirmation_test",
+                          return_value={"accepted": True, "http_status": 202}) as send:
+            app, mocks = self.open_page(self.OK_PREVIEW)
+            self.assertTrue(app.button(key="send_internal_graph_test").disabled)
+            send.assert_not_called()
+            app.checkbox(key="confirm_internal_graph_test").check().run()
+            app.button(key="send_internal_graph_test").click().run()
+            self.assertFalse(app.exception)
+            self.assertTrue(app.button(key="send_internal_graph_test").disabled)
+            app.run()
+            self.assertEqual(send.call_count, 1)
+            mocks["replace_rows"].assert_not_called()
+
+    def test_viewer_has_no_internal_send_action(self):
+        app, _ = self.open_page(self.OK_PREVIEW, role="viewer")
+        self.assertFalse(any(b.key == "send_internal_graph_test" for b in app.button))
+
     def test_clicking_preview_shows_sender_to_cc_subject_body_and_pdf_download(self):
         app, mocks = self.open_page(self.OK_PREVIEW)
         [b for b in app.button if b.key == "preview_confirm_po-3"][0].click().run()

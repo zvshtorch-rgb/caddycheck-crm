@@ -253,13 +253,14 @@ def send_graph_email(
     attachment_bytes: Optional[bytes] = None,
     attachment_filename: Optional[str] = None,
     attachment_content_type: str = "application/pdf",
-) -> None:
+) -> dict:
     """
     Send an email via Microsoft Graph API (app-only client credentials).
 
     Uses the same Graph credentials as the order-intake provider
     (ORDER_INTAKE_GRAPH_TENANT_ID / CLIENT_ID / CLIENT_SECRET / MAILBOX).
     Avoids SMTP entirely — no Basic Auth required.
+    Returns the HTTP acceptance metadata; acceptance is not a delivery confirmation.
     """
     import requests
 
@@ -327,6 +328,7 @@ def send_graph_email(
     resp = requests.post(send_url, json=payload, headers=headers, timeout=30)
     resp.raise_for_status()
     logger.info("Graph email sent to %d recipient(s)", len(recipients))
+    return {"endpoint": send_url, "http_status": resp.status_code, "accepted": resp.status_code == 202}
 
 
 def test_smtp_connection(config: dict) -> tuple:

@@ -285,7 +285,9 @@ def get_order_confirmation_config(*, include_diagnostics: bool = False) -> dict:
     applies non-empty ORDER_CONFIRMATION_SENDER/TO/CC environment overrides.
     Returns {"sender": "", "to": [], "cc": []} when nothing is
     configured -- callers must report a clear, actionable validation error rather than hardcoding or
-    guessing real recipient addresses (see services/order_confirmation_service.py)."""
+    guessing real recipient addresses (see services/order_confirmation_service.py).
+    Optional test_recipient is a single internal destination for the separate explicit send test;
+    it never falls back to the normal To/CC distribution lists."""
     defaults = {"sender": "", "to": [], "cc": []}
     sources = {key: "not configured" for key in defaults}
     secret_values = {}
@@ -316,6 +318,8 @@ def get_order_confirmation_config(*, include_diagnostics: bool = False) -> dict:
         sources["cc"] = "ORDER_CONFIRMATION_CC environment override"
     if include_diagnostics:
         defaults["config_diagnostics"] = {"sources": sources, "secret_values": secret_values}
+    # The explicit test action never falls back to normal To/CC recipients.
+    defaults["test_recipient"] = str(defaults.get("test_recipient", "")).strip()
     return defaults
 
 

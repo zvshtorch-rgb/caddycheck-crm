@@ -282,6 +282,7 @@ class TestCheckGraphMailboxReachable(unittest.TestCase):
             result = ocs.check_graph_mailbox_reachable("orders.chaddycheck@video-inform.com")
         diagnostics = result["diagnostics"]
         self.assertEqual(diagnostics["http_status"], 403)
+        self.assertEqual(result["status"], "not_authorized")
         self.assertEqual(diagnostics["error"], {
             "code": "Authorization_RequestDenied",
             "message": "Insufficient privileges to complete the operation.",
@@ -440,6 +441,15 @@ class TestBuildDryRunPreview(unittest.TestCase):
         update_po.assert_not_called()
         send_email.assert_not_called()
 
+    def test_directory_lookup_is_not_a_preview_or_send_prerequisite(self):
+        patches = self._patches()
+        with patches[0], patches[1], patches[2], patches[3], \
+             mock.patch.object(ocs, "check_graph_mailbox_reachable",
+                               side_effect=AssertionError("No directory lookup allowed")):
+            result = ocs.build_dry_run_preview("po-1")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["mailbox_check"]["status"], "not_checked")
+
     def test_repeated_previews_only_select_candidate_without_reserving_or_consuming_it(self):
         class ReadOnlyClient:
             def __init__(self):
@@ -500,6 +510,97 @@ class TestResolveCustomerNetwork(unittest.TestCase):
                  "customer_email": "customer@example.com", "contact_email": "contact@example.com",
                  "sender_email": "sender@example.com"}
         self.assertEqual(ocs.resolve_customer_network(order), "")
+
+
+class TestExplicitGraphSendTest(unittest.TestCase):
+    CONFIG = {
+        "sender": "orders.chaddycheck@video-inform.com",
+        "test_recipient": "zvika-test@video-inform.com",
+        "to": ["tom@example.com", "karen@example.com"],
+        "cc": ["yoram@video-inform.com", "zvika-test@video-inform.com"],
+    }
+
+    def test_same_transport_sends_one_internal_test_pdf_without_crm_access(self):
+        from services.email_service import send_graph_email
+        import pdfplumber
+
+        token_response = mock.Mock(status_code=200)
+        token_response.json.return_value = {"access_token": "test-token"}
+        send_response = mock.Mock(status_code=202)
+        with mock.patch.object(ocs, "get_order_confirmation_config", return_value=self.CONFIG), \
+             mock.patch("services.email_service._get_graph_setting", return_value="test-credential"), \
+             mock.patch("requests.post", side_effect=[token_response, send_response]) as post, \
+             mock.patch("requests.get", side_effect=AssertionError("No GET allowed")), \
+             mock.patch("services.order_approval_service._get_client",
+                        side_effect=AssertionError("No CRM access allowed")), \
+             mock.patch("services.email_service.send_graph_email", wraps=send_graph_email) as shared:
+            result = ocs.send_order_confirmation_test()
+        self.assertTrue(result["accepted"])
+        self.assertEqual(result["http_status"], 202)
+        self.assertEqual(shared.call_count, 1)
+        self.assertEqual(post.call_count, 2)
+        send_call = post.call_args
+        self.assertEqual(send_call.args[0], result["endpoint"])
+        self.assertEqual(send_call.args[0],
+                         "https://graph.microsoft.com/v1.0/users/orders.chaddycheck@video-inform.com/sendMail")
+        message = send_call.kwargs["json"]["message"]
+        self.assertEqual(message["subject"], "TEST ONLY \u2013 CaddyCheck Order Confirmation Email")
+        self.assertEqual(message["toRecipients"],
+                         [{"emailAddress": {"address": "zvika-test@video-inform.com"}}])
+        self.assertEqual(message["ccRecipients"], [])
+        attachment = base64.b64decode(message["attachments"][0]["contentBytes"])
+        self.assertEqual(len(attachment), result["attachment_bytes"])
+        with pdfplumber.open(io.BytesIO(attachment)) as pdf:
+            text = pdf.pages[0].extract_text()
+        self.assertIn("NOT AN INVOICE", text)
+        self.assertNotIn("8719", text)
+
+    def test_missing_or_external_test_recipient_never_falls_back_to_to_cc(self):
+        for recipient in ("", "tom@example.com", "a@video-inform.com,b@video-inform.com",
+                          "Zvika <zvika@video-inform.com>"):
+            with self.subTest(recipient=recipient), \
+                 mock.patch.object(ocs, "get_order_confirmation_config",
+                                   return_value=dict(self.CONFIG, test_recipient=recipient)), \
+                 mock.patch("services.email_service.send_graph_email") as send:
+                with self.assertRaises(ValueError):
+                    ocs.send_order_confirmation_test()
+                send.assert_not_called()
+
+    def test_normal_to_recipient_or_wrong_sender_is_blocked(self):
+        for cfg in (dict(self.CONFIG, to=["zvika-test@video-inform.com"]),
+                    dict(self.CONFIG, sender="another@video-inform.com")):
+            with mock.patch.object(ocs, "get_order_confirmation_config", return_value=cfg), \
+                 mock.patch("services.email_service.send_graph_email") as send:
+                with self.assertRaises(ValueError):
+                    ocs.send_order_confirmation_test()
+                send.assert_not_called()
+
+    def test_graph_403_is_reported_without_retry(self):
+        import requests
+
+        response = mock.Mock(status_code=403)
+        response.url = "https://graph.microsoft.com/v1.0/users/orders.chaddycheck@video-inform.com/sendMail"
+        response.json.return_value = {"error": {"code": "ErrorAccessDenied", "message": "Access is denied."}}
+        with mock.patch.object(ocs, "get_order_confirmation_config", return_value=self.CONFIG), \
+             mock.patch("services.email_service.send_graph_email",
+                        side_effect=requests.HTTPError(response=response)) as send:
+            result = ocs.send_order_confirmation_test()
+        self.assertFalse(result["accepted"])
+        self.assertEqual(result["http_status"], 403)
+        self.assertEqual(result["error"]["code"], "ErrorAccessDenied")
+        self.assertEqual(send.call_count, 1)
+
+    def test_timeout_is_unknown_and_not_retried(self):
+        import requests
+
+        with mock.patch.object(ocs, "get_order_confirmation_config", return_value=self.CONFIG), \
+             mock.patch("services.email_service.send_graph_email",
+                        side_effect=requests.Timeout("timeout")) as send:
+            result = ocs.send_order_confirmation_test()
+        self.assertFalse(result["accepted"])
+        self.assertEqual(result["status"], "unknown")
+        self.assertIsNone(result["http_status"])
+        self.assertEqual(send.call_count, 1)
 
 
 if __name__ == "__main__":

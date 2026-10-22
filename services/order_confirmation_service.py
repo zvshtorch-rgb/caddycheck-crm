@@ -6,7 +6,7 @@ already-guarded invoice-ledger write (`services.supabase_service.replace_invoice
 (`services.pdf_service.generate_invoice_pdf_from_rows`), never a separate invoice-generation path.
 
 This module currently implements the DRY-RUN preview only (`build_dry_run_preview`): it performs every
-step up to and including PDF bytes generation and a read-only Microsoft Graph mailbox-reachability check,
+step up to and including PDF bytes generation without a directory-read prerequisite,
 but never writes to the invoice ledger, never updates the purchase order, and never sends an email. It is
 the first of two rollout steps (see the Order Approvals page); the live orchestrator that actually
 creates the invoice/PDF/email and marks the order approved is a deliberately separate, later change.
@@ -17,6 +17,9 @@ st.secrets["order_confirmation"] (see config.settings.get_order_confirmation_con
 Customer/Network uses the canonical project-network mapping or a non-email customer name. Pending-order
 camera quantities can be recovered read-only from the stored source PDF text. The displayed invoice
 number is only a proposed candidate from a SELECT: it is never reserved or consumed by a preview.
+
+The separate explicit internal send test sends only a TEST ONLY non-invoice PDF to the dedicated
+[order_confirmation].test_recipient. It never calls approval, invoice, registry, or audit persistence.
 """
 from __future__ import annotations
 
@@ -335,7 +338,7 @@ def check_graph_mailbox_reachable(mailbox: str) -> Dict[str, Any]:
     diagnostics: Dict[str, Any] = {
         "endpoint": f"https://graph.microsoft.com/v1.0/users/{mailbox}",
         "method": "GET", "permission_model": "application (client_credentials, scope .default)",
-        "required_lookup_permission": "User.Read.All (or a higher directory-read application permission)",
+        "directory_lookup": "Optional diagnostic only. Do not broaden permissions for sending.",
         "send_authorization": "Not tested. This directory GET does not test Mail.Send or Exchange scope.",
     }
     if not mailbox:
@@ -378,10 +381,12 @@ def check_graph_mailbox_reachable(mailbox: str) -> Dict[str, Any]:
             return {"ok": True, "message": f"Directory user '{mailbox}' found. Mailbox/send authorization is not verified.",
                     "diagnostics": diagnostics}
         diagnostics["error"] = _graph_error_details(resp, client_secret, access_token)
-        return {"ok": False, "message": f"Graph directory lookup failed for '{mailbox}' (HTTP {resp.status_code}); "
-                "this does not determine whether mail sending is permitted.", "diagnostics": diagnostics}
+        status = "not_authorized" if resp.status_code == 403 else "not_checked"
+        return {"ok": False, "status": status,
+                "message": f"Directory lookup: {status.replace('_', ' ')} (HTTP {resp.status_code}); "
+                "optional and not a prerequisite for sending.", "diagnostics": diagnostics}
     except Exception as exc:
-        return {"ok": False, "message": f"Could not verify mailbox reachability: {exc}"}
+        return {"ok": False, "status": "not_checked", "message": f"Directory lookup: not checked: {exc}"}
 
 
 def _next_invoice_number_preview() -> int:
@@ -395,7 +400,7 @@ def _next_invoice_number_preview() -> int:
 def build_dry_run_preview(purchase_order_id: str) -> Dict[str, Any]:
     """Everything the "Preview order confirmation (dry run)" button needs to display: validation
     errors/warnings, resolved sender/To/CC, the exact subject/body that would be sent, a preview invoice
-    number + amount, the generated PDF bytes, and a Graph mailbox-reachability check.
+    number + amount, and the generated PDF bytes. Directory lookup is optional and not performed.
 
     Writes NOTHING: no invoice row, no purchase-order update, no email, no audit log row. Safe to call
     repeatedly, including for an already-approved order."""
@@ -434,7 +439,11 @@ def build_dry_run_preview(purchase_order_id: str) -> Dict[str, Any]:
     rows = build_year1_invoice_rows(order, invoice_number_preview)
     pdf_bytes = generate_year1_invoice_pdf_bytes(invoice_number_preview, rows)
     pdf_validation = validate_invoice_pdf_bytes(pdf_bytes)
-    mailbox_check = check_graph_mailbox_reachable(cfg.get("sender", ""))
+    mailbox_check = {
+        "status": "not_checked",
+        "message": "Directory lookup: not checked (optional; directory-read permission is not requested). "
+                   "This is not a prerequisite for sending. Send authorization is verified separately.",
+    }
 
     result.update({
         "project_name": project_name, "country": country, "customer_display": customer_display,
@@ -443,4 +452,79 @@ def build_dry_run_preview(purchase_order_id: str) -> Dict[str, Any]:
         "pdf_bytes": pdf_bytes, "pdf_validation": pdf_validation, "mailbox_check": mailbox_check,
         "config_diagnostics": cfg.get("config_diagnostics", {}),
     })
+    return result
+
+
+TEST_CONFIRMATION_SENDER = "orders.chaddycheck@video-inform.com"
+TEST_CONFIRMATION_SUBJECT = "TEST ONLY \u2013 CaddyCheck Order Confirmation Email"
+
+
+def get_confirmation_send_test_config() -> Dict[str, Any]:
+    """Dedicated internal test destination; normal distribution lists are never a fallback."""
+    cfg = get_order_confirmation_config()
+    sender = _safe_str(cfg.get("sender"))
+    recipient = _safe_str(cfg.get("test_recipient"))
+    errors = []
+    if sender.lower() != TEST_CONFIRMATION_SENDER:
+        errors.append(f"Send test requires configured sender {TEST_CONFIRMATION_SENDER}.")
+    if not re.fullmatch(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@video-inform\.com", recipient, re.IGNORECASE):
+        errors.append("Configure one internal [order_confirmation].test_recipient address; no To/CC fallback is allowed.")
+    if recipient.lower() in {_safe_str(address).lower() for address in cfg.get("to", [])}:
+        errors.append("The test recipient must not be a normal order-confirmation To recipient.")
+    return {"ok": not errors, "errors": errors, "sender": sender, "recipient": recipient,
+            "subject": TEST_CONFIRMATION_SUBJECT}
+
+
+def send_order_confirmation_test() -> Dict[str, Any]:
+    """Explicit, single internal send using the shared Graph transport. No CRM access or retries."""
+    import requests
+    from reportlab.pdfgen import canvas
+    from services.email_service import send_graph_email
+
+    cfg = get_confirmation_send_test_config()
+    if not cfg["ok"]:
+        raise ValueError(" ".join(cfg["errors"]))
+    output = io.BytesIO()
+    pdf = canvas.Canvas(output)
+    pdf.drawString(72, 780, "TEST ONLY - CaddyCheck Order Confirmation Email")
+    pdf.drawString(72, 750, "Transport test document. NOT AN INVOICE. No order approved.")
+    pdf.save()
+    attachment = output.getvalue()
+    validation = validate_invoice_pdf_bytes(attachment)
+    result: Dict[str, Any] = {
+        "endpoint": f"https://graph.microsoft.com/v1.0/users/{cfg['sender']}/sendMail",
+        "method": "POST", "sender": cfg["sender"], "recipient": cfg["recipient"], "cc": [],
+        "subject": cfg["subject"], "attachment_bytes": len(attachment),
+        "attachment_pages": validation["page_count"], "http_status": None, "accepted": False,
+    }
+    try:
+        response = send_graph_email(
+            subject=cfg["subject"],
+            body="TEST ONLY. Internal CaddyCheck Graph transport test. The attachment is not an invoice. "
+                 "No purchase order has been approved and no invoice has been created.",
+            recipients=[cfg["recipient"]], cc=[], sender_mailbox=cfg["sender"],
+            attachment_bytes=attachment, attachment_filename="caddycheck_TEST_ONLY.pdf",
+            attachment_content_type="application/pdf",
+        )
+    except requests.HTTPError as exc:
+        http_response = exc.response
+        if http_response is None:
+            result.update({"status": "unknown", "error": {
+                "code": "HttpErrorWithoutResponse",
+                "message": "HTTP failure without response metadata. Do not retry automatically.",
+            }})
+        else:
+            result.update({
+                "status": "failed", "http_status": http_response.status_code,
+                "failed_endpoint": http_response.url,
+                "error": _graph_error_details(http_response),
+            })
+    except requests.RequestException:
+        result.update({"status": "unknown", "error": {
+            "code": "TransportOutcomeUnknown",
+            "message": "Transport failed without a confirmed sendMail outcome. Check Sent Items before any retry.",
+        }})
+    else:
+        result.update(response)
+        result["status"] = "accepted" if response["accepted"] else "unexpected_response"
     return result

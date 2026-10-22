@@ -538,6 +538,8 @@ class TestLoggingAndSummary(IntakeTestCase):
 
     def test_graph_send_logs_neither_subject_nor_recipients(self):
         class Ok:
+            status_code = 202
+
             def raise_for_status(self):
                 return None
 

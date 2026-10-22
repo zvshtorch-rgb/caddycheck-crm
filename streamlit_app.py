@@ -8433,6 +8433,47 @@ elif page == "✅ Order Approvals":
 
     from services import order_approval_service as _oas
 
+    if CAN_EDIT:
+        from services import order_confirmation_service as _ocs_test
+
+        with st.expander("Explicit internal Graph send test (separate from approval)"):
+            _test_cfg = _ocs_test.get_confirmation_send_test_config()
+            st.caption("This sends one TEST ONLY email with a non-invoice test PDF. "
+                       "No order, invoice, registry, or approval/audit record is written. "
+                       "There are no automatic retries.")
+            for _test_error in _test_cfg["errors"]:
+                st.warning(_test_error)
+            st.write(f"Sender: {_test_cfg['sender']}")
+            st.write(f"Only recipient: {_test_cfg['recipient']} | CC: none")
+            st.write(f"Subject: {_test_cfg['subject']}")
+            _test_confirmed = st.checkbox(
+                "I authorize one internal TEST ONLY email to the configured test recipient.",
+                key="confirm_internal_graph_test",
+            )
+            _test_attempted = "_internal_graph_send_test_result" in st.session_state
+            if st.button(
+                "Send one internal TEST ONLY email", key="send_internal_graph_test",
+                disabled=not _test_cfg["ok"] or not _test_confirmed or _test_attempted,
+            ):
+                # Claim this session's one attempt before the external side effect, including timeouts.
+                st.session_state["_internal_graph_send_test_result"] = {
+                    "status": "unknown", "message": "Attempt started; do not retry without checking Sent Items.",
+                }
+                try:
+                    st.session_state["_internal_graph_send_test_result"] = _ocs_test.send_order_confirmation_test()
+                except Exception as _test_exc:
+                    st.session_state["_internal_graph_send_test_result"] = {
+                        "status": "failed_or_unknown", "message": str(_test_exc),
+                    }
+                st.rerun()
+            if "_internal_graph_send_test_result" in st.session_state:
+                _test_result = st.session_state["_internal_graph_send_test_result"]
+                if _test_result.get("accepted"):
+                    st.success("Graph sendMail accepted the TEST ONLY request (not a delivery confirmation).")
+                else:
+                    st.error("TEST ONLY request was not confirmed accepted. No automatic retry will occur.")
+                st.json(_test_result)
+
     try:
         _orders = _oas.list_purchase_orders(limit=300)
     except Exception as _exc:
@@ -8567,6 +8608,8 @@ elif page == "✅ Order Approvals":
                                 _mailbox_check = _confirm_preview.get("mailbox_check") or {}
                                 if _mailbox_check.get("ok"):
                                     st.success(f"✅ {_mailbox_check.get('message')}")
+                                elif _mailbox_check.get("status") in ("not_checked", "not_authorized"):
+                                    st.info(_mailbox_check.get("message"))
                                 else:
                                     st.warning(f"⚠️ {_mailbox_check.get('message')}")
                                 if _mailbox_check.get("diagnostics"):
