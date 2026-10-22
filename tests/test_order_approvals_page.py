@@ -197,7 +197,7 @@ class TestOrderConfirmationDryRunButton(unittest.TestCase):
     PREVIEW_ORDER = dict(ORDER, id="po-3")
     OK_PREVIEW = {
         "ok": True, "errors": [], "warnings": ["Country is unknown for this project -- it will be omitted."],
-        "sender": "orders.chaddycheck@video-inform.com", "to": ["tom@example.com", "karen@example.com"],
+        "sender": "orders.caddycheck@video-inform.com", "to": ["tom@example.com", "karen@example.com"],
         "cc": ["yoram@example.com"], "project_name": "Test Project", "amount": 2334.0,
         "invoice_number_preview": 8719, "cameras": 12,
         "subject": "Order Confirmation \u2013 CaddyCheck \u2013 Test Project \u2013 Invoice 8719",
@@ -274,7 +274,7 @@ class TestOrderConfirmationDryRunButton(unittest.TestCase):
         [b for b in app.button if b.key == "preview_confirm_po-3"][0].click().run()
         self.assertFalse(app.exception, [e.value for e in app.exception])
         markdowns = "\n".join(m.value for m in app.markdown)
-        self.assertIn("orders.chaddycheck@video-inform.com", markdowns)
+        self.assertIn("orders.caddycheck@video-inform.com", markdowns)
         self.assertIn("tom@example.com", markdowns)
         self.assertIn("yoram@example.com", markdowns)
         self.assertIn("**Proposed invoice number:** 8719", markdowns)

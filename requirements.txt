@@ -31,6 +31,7 @@ qrcode[pil]>=7.4.2
 # and in-memory PDF parser validation; no permission, recipient, approval, or send changes.
 # touch: Explicit internal-only Graph TEST ONLY action, isolated from approval; directory lookup
 # is no longer performed by dry-run preview. Reload service modules for the approved transport test.
+# touch: Correct explicit test sender to orders.caddycheck@video-inform.com; reload sender guard.
 # touch: historical Ask Data drill-down frame_builder fix (executor.py/helpers.py) -- "Show
 # invoices" after a historical answer rendered no table; forcing another full rebuild for the
 # same known stale-module reason.

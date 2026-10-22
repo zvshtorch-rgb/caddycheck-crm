@@ -455,7 +455,7 @@ def build_dry_run_preview(purchase_order_id: str) -> Dict[str, Any]:
     return result
 
 
-TEST_CONFIRMATION_SENDER = "orders.chaddycheck@video-inform.com"
+TEST_CONFIRMATION_SENDER = "orders.caddycheck@video-inform.com"
 TEST_CONFIRMATION_SUBJECT = "TEST ONLY \u2013 CaddyCheck Order Confirmation Email"
 
 

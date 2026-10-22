@@ -152,7 +152,7 @@ class TestRenderConfirmationEmail(unittest.TestCase):
         subject, _ = ocs.render_confirmation_email(
             project_name="Edeka Steinebach Hohn", customer_display="iRetailCheck", country="Germany",
             po_reference="PO-301737ff", cameras=3, amount=2334.0, invoice_number=8719,
-            sender="orders.chaddycheck@video-inform.com",
+            sender="orders.caddycheck@video-inform.com",
         )
         self.assertEqual(subject, "Order Confirmation \u2013 CaddyCheck \u2013 Edeka Steinebach Hohn \u2013 Invoice 8719")
 
@@ -160,7 +160,7 @@ class TestRenderConfirmationEmail(unittest.TestCase):
         _, body = ocs.render_confirmation_email(
             project_name="Edeka Steinebach Hohn", customer_display="iRetailCheck", country="Germany",
             po_reference="PO-301737ff", cameras=3, amount=2334.0, invoice_number=8719,
-            sender="orders.chaddycheck@video-inform.com",
+            sender="orders.caddycheck@video-inform.com",
         )
         self.assertIn("Dear Tom and Karen,", body)
         self.assertIn("- Project/Site: Edeka Steinebach Hohn", body)
@@ -170,12 +170,12 @@ class TestRenderConfirmationEmail(unittest.TestCase):
         self.assertIn("- Number of cameras: 3", body)
         self.assertIn("- Year-1 amount: \u20ac2,334.00", body)
         self.assertIn("- Proposed invoice number: 8719", body)
-        self.assertIn("orders.chaddycheck@video-inform.com", body)
+        self.assertIn("orders.caddycheck@video-inform.com", body)
 
     def test_unavailable_fields_are_omitted_not_shown_blank(self):
         _, body = ocs.render_confirmation_email(
             project_name="Edeka Steinebach Hohn", customer_display="", country="", po_reference="",
-            cameras=0, amount=2334.0, invoice_number=8719, sender="orders.chaddycheck@video-inform.com",
+            cameras=0, amount=2334.0, invoice_number=8719, sender="orders.caddycheck@video-inform.com",
         )
         self.assertNotIn("Customer/Network", body)
         self.assertNotIn("Country:", body)
@@ -236,7 +236,7 @@ class TestCheckGraphMailboxReachable(unittest.TestCase):
 
     def test_missing_graph_credentials_is_reported_not_raised(self):
         with mock.patch.dict(os.environ, {}, clear=True):
-            result = ocs.check_graph_mailbox_reachable("orders.chaddycheck@video-inform.com")
+            result = ocs.check_graph_mailbox_reachable("orders.caddycheck@video-inform.com")
         self.assertFalse(result["ok"])
         self.assertIn("not configured", result["message"])
 
@@ -246,7 +246,7 @@ class TestCheckGraphMailboxReachable(unittest.TestCase):
         with mock.patch.dict(os.environ, env), \
              mock.patch("requests.post", return_value=self._Ok()), \
              mock.patch("requests.get", return_value=self._Resp(200)):
-            result = ocs.check_graph_mailbox_reachable("orders.chaddycheck@video-inform.com")
+            result = ocs.check_graph_mailbox_reachable("orders.caddycheck@video-inform.com")
         self.assertTrue(result["ok"], result["message"])
 
     def test_mailbox_not_found_returns_not_ok(self):
@@ -263,7 +263,7 @@ class TestCheckGraphMailboxReachable(unittest.TestCase):
                "ORDER_INTAKE_GRAPH_CLIENT_SECRET": self.SECRET}
         with mock.patch.dict(os.environ, env), \
              mock.patch("requests.post", side_effect=RuntimeError("network down")):
-            result = ocs.check_graph_mailbox_reachable("orders.chaddycheck@video-inform.com")
+            result = ocs.check_graph_mailbox_reachable("orders.caddycheck@video-inform.com")
         self.assertFalse(result["ok"])
         self.assertIn("network down", result["message"])
 
@@ -279,7 +279,7 @@ class TestCheckGraphMailboxReachable(unittest.TestCase):
              mock.patch("requests.post", return_value=token_response) as post, \
              mock.patch("requests.get", return_value=self._Resp(403)) as get, \
              mock.patch("services.email_service.send_graph_email") as send:
-            result = ocs.check_graph_mailbox_reachable("orders.chaddycheck@video-inform.com")
+            result = ocs.check_graph_mailbox_reachable("orders.caddycheck@video-inform.com")
         diagnostics = result["diagnostics"]
         self.assertEqual(diagnostics["http_status"], 403)
         self.assertEqual(result["status"], "not_authorized")
@@ -296,7 +296,7 @@ class TestCheckGraphMailboxReachable(unittest.TestCase):
         self.assertEqual(post.call_count, 1)
         self.assertIn("/oauth2/v2.0/token", post.call_args.args[0])
         self.assertEqual(get.call_args.args[0],
-                         "https://graph.microsoft.com/v1.0/users/orders.chaddycheck@video-inform.com")
+                         "https://graph.microsoft.com/v1.0/users/orders.caddycheck@video-inform.com")
         send.assert_not_called()
 
     def test_safe_error_redacts_tokens_and_secrets(self):
@@ -372,7 +372,7 @@ class TestBuildDryRunPreview(unittest.TestCase):
         return [
             mock.patch("services.order_confirmation_service.get_purchase_order", return_value=order or ORDER),
             mock.patch("services.order_confirmation_service.get_order_confirmation_config", return_value=cfg or {
-                "sender": "orders.chaddycheck@video-inform.com",
+                "sender": "orders.caddycheck@video-inform.com",
                 "to": ["tom@example.com", "karen@example.com"], "cc": ["yoram@example.com"],
             }),
             mock.patch.object(ocs, "resolve_project_country", return_value="Germany"),
@@ -514,7 +514,7 @@ class TestResolveCustomerNetwork(unittest.TestCase):
 
 class TestExplicitGraphSendTest(unittest.TestCase):
     CONFIG = {
-        "sender": "orders.chaddycheck@video-inform.com",
+        "sender": "orders.caddycheck@video-inform.com",
         "test_recipient": "zvika-test@video-inform.com",
         "to": ["tom@example.com", "karen@example.com"],
         "cc": ["yoram@video-inform.com", "zvika-test@video-inform.com"],
@@ -542,7 +542,7 @@ class TestExplicitGraphSendTest(unittest.TestCase):
         send_call = post.call_args
         self.assertEqual(send_call.args[0], result["endpoint"])
         self.assertEqual(send_call.args[0],
-                         "https://graph.microsoft.com/v1.0/users/orders.chaddycheck@video-inform.com/sendMail")
+                         "https://graph.microsoft.com/v1.0/users/orders.caddycheck@video-inform.com/sendMail")
         message = send_call.kwargs["json"]["message"]
         self.assertEqual(message["subject"], "TEST ONLY \u2013 CaddyCheck Order Confirmation Email")
         self.assertEqual(message["toRecipients"],
@@ -579,7 +579,7 @@ class TestExplicitGraphSendTest(unittest.TestCase):
         import requests
 
         response = mock.Mock(status_code=403)
-        response.url = "https://graph.microsoft.com/v1.0/users/orders.chaddycheck@video-inform.com/sendMail"
+        response.url = "https://graph.microsoft.com/v1.0/users/orders.caddycheck@video-inform.com/sendMail"
         response.json.return_value = {"error": {"code": "ErrorAccessDenied", "message": "Access is denied."}}
         with mock.patch.object(ocs, "get_order_confirmation_config", return_value=self.CONFIG), \
              mock.patch("services.email_service.send_graph_email",
