@@ -1396,9 +1396,7 @@ def _attach_sent_invoice_storage(entry: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def load_sent_invoices() -> List[dict]:
-    client = _get_client()
-    resp = client.table("sent_invoices").select("*").order("sent_at", desc=True).execute()
-    rows = resp.data or []
+    rows = sorted(_select_all_rows("sent_invoices"), key=lambda row: str(row.get("sent_at") or ""), reverse=True)
     for row in rows:
         row["recipients"] = _normalize_str_list(row.get("recipients"))
         row["cc"] = _normalize_str_list(row.get("cc"))
@@ -1445,17 +1443,78 @@ def save_sent_invoices(entries: List[Dict[str, Any]]) -> None:
 # ── Bank payments ────────────────────────────────────────────────────────────
 
 def load_bank_payments() -> List[dict]:
-    client = _get_client()
-    resp = client.table(BANK_PAYMENTS_TABLE).select("*").order("payment_date", desc=True).execute()
-    return resp.data or []
+    return sorted(
+        _select_all_rows(BANK_PAYMENTS_TABLE),
+        key=lambda row: str(row.get("payment_date") or ""), reverse=True,
+    )
 
 
 def load_bank_payment_allocations(payment_id: Optional[int] = None) -> List[dict]:
     client = _get_client()
-    query = client.table(BANK_PAYMENT_ALLOCATIONS_TABLE).select("*").order("id", desc=False)
-    if payment_id is not None:
-        query = query.eq("payment_id", int(payment_id))
-    return query.execute().data or []
+    rows: list[dict] = []
+    while True:
+        query = client.table(BANK_PAYMENT_ALLOCATIONS_TABLE).select("*").order("id", desc=False)
+        if payment_id is not None:
+            query = query.eq("payment_id", int(payment_id))
+        batch = query.range(len(rows), len(rows) + SUPABASE_PAGE_SIZE - 1).execute().data or []
+        rows.extend(batch)
+        if len(batch) < SUPABASE_PAGE_SIZE:
+            return rows
+
+
+def load_saved_payment_document_records(payment_id: int) -> tuple[dict, list[dict], list[dict], list[dict]]:
+    """SELECT-only archive inputs, keyed by payment PK; never run log self-healing."""
+    client = _get_client()
+    payments = client.table(BANK_PAYMENTS_TABLE).select("*").eq("id", payment_id).execute().data or []
+    if len(payments) != 1:
+        raise ValueError("Saved payment no longer exists or is not accessible.")
+    payment = payments[0]
+    allocations = load_bank_payment_allocations(payment_id)
+
+    from services.bank_payment_documents import saved_payment_invoice_numbers
+
+    # Resolve row IDs first, including legacy allocations lacking invoice numbers.
+    invoice_rows: dict[int, dict] = {}
+    for allocation in allocations:
+        row_id = allocation.get("invoice_row_id")
+        if row_id in (None, ""):
+            continue
+        rows = client.table("invoices").select("*").eq("id", int(row_id)).execute().data or []
+        for row in rows:
+            invoice_rows[int(row["id"])] = row
+    numbers = saved_payment_invoice_numbers(
+        {} if allocations else payment, [*allocations, *invoice_rows.values()]
+    )
+    sent_rows: list[dict] = []
+    for number in numbers:
+        for table, column in (("invoices", "id"), ("sent_invoices", "id")):
+            offset = 0
+            while True:
+                batch = (
+                    client.table(table).select("*").eq("invoice_number", str(number))
+                    .order(column).range(offset, offset + SUPABASE_PAGE_SIZE - 1)
+                    .execute().data or []
+                )
+                if table == "invoices":
+                    for row in batch:
+                        invoice_rows[int(row["id"])] = row
+                else:
+                    sent_rows.extend(batch)
+                if len(batch) < SUPABASE_PAGE_SIZE:
+                    break
+                offset += SUPABASE_PAGE_SIZE
+    if numbers:
+        # Confirmation PDFs are invoice bytes, unlike the purchase-order source PDF.
+        # Read whole rows so installations predating confirmation columns remain readable.
+        for order in _select_all_rows("purchase_orders"):
+            if str(order.get("confirmation_invoice_number")) not in {str(n) for n in numbers}:
+                continue
+            sent_rows.append({
+                "id": order["id"], "invoice_number": order["confirmation_invoice_number"],
+                "source_table": "purchase_orders",
+                "archived_pdf_base64": order.get("confirmation_pdf_base64"),
+            })
+    return payment, allocations, list(invoice_rows.values()), sent_rows
 
 
 # ── Ask Data Phase 5: invoice history snapshots (read-only from Ask Data; written only by the ──────────

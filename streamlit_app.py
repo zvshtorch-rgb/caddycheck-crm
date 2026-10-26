@@ -332,6 +332,7 @@ from services.invoice_service import (
     get_invoice_preview_data,
 )
 from models.invoice import group_monthly_invoices
+from services.bank_payment_documents import build_invoice_zip, build_saved_payment_originals_zip
 from services.bank_payment_save import (
     apply_partial_payment_plans,
     available_credit_total,
@@ -2821,23 +2822,78 @@ def _build_confirmed_invoices_zip(invoice_numbers: list[int]) -> tuple[bytes, li
     """Build a ZIP of one PDF per invoice number. Returns (zip_bytes, invoice_numbers_included)."""
     from services.pdf_service import generate_invoice_pdf_from_rows
 
-    buf = io.BytesIO()
-    included: list[int] = []
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for inv_no in sorted({n for n in invoice_numbers if n}):
-            invoice_rows_for_pdf = [inv for inv in invoices if _safe_int(inv.invoice_number) == int(inv_no)]
-            if not invoice_rows_for_pdf:
-                continue
-            try:
-                pdf_bytes = generate_invoice_pdf_from_rows(
-                    invoice_rows=invoice_rows_for_pdf,
-                    invoice_number=int(inv_no),
+    result = build_invoice_zip(
+        invoice_numbers, invoices, render_pdf=generate_invoice_pdf_from_rows
+    )
+    for error in result.errors:
+        st.warning(error)
+    return result.data, result.included
+
+
+def _render_saved_payment_invoice_zip(payment: dict, allocations: list[dict]) -> None:
+    from services.supabase_service import (
+        download_sent_invoice_pdf,
+        load_saved_payment_document_records,
+    )
+
+    if payment.get("id") is None:
+        st.warning("A saved database payment ID is required to download linked originals.")
+        return
+
+    st.caption(
+        "Retrieve original invoice PDFs using this saved payment ID and its existing allocations. "
+        "No upload, parsing, matching, confirmation or reconciliation is performed. "
+        "Missing originals are reported; no PDFs are regenerated."
+    )
+    identity = (
+        payment["id"], payment.get("updated_at"),
+        tuple((a.get("id"), a.get("invoice_row_id"), a.get("invoice_number")) for a in allocations),
+    )
+    state_key = "_saved_payment_originals_zip"
+    if st.button("Find original linked invoice PDFs", key="prepare_saved_payment_invoice_zip"):
+        st.session_state.pop(state_key, None)
+        try:
+            with st.spinner("Retrieving archived invoice PDFs..."):
+                saved, saved_allocations, rows, sent = load_saved_payment_document_records(int(payment["id"]))
+                result = build_saved_payment_originals_zip(
+                    saved, saved_allocations, rows, sent,
+                    download_pdf=download_sent_invoice_pdf,
                 )
-            except Exception:
-                continue
-            zf.writestr(f"CC_inv_{inv_no}.pdf", pdf_bytes)
-            included.append(inv_no)
-    return buf.getvalue(), included
+            st.session_state[state_key] = {"identity": identity, "result": result}
+        except Exception as exc:
+            st.error(f"Could not retrieve linked invoice originals: {exc}")
+
+    prepared = st.session_state.get(state_key)
+    if prepared and prepared["identity"] == identity:
+        result = prepared["result"]
+        st.write({
+            "Linked invoices": len(result.linked),
+            "Original PDFs found": result.original_pdf_count,
+            "Invoices with originals": len(result.originals),
+            "Originals missing": len(result.missing),
+            "Regenerated fallbacks": 0,
+            "Unresolved allocations": result.unresolved,
+            "Errors": len(result.errors),
+        })
+        for error in result.errors:
+            st.error(error)
+        if result.missing or result.unresolved:
+            st.warning(
+                "ZIP is incomplete. Missing original PDFs: "
+                + (", ".join(f"#{number}" for number in result.missing) or "unresolved invoice links")
+            )
+        if result.data:
+            st.download_button(
+                "Download linked invoices (ZIP)",
+                data=result.data,
+                file_name=f"payment_{payment['id']}_original_invoices.zip",
+                mime="application/zip",
+                key="download_saved_payment_invoices_zip",
+            )
+        elif not result.linked and not result.unresolved:
+            st.info("No invoices are linked to this saved payment.")
+        else:
+            st.warning("No original invoice PDFs are available to download.")
 
 
 def _auto_provision_order_and_project(purchase_order_id: str, *, saved_invoice_row: Optional[dict] = None) -> list[str]:
@@ -9274,7 +9330,7 @@ elif page == "🏦 Bank Payment":
     except ImportError:  # pragma: no cover - only hit mid-redeploy before a full reboot
         attach_bank_payment_pdf_supabase = None
         remove_bank_payment_pdf_supabase = None
-    from config.settings import append_bank_payment_log, load_bank_payments_log
+    from config.settings import append_bank_payment_log
 
     st.title("🏦 Bank Payment Import")
 
@@ -10080,7 +10136,12 @@ elif page == "🏦 Bank Payment":
 
     st.markdown("---")
     st.subheader("Saved Bank Payments")
-    bank_payment_rows = load_bank_payments_log()
+    from services.supabase_service import load_bank_payments, load_sent_invoices
+    try:
+        bank_payment_rows = load_bank_payments()
+    except Exception as exc:
+        st.error(f"Could not load saved bank payments: {exc}")
+        st.stop()
     if bank_payment_rows:
         bank_pdf_links: dict[str, str | None] = {}
         for row in bank_payment_rows:
@@ -10093,7 +10154,11 @@ elif page == "🏦 Bank Payment":
             bank_pdf_links[fp_key] = link
 
         # Build invoice# -> sent monthly invoice PDF signed URL map
-        sent_invoice_rows = load_sent_invoices_log() or []
+        try:
+            sent_invoice_rows = load_sent_invoices()
+        except Exception as exc:
+            st.error(f"Could not load archived invoice references: {exc}")
+            sent_invoice_rows = []
         invoice_pdf_links: dict[int, str] = {}
         for sent_row in sent_invoice_rows:
             inv_num = _safe_int(sent_row.get("invoice_number"), default=0)
@@ -10116,7 +10181,8 @@ elif page == "🏦 Bank Payment":
         payment_invoice_map: dict[int, int] = {}
         try:
             all_allocations = load_bank_payment_allocations()
-        except Exception:
+        except Exception as exc:
+            st.error(f"Could not load saved allocation summaries: {exc}")
             all_allocations = []
         for alloc in all_allocations or []:
             pid = alloc.get("payment_id")
@@ -10245,17 +10311,20 @@ elif page == "🏦 Bank Payment":
                             st.error(attach_outcome.error or "The PDF could not be attached.")
 
         payment_labels = [
-            f"#{_safe_int(row.get('invoice_number'), default=0)} | {_safe_str(row.get('payment_date'))} | {_safe_str(row.get('source_name'))}"
-            for row in bank_payment_rows
+            f"#{_safe_str(row.get('invoice_number'))} | {_safe_str(row.get('payment_date'))} | "
+            f"{_safe_str(row.get('source_name'))} (payment {row.get('id') if row.get('id') is not None else index})"
+            for index, row in enumerate(bank_payment_rows)
         ]
         selected_payment_label = st.selectbox("Payment details", payment_labels, key="saved_bank_payment")
         selected_payment_row = bank_payment_rows[payment_labels.index(selected_payment_label)]
         payment_id = selected_payment_row.get("id")
         allocations = []
         if payment_id is not None:
-            allocations = load_bank_payment_allocations(int(payment_id))
-        if not allocations:
-            allocations = selected_payment_row.get("allocations", []) or []
+            try:
+                allocations = load_bank_payment_allocations(int(payment_id))
+            except Exception as exc:
+                st.error(f"Could not load this payment's existing allocations: {exc}")
+                st.stop()
         if allocations:
             alloc_df = pd.DataFrame([
                 {
@@ -10266,6 +10335,7 @@ elif page == "🏦 Bank Payment":
                 }
                 for a in allocations
             ])
-            st.dataframe(alloc_df, use_container_width=True, hide_index=True)
+            st.dataframe(alloc_df, width="stretch", hide_index=True)
+        _render_saved_payment_invoice_zip(selected_payment_row, allocations)
     else:
         st.info("No bank payments have been saved yet.")
