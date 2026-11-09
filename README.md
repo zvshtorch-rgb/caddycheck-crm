@@ -149,6 +149,33 @@ Legacy manual/scheduled actions remain separate and unchanged; preview
 eligibility is not an execution gate or a reservation and must be revalidated
 before any future write.
 
+### Admin read-only deployment diagnostics
+
+Admins can use **Caddy Chat → Deployment diagnostics (sanitized, read-only) →
+Read sanitized runtime diagnostics**. Opening the expander does not collect data;
+the explicit read button reports the current process's commit, UTC observation
+time, Graph availability, selected monthly UI transport, resolved sender, default
+TO/CC and financial/staging gate states. It never tests credentials or transport.
+`UNSET` is distinguished from explicit `OFF`; unsupported build/environment and
+invalid configuration are not reported as enabled capabilities.
+
+The database section inspects only allowlisted metadata for December 2026.
+REST-only results cannot establish absence in unexposed/non-public schemas.
+`PGRST205` is `UNAVAILABLE`, not proof of an absent table. Optional
+`DIAGNOSTICS_READONLY_DATABASE_URL`, when already provisioned by an operator,
+enables catalog inventory across schemas using the existing optional `psycopg`
+driver. No driver is installed or configuration changed by the diagnostic.
+Use a dedicated SELECT-only account with sufficient visibility; connections
+enforce read-only transactions and a five-second statement timeout. Missing
+driver/access, permission failures, RLS filtering, unknown table shapes, unlinked
+records and truncated results prevent a definitive no-claims conclusion.
+No DSN, credentials, PDF bytes, payloads, envelopes or raw exception messages are
+displayed. Policy flags are observations, not permission to execute.
+
+No migration, endpoint, scheduler action, invoice reservation, history
+synchronization or send is part of these diagnostics. Deploying them does not
+enable the December billing workflow.
+
 Use `monthly_auto_send.py` to generate and email the monthly invoice automatically on the 1st of the month.
 
 Default behavior:
