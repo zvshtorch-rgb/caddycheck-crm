@@ -49,6 +49,22 @@ def _docker_ready() -> bool:
         return False
 
 
+def install_production_like_rls(sql):
+    """Catalog-backed RLS/role flags and repository equivalent of the invoker audit."""
+    integrity = (Path(__file__).parent / "fixtures" / "invoice_audit.sql").read_text(encoding="utf-8")
+    sql(integrity)
+    sql("""
+        alter table public.invoices enable row level security;
+        alter table public.bank_payments enable row level security;
+        alter table public.bank_payment_allocations enable row level security;
+        alter table public.invoice_change_log enable row level security;
+        alter role service_role bypassrls;
+        grant select,insert,update,delete on public.invoices,public.bank_payments,
+            public.bank_payment_allocations,public.invoice_change_log to service_role;
+        grant usage,select on all sequences in schema public to service_role;
+    """)
+
+
 @unittest.skipUnless(_docker_ready(), "Docker is not available")
 class TestApplyCreditAtomicSql(unittest.TestCase):
     container = ""
@@ -74,6 +90,8 @@ class TestApplyCreditAtomicSql(unittest.TestCase):
             cls.tearDownClass()
             raise unittest.SkipTest("postgres container did not become ready")
         cls.sql(SCHEMA)
+        install_production_like_rls(cls.sql)
+        cls.sql((MIGRATION.parent / "protect_legacy_payment_allocations.sql").read_text(encoding="utf-8"))
         cls.sql(MIGRATION.read_text(encoding="utf-8"))
 
     @classmethod

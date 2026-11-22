@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PERIOD = "2026-12-01"
 LIMIT = 1000
 TABLES = {
+    "manual_allocation_release_policy": "singleton,enabled",
     "monthly_invoice_candidates": "id,billing_period_start,status",
     "monthly_candidate_executions": "id,candidate_id,state,invoice_number",
     "monthly_candidate_documents": "id,execution_id,created_at",
@@ -27,6 +28,7 @@ TABLES = {
     "policy": "domain",
 }
 GATES = {
+    "CADDYCHECK_MANUAL_ALLOCATION_ENABLED": "existing_payment_allocation.py",
     "CADDYCHECK_COVERAGE_WRITERS": "financial_writer_adapter.py",
     "CADDYCHECK_STAGING_FINANCIAL": "staging_controls.py",
     "CADDYCHECK_STAGING_MONTHLY": "staging_controls.py",
@@ -80,6 +82,10 @@ def runtime_snapshot() -> dict:
               (config.get("sender_email") or config.get("smtp_username")))
     gates = {}
     for name, module in GATES.items():
+        if name == "CADDYCHECK_MANUAL_ALLOCATION_ENABLED" and (ROOT / "services" / module).is_file():
+            from services.existing_payment_allocation import manual_allocation_gate_state
+            gates[name] = manual_allocation_gate_state()
+            continue
         if not (ROOT / "services" / module).is_file():
             state = "UNSUPPORTED_BY_BUILD"
         elif name not in os.environ:
@@ -101,6 +107,8 @@ def runtime_snapshot() -> dict:
         "cc": _recipients(config.get("default_cc", [])),
         "gates": gates,
         "gate_semantics": "Configured environment states, not proof of authorization. UNSET defaults OFF. "
+                          "Manual allocation INVALID fails closed OFF; ON also requires the independent database "
+                          "release policy and financial-writer compatibility. "
                           "Staging ON is only valid in local/staging, never Production.",
     }
 
@@ -127,7 +135,7 @@ def _metadata(row: dict, table: str) -> dict:
         value = row.get(key)
         if value is None:
             continue
-        if key in ("execution_enabled", "coverage_inventory_verified", "monthly_enabled", "send_enabled", "enabled"):
+        if key in ("singleton", "execution_enabled", "coverage_inventory_verified", "monthly_enabled", "send_enabled", "enabled"):
             result[key] = value if isinstance(value, bool) else "UNAVAILABLE"
         elif key in ("status", "state", "stage", "from_state", "to_state", "domain"):
             allowed = {"prepared", "approved", "invoice_committed", "send_pending", "sending", "sent",

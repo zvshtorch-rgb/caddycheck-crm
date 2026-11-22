@@ -5,6 +5,7 @@ import os
 import re
 from pathlib import Path
 from typing import List, Optional, Dict, Any
+from services import financial_writer_adapter as financial_writer
 
 logger = logging.getLogger(__name__)
 SENT_INVOICE_BUCKET = "sent-invoices"
@@ -1460,6 +1461,179 @@ def load_bank_payment_allocations(payment_id: Optional[int] = None) -> List[dict
         rows.extend(batch)
         if len(batch) < SUPABASE_PAGE_SIZE:
             return rows
+
+
+def require_manual_allocation_database_enabled(*, role: str) -> None:
+    """Read the independent release singleton without invoking a business RPC."""
+    from services.existing_payment_allocation import AllocationBlocked, require_admin
+    require_admin(role)
+    try:
+        rows = (
+            _get_client().table("manual_allocation_release_policy")
+            .select("singleton,enabled").limit(2).execute().data
+        )
+        if not isinstance(rows, list) or len(rows) != 1 \
+                or rows[0].get("singleton") is not True \
+                or not isinstance(rows[0].get("enabled"), bool):
+            raise AllocationBlocked("The database release policy is unavailable or invalid.")
+        if rows[0]["enabled"] is not True:
+            raise AllocationBlocked("Manual invoice allocation is disabled by the database release policy.")
+    except Exception:
+        logger.warning("Manual allocation database release check failed; actions remain disabled.")
+        raise
+
+
+def preview_existing_payment_allocation(payment_id: int, invoice_number: int,
+                                        invoice_row_id: Optional[int] = None, *, role: str) -> dict:
+    """SELECT-only preview; never save, parse, renew or send."""
+    from services.existing_payment_allocation import (
+        AllocationBlocked, choose_invoice, preview_allocation, require_admin, require_manual_allocation_enabled,
+    )
+    require_admin(role)
+    require_manual_allocation_enabled()
+    if financial_writer.enabled():
+        raise AllocationBlocked("This operation is disabled while financial-writer mode is active.")
+    require_manual_allocation_database_enabled(role=role)
+    from services.existing_payment_allocation import invoice_number as validate_invoice_number
+    invoice_number = validate_invoice_number(invoice_number)
+    client = _get_client()
+    payments = client.table(BANK_PAYMENTS_TABLE).select("*").eq("id", payment_id).execute().data or []
+    if len(payments) != 1:
+        raise AllocationBlocked("The selected saved payment no longer exists.")
+    rows = client.table("invoices").select("*").eq("invoice_number", str(invoice_number)).execute().data or []
+    invoice = choose_invoice(rows, invoice_row_id)
+    allocations = load_bank_payment_allocations(payment_id)
+    matches = (
+        client.table(BANK_PAYMENT_ALLOCATIONS_TABLE).select("*")
+        .or_(f"invoice_row_id.eq.{invoice['id']},invoice_number.eq.{invoice_number}").execute().data or []
+    )
+    return preview_allocation(payments[0], allocations, invoice, matches)
+
+
+def add_invoice_to_existing_payment(preview: dict, *, role: str, confirmed: bool) -> dict:
+    """One atomic, append-only RPC; no legacy fallback on any failure."""
+    from services.existing_payment_allocation import (
+        AllocationBlocked, money, preview_allocation, reconciliation, require_admin, require_manual_allocation_enabled,
+    )
+    require_admin(role)
+    if confirmed is not True:
+        raise AllocationBlocked("Explicit confirmation is required before any database write.")
+    require_manual_allocation_enabled()
+    if financial_writer.enabled():
+        raise AllocationBlocked("This operation is disabled while financial-writer mode is active.")
+    require_manual_allocation_database_enabled(role=role)
+    expected = preview["expected"]
+    validated = preview_allocation(expected["payment"], expected["allocations"], expected["invoice"], [])
+    if validated != preview:
+        raise AllocationBlocked("The preview is invalid. Refresh it before confirming.")
+    try:
+        result = _get_client().rpc("add_invoice_to_existing_payment", {
+            "p_payment_id": preview["payment_id"], "p_invoice_row_id": preview["invoice_row_id"],
+            "p_expected": expected,
+        }).execute().data
+        if not isinstance(result, dict) or result.get("status") not in ("added", "already_allocated"):
+            raise AllocationBlocked("Database outcome is unconfirmed. Re-read the payment before retrying.")
+        reconciliation(result["payment"], result["allocations"])
+        if (result["payment"]["id"] != preview["payment_id"]
+                or result["invoice"]["id"] != preview["invoice_row_id"]
+                or result["invoice"].get("paid") != "Yes"
+                or result["invoice"].get("payment_date") != preview["payment_date"]):
+            raise AllocationBlocked("Database readback differs from the confirmed operation. Re-read before retrying.")
+        for key, value in expected["payment"].items():
+            if key not in ("invoice_number", "applied_amount", "updated_at") and result["payment"].get(key) != value:
+                raise AllocationBlocked("Original payment metadata changed. Re-read the payment before retrying.")
+        for key, value in expected["invoice"].items():
+            if key not in ("paid", "payment_date") and result["invoice"].get(key) != value:
+                raise AllocationBlocked("Original invoice metadata changed. Re-read the payment before retrying.")
+        by_id = {row["id"]: row for row in result["allocations"]}
+        if any(by_id.get(row["id"]) != row for row in expected["allocations"]):
+            raise AllocationBlocked("Existing allocations changed. Re-read the payment before retrying.")
+        added = [row for row in result["allocations"] if row["id"] not in {
+            original["id"] for original in expected["allocations"]
+        }]
+        if (len(added) != 1 or added[0].get("invoice_row_id") != preview["invoice_row_id"]
+                or added[0].get("payment_id") != preview["payment_id"]
+                or str(added[0].get("invoice_number")) != str(preview["invoice_number"])
+                or money(added[0].get("amount_applied"), "Committed allocation") != money(preview["amount"], "Preview amount")):
+            raise AllocationBlocked("Allocation readback differs from the confirmed operation. Re-read before retrying.")
+        return result
+    except Exception:
+        logger.exception("Existing-payment allocation failed or is unconfirmed (payment=%s, invoice row=%s)",
+                         preview["payment_id"], preview["invoice_row_id"])
+        raise
+
+
+def preview_manual_allocation_reversal(allocation_id: int, *, role: str, actor: str) -> dict:
+    """SELECT-only correction snapshot. No automatic reversal or resend."""
+    from services.existing_payment_allocation import AllocationBlocked, require_admin
+    require_admin(role)
+    if not isinstance(actor, str) or not actor.strip():
+        raise AllocationBlocked("The authenticated admin actor is required for a correction preview.")
+    if financial_writer.enabled():
+        raise AllocationBlocked("Legacy corrections are disabled while financial-writer mode is active.")
+    if isinstance(allocation_id, bool) or not isinstance(allocation_id, int) or allocation_id <= 0:
+        raise AllocationBlocked("A positive manual allocation ID is required.")
+    client = _get_client()
+    rows = client.table(BANK_PAYMENT_ALLOCATIONS_TABLE).select("*").eq("id", allocation_id).execute().data or []
+    if len(rows) != 1 or not isinstance(rows[0].get("manual_invoice_before"), dict):
+        raise AllocationBlocked("The selected manual allocation is missing or was already reversed.")
+    allocation = rows[0]
+    payments = client.table(BANK_PAYMENTS_TABLE).select("*").eq("id", allocation["payment_id"]).execute().data or []
+    invoices = client.table("invoices").select("*").eq("id", allocation["invoice_row_id"]).execute().data or []
+    if len(payments) != 1 or len(invoices) != 1:
+        raise AllocationBlocked("Payment/invoice correction records are missing.")
+    return {
+        "allocation_id": allocation_id,
+        "expected": {"actor": actor.strip(), "payment": payments[0], "invoice": invoices[0],
+                     "allocations": load_bank_payment_allocations(allocation["payment_id"])},
+    }
+
+
+def reverse_manual_payment_allocation(preview: dict, *, role: str, confirmed: bool,
+                                      actor: str, reason: str) -> dict:
+    """Narrow audited correction RPC. Caller must supply a trusted authenticated admin actor."""
+    from services.existing_payment_allocation import AllocationBlocked, reconciliation, require_admin
+    require_admin(role)
+    if confirmed is not True or not isinstance(actor, str) or not actor.strip() \
+            or not isinstance(reason, str) or not reason.strip():
+        raise AllocationBlocked("Explicit confirmation, authenticated actor and correction reason are required.")
+    if financial_writer.enabled():
+        raise AllocationBlocked("Legacy corrections are disabled while financial-writer mode is active.")
+    allocation_id = preview.get("allocation_id")
+    expected = preview.get("expected")
+    if isinstance(allocation_id, bool) or not isinstance(allocation_id, int) or allocation_id <= 0 \
+            or not isinstance(expected, dict):
+        raise AllocationBlocked("A reviewed manual allocation correction is required.")
+    if expected.get("actor") != actor.strip():
+        raise AllocationBlocked("The authenticated actor differs from the reviewed correction. Prepare a new preview.")
+    allocations = expected.get("allocations", [])
+    selected = [a for a in allocations if a.get("id") == allocation_id]
+    if len(selected) != 1 or not isinstance(selected[0].get("manual_invoice_before"), dict):
+        raise AllocationBlocked("The preview does not contain the selected manual allocation.")
+    allocation = selected[0]
+    original = allocation["manual_invoice_before"]
+    try:
+        result = _get_client().rpc("reverse_manual_payment_allocation", {
+            "p_allocation_id": allocation_id, "p_expected": expected,
+            "p_actor": actor.strip(), "p_reason": reason.strip(), "p_confirmed": True,
+        }).execute().data
+        if not isinstance(result, dict) or result.get("status") != "reversed" \
+                or result.get("allocation_id") != allocation_id:
+            raise AllocationBlocked("Correction outcome is unconfirmed; reload before retrying.")
+        reconciliation(result["payment"], result["allocations"])
+        if result["allocations"] != [a for a in allocations if a["id"] != allocation_id]:
+            raise AllocationBlocked("Correction changed unrelated allocations; reload before retrying.")
+        for key, value in expected["payment"].items():
+            if key not in ("invoice_number", "applied_amount", "updated_at") and result["payment"].get(key) != value:
+                raise AllocationBlocked("Correction changed payment metadata; reload before retrying.")
+        for key, value in expected["invoice"].items():
+            target = original.get(key) if key in ("paid", "payment_date") else value
+            if result["invoice"].get(key) != target:
+                raise AllocationBlocked("Correction invoice readback differs; reload before retrying.")
+        return result
+    except Exception:
+        logger.exception("Manual allocation reversal failed or is unconfirmed (allocation=%s)", allocation_id)
+        raise
 
 
 def load_saved_payment_document_records(payment_id: int) -> tuple[dict, list[dict], list[dict], list[dict]]:

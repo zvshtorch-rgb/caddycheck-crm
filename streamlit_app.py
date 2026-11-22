@@ -2788,6 +2788,186 @@ def _build_confirmed_invoices_zip(invoice_numbers: list[int]) -> tuple[bytes, li
     return result.data, result.included
 
 
+def _render_existing_payment_allocation(payment: dict, allocations: list[dict], *, role: str) -> None:
+    from services import financial_writer_adapter
+    from services.existing_payment_allocation import (
+        AllocationBlocked, invoice_number, money, reconciliation, require_admin, require_manual_allocation_enabled,
+    )
+    from services.supabase_service import (
+        add_invoice_to_existing_payment, get_invoices_by_number, preview_existing_payment_allocation,
+    )
+
+    prefix = "_existing_allocation"
+
+    def reset_preview():
+        st.session_state.pop(f"{prefix}_preview", None)
+        st.session_state[f"{prefix}_confirmed"] = False
+
+    def reset_invoice():
+        reset_preview()
+        st.session_state.pop(f"{prefix}_rows", None)
+        st.session_state.pop(f"{prefix}_row", None)
+
+    try:
+        require_admin(role)
+    except AllocationBlocked as exc:
+        st.warning(str(exc))
+        return
+    if st.session_state.get(f"{prefix}_payment") != payment.get("id"):
+        reset_invoice()
+        st.session_state[f"{prefix}_payment"] = payment.get("id")
+    if f"{prefix}_result" in st.session_state:
+        result = st.session_state.pop(f"{prefix}_result")
+        if result["ok"]:
+            st.success(result["message"])
+        else:
+            st.error(result["message"])
+
+    details = {
+        "Payment ID": payment.get("id"), "Filename": payment.get("source_name"),
+        "Payment date": payment.get("payment_date"),
+    }
+    for label, field in (
+        ("Instructed amount", "instructed_amount"),
+        ("Credited amount", "received_amount"), ("Bank fee", "fee_amount"),
+    ):
+        value = payment.get(field)
+        if value is None:
+            details[label] = "Not recorded"
+        else:
+            try:
+                details[label] = f"EUR {money(value, label):,.2f}"
+            except AllocationBlocked as exc:
+                details[label] = "Invalid"
+                st.error(str(exc))
+    st.dataframe(pd.DataFrame([details]), hide_index=True)
+    st.caption(
+        "Reconciliation uses the instructed amount, not the credited amount after bank charges. "
+        "The original transfer amounts, fee and PDF are never changed."
+    )
+    try:
+        balance = reconciliation(payment, allocations)
+    except AllocationBlocked as exc:
+        st.error(str(exc))
+        reset_preview()
+        return
+    st.write(
+        f"Allocated total: EUR {balance['allocated']:,.2f} | "
+        f"Remaining instructed balance: EUR {balance['remaining']:,.2f}"
+    )
+    try:
+        require_manual_allocation_enabled()
+    except AllocationBlocked as exc:
+        reset_invoice()
+        st.warning(str(exc))
+        return
+    try:
+        writer_enabled = financial_writer_adapter.enabled()
+    except financial_writer_adapter.FinancialWriteBlocked as exc:
+        reset_invoice()
+        st.warning(str(exc))
+        return
+    if writer_enabled:
+        reset_preview()
+        st.warning("Adding an invoice is disabled while financial-writer mode is active.")
+        return
+    from services.supabase_service import require_manual_allocation_database_enabled
+    try:
+        require_manual_allocation_database_enabled(role=role)
+    except Exception:
+        reset_invoice()
+        st.warning("Manual invoice allocation is disabled or its database release policy could not be verified.")
+        return
+
+    with st.expander("Add existing invoice", expanded=False):
+        st.caption(
+            "One unpaid, positive invoice row, in full, only. Legacy invoice rows without a currency "
+            "column belong to the existing EUR-only ledger; an explicit currency must match EUR. "
+            "No new invoice/payment, partial allocation, email or renewal action is performed."
+        )
+        text = st.text_input("Existing invoice number", key=f"{prefix}_number", on_change=reset_invoice)
+        if st.button("Look up existing invoice", key=f"{prefix}_lookup"):
+            reset_invoice()
+            try:
+                number = invoice_number(text)
+                rows = get_invoices_by_number(number)
+                if not rows:
+                    raise AllocationBlocked("No existing invoice rows found for this number.")
+                st.session_state[f"{prefix}_rows"] = rows
+            except (AllocationBlocked, ValueError) as exc:
+                st.error(str(exc))
+            except Exception as exc:
+                logger.exception("Existing invoice lookup failed")
+                st.error(f"Could not look up the existing invoice: {exc}")
+        rows = st.session_state.get(f"{prefix}_rows")
+        if not rows:
+            return
+        if len(rows) == 1:
+            row_id = rows[0]["id"]
+        else:
+            row_map = {row["id"]: row for row in rows}
+            row_id = st.selectbox(
+                "Select one invoice row", options=list(row_map), index=None,
+                format_func=lambda row_id: (
+                    f"Row {row_id} | {row_map[row_id].get('project_name')} | "
+                    f"{row_map[row_id].get('maintenance_year')} | {row_map[row_id].get('payment_amount')}"
+                ),
+                key=f"{prefix}_row", on_change=reset_preview,
+            )
+            if row_id is None:
+                st.info("This invoice number has multiple rows. Select exactly one row.")
+                return
+        if st.button("Preview allocation", key=f"{prefix}_preview_button"):
+            reset_preview()
+            try:
+                st.session_state[f"{prefix}_preview"] = preview_existing_payment_allocation(
+                    int(payment["id"]), invoice_number(text), int(row_id), role=role,
+                )
+            except Exception as exc:
+                logger.exception("Existing-payment allocation preview blocked or failed")
+                st.error(f"Cannot prepare allocation: {exc}")
+        preview = st.session_state.get(f"{prefix}_preview")
+        if preview is None:
+            return
+        st.dataframe(pd.DataFrame([{
+            "Invoice #": preview["invoice_number"], "Row ID": preview["invoice_row_id"],
+            "Project": preview["project"], "Maint. year": preview["maintenance_year"],
+            "Invoice amount": f"EUR {money(preview['amount'], 'Invoice amount'):,.2f}",
+            "Paid status": preview["paid"],
+            "Proposed allocation": f"EUR {money(preview['amount'], 'Proposed allocation'):,.2f}",
+            "Current remaining balance": f"EUR {money(preview['remaining_before'], 'Remaining balance'):,.2f}",
+            "Resulting remaining balance": f"EUR {money(preview['remaining_after'], 'Resulting balance'):,.2f}",
+        }]), hide_index=True)
+        st.caption(f"Only this invoice row will be marked paid using the transaction date {preview['payment_date']}.")
+        confirmed = st.checkbox(
+            "I confirm this invoice belongs to this transaction. Only this row will be marked paid; "
+            "no new payment, invoice or sending action will occur.",
+            key=f"{prefix}_confirmed",
+        )
+        if st.button(
+            "Add Invoice to Existing Transaction", type="primary", disabled=not confirmed,
+            key=f"{prefix}_add",
+        ):
+            try:
+                outcome = add_invoice_to_existing_payment(preview, role=role, confirmed=confirmed)
+                message = (
+                    "Invoice allocation added and verified."
+                    if outcome["status"] == "added" else "Invoice was already allocated; no duplicate was created."
+                )
+                st.session_state[f"{prefix}_result"] = {"ok": True, "message": message}
+            except Exception as exc:
+                logger.exception("Existing-payment allocation confirmation failed or is unconfirmed")
+                st.session_state[f"{prefix}_result"] = {
+                    "ok": False,
+                    "message": f"Allocation failed or is unconfirmed: {exc}. "
+                    "The payment has been reloaded. Review its allocations before preparing a new preview.",
+                }
+            st.session_state.pop(f"{prefix}_preview", None)
+            st.session_state.pop(f"{prefix}_rows", None)
+            st.cache_data.clear()
+            st.rerun()
+
+
 def _render_saved_payment_invoice_zip(payment: dict, allocations: list[dict]) -> None:
     from services.supabase_service import (
         download_sent_invoice_pdf,
@@ -10282,11 +10462,12 @@ elif page == "🏦 Bank Payment":
                     "Project": _safe_str(a.get("project_name")),
                     "Invoice #": _safe_int(a.get("invoice_number"), default=0),
                     "Maint. Year": _safe_str(a.get("maintenance_year")),
-                    "Amount (€)": f"€{_safe_float(a.get('amount_applied', 0.0)):,.0f}",
+                    "Amount (€)": f"€{_safe_float(a.get('amount_applied', 0.0)):,.2f}",
                 }
                 for a in allocations
             ])
             st.dataframe(alloc_df, width="stretch", hide_index=True)
+        _render_existing_payment_allocation(selected_payment_row, allocations, role=ROLE)
         _render_saved_payment_invoice_zip(selected_payment_row, allocations)
     else:
         st.info("No bank payments have been saved yet.")

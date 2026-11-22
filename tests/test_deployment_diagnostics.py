@@ -106,6 +106,31 @@ class DiagnosticsTests(unittest.TestCase):
             self.assertEqual(self.runtime()["gates"]["CADDYCHECK_COVERAGE_WRITERS"]["state"],
                              "UNSUPPORTED_BY_BUILD")
 
+    def test_manual_allocation_gate_diagnostics_fail_closed_and_sanitized(self):
+        name = "CADDYCHECK_MANUAL_ALLOCATION_ENABLED"
+        for value, expected in (
+            (None, {"state": "UNSET", "effective_state": "OFF"}),
+            ("off", {"state": "OFF", "effective_state": "OFF"}),
+            ("on", {"state": "ON", "effective_state": "ON"}),
+            (SECRET, {"state": "INVALID", "effective_state": "OFF"}),
+        ):
+            with self.subTest(value=value):
+                result = self.runtime(environ={} if value is None else {name: value})
+                self.assertEqual(result["gates"][name], expected)
+                self.assertNotIn(SECRET, json.dumps(result))
+
+    def test_database_manual_release_diagnostics_are_select_only_and_sanitized(self):
+        client = SelectOnlyClient({
+            "manual_allocation_release_policy": [
+                {"singleton": True, "enabled": False, "unexpected_secret": SECRET}
+            ],
+        })
+        result = diag.rest_inventory(client)
+        entry = result["tables"]["public.manual_allocation_release_policy"]
+        self.assertEqual(entry["records"], [{"singleton": True, "enabled": False}])
+        self.assertNotIn(SECRET, json.dumps(result))
+        self.assertIn(("manual_allocation_release_policy", "singleton,enabled"), client.calls)
+
     def test_admin_guard_precedes_all_configuration_and_database_reads(self):
         with patch.object(diag, "runtime_snapshot") as runtime, \
                 patch.object(diag, "database_snapshot") as database, \
