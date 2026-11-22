@@ -1,4 +1,5 @@
 import contextlib
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -50,6 +51,81 @@ class SelectOnlyClient:
 
 
 class DiagnosticsTests(unittest.TestCase):
+    def test_module_identity_matches_source_and_loaded_flags_without_configuration_reads(self):
+        source = Path(diag.__file__).resolve()
+        expected_hash = hashlib.sha256(source.read_bytes()).hexdigest()
+        with patch.object(diag, "_process_start", return_value={
+            "status": "UNAVAILABLE", "started_at_utc": None,
+        }), patch.dict(os.environ, {"SENSITIVE_SETTING": SECRET}), \
+                patch("config.settings.get_email_config") as configuration, \
+                patch.object(diag, "database_snapshot") as database, \
+                patch.object(diag.subprocess, "run") as command:
+            result = diag._module_identity()
+        self.assertEqual(result["status"], "VERIFIED")
+        self.assertEqual(result["resolved_file"], str(source))
+        self.assertEqual(result["spec_origin"], diag.__spec__.origin)
+        self.assertEqual(result["cached"], diag.__cached__)
+        self.assertEqual(result["source_sha256"], expected_hash)
+        self.assertEqual(result["runtime_snapshot_code_filename"], diag.runtime_snapshot.__code__.co_filename)
+        self.assertTrue(result["manual_gate_in_loaded_gates"])
+        self.assertTrue(result["release_policy_in_loaded_tables"])
+        self.assertNotIn(SECRET, json.dumps(result))
+        configuration.assert_not_called()
+        database.assert_not_called()
+        command.assert_not_called()
+
+    def test_module_identity_reports_actual_loaded_flags(self):
+        with patch.object(diag, "GATES", {}), patch.object(diag, "TABLES", {}):
+            result = diag._module_identity()
+        self.assertFalse(result["manual_gate_in_loaded_gates"])
+        self.assertFalse(result["release_policy_in_loaded_tables"])
+        self.assertEqual(result["runtime_snapshot_code_filename"], diag.runtime_snapshot.__code__.co_filename)
+
+    def test_module_identity_read_failure_is_explicit_and_sanitized(self):
+        with patch.object(Path, "read_bytes", side_effect=OSError(SECRET)), \
+                self.assertLogs(diag.logger, level="WARNING") as logs:
+            result = diag._module_identity()
+        self.assertEqual(result["status"], "UNAVAILABLE")
+        self.assertIsNone(result["source_sha256"])
+        self.assertNotIn(SECRET, json.dumps(result) + str(logs.output))
+
+    def test_process_start_uses_kernel_start_ticks_not_module_import_time(self):
+        fields = ["0"] * 20
+        fields[19] = "250"
+        with patch.object(diag.sys, "platform", "linux"), \
+                patch.object(Path, "read_text", side_effect=[
+                    "42 (python name (worker)) " + " ".join(fields),
+                    "cpu 1 2 3\nbtime 1700000000\n",
+                ]), patch.object(diag.os, "sysconf", return_value=100, create=True):
+            result = diag._process_start()
+        self.assertEqual(result, {
+            "status": "VERIFIED", "started_at_utc": "2023-11-14T22:13:22.500000+00:00",
+        })
+
+    def test_process_start_unavailable_is_explicit_and_sanitized(self):
+        with patch.object(diag.sys, "platform", "win32"), patch.object(Path, "read_text") as read:
+            self.assertEqual(diag._process_start(),
+                             {"status": "UNAVAILABLE", "started_at_utc": None})
+            read.assert_not_called()
+        with patch.object(diag.sys, "platform", "linux"), \
+                patch.object(Path, "read_text", side_effect=OSError(SECRET)), \
+                self.assertLogs(diag.logger, level="WARNING") as logs:
+            result = diag._process_start()
+        self.assertEqual(result, {"status": "UNAVAILABLE", "started_at_utc": None})
+        self.assertNotIn(SECRET, str(logs.output))
+
+    def test_collection_includes_identity_only_after_admin_authorization(self):
+        with patch.object(diag, "_module_identity", return_value={"sanitized": True}) as identity, \
+                patch.object(diag, "_commit", return_value={}), \
+                patch.object(diag, "runtime_snapshot", return_value={}), \
+                patch.object(diag, "database_snapshot", return_value={}):
+            with self.assertRaises(PermissionError):
+                diag.collect_diagnostics("viewer")
+            identity.assert_not_called()
+            self.assertEqual(diag.collect_diagnostics("admin")["diagnostics_module_identity"],
+                             {"sanitized": True})
+            identity.assert_called_once_with()
+
     def runtime(self, *, graph=False, settings=None, environ=None):
         config = {"sender_email": "sender@example.com", "smtp_username": "fallback@example.com",
                   "smtp_password": SECRET, "default_recipients": ["to@example.com"],

@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import importlib.util
 import logging
 import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 
 logger = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parents[1]
@@ -111,6 +113,47 @@ def runtime_snapshot() -> dict:
                           "release policy and financial-writer compatibility. "
                           "Staging ON is only valid in local/staging, never Production.",
     }
+
+
+def _process_start() -> dict:
+    """Linux kernel process start time, not module-import or session time."""
+    if sys.platform != "linux":
+        return {"status": "UNAVAILABLE", "started_at_utc": None}
+    try:
+        fields = Path("/proc/self/stat").read_text().rsplit(")", 1)[1].split()
+        ticks = int(fields[19])
+        boot = next(int(line.split()[1]) for line in Path("/proc/stat").read_text().splitlines()
+                    if line.startswith("btime "))
+        started = dt.datetime.fromtimestamp(
+            boot + ticks / os.sysconf("SC_CLK_TCK"), tz=dt.timezone.utc,
+        )
+        return {"status": "VERIFIED", "started_at_utc": started.isoformat()}
+    except (OSError, ValueError, IndexError, StopIteration, OverflowError):
+        logger.warning("Diagnostic process start timestamp unavailable.")
+        return {"status": "UNAVAILABLE", "started_at_utc": None}
+
+
+def _module_identity() -> dict:
+    """File hash describes disk bytes; loaded flags describe this module object."""
+    result = {
+        "resolved_file": None,
+        "spec_origin": getattr(__spec__, "origin", None),
+        "cached": globals().get("__cached__"),
+        "source_sha256": None,
+        "runtime_snapshot_code_filename": runtime_snapshot.__code__.co_filename,
+        "manual_gate_in_loaded_gates": "CADDYCHECK_MANUAL_ALLOCATION_ENABLED" in GATES,
+        "release_policy_in_loaded_tables": "manual_allocation_release_policy" in TABLES,
+        "process_start": _process_start(),
+    }
+    try:
+        source = Path(__file__).resolve(strict=True)
+        result["resolved_file"] = str(source)
+        result["source_sha256"] = hashlib.sha256(source.read_bytes()).hexdigest()
+        result["status"] = "VERIFIED"
+    except (OSError, RuntimeError):
+        logger.warning("Diagnostic module source identity unavailable.")
+        result["status"] = "UNAVAILABLE"
+    return result
 
 
 def _commit() -> dict:
@@ -300,7 +343,7 @@ def database_snapshot() -> dict:
 def collect_diagnostics(role: str) -> dict:
     _admin(role)
     result = {"observed_at_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
-              "build": _commit()}
+              "build": _commit(), "diagnostics_module_identity": _module_identity()}
     try:
         result["runtime"] = runtime_snapshot()
     except Exception as exc:
