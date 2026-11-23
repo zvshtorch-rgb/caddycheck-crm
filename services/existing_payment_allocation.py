@@ -16,7 +16,18 @@ logger = logging.getLogger(__name__)
 
 def manual_allocation_gate_state() -> dict[str, str]:
     value = os.environ.get(MANUAL_ALLOCATION_GATE)
-    state = "UNSET" if value is None else {"on": "ON", "off": "OFF"}.get(value.strip().lower(), "INVALID")
+    if value is None:
+        import streamlit as st
+        from streamlit.errors import StreamlitSecretNotFoundError
+
+        try:
+            value = st.secrets.get(MANUAL_ALLOCATION_GATE)
+        except StreamlitSecretNotFoundError:
+            logger.warning("Manual allocation release gate Secrets unavailable; disabled.")
+    state = "UNSET" if value is None else (
+        {"on": "ON", "off": "OFF"}.get(value.strip().lower(), "INVALID")
+        if isinstance(value, str) else "INVALID"
+    )
     if state == "INVALID":
         logger.warning("Manual allocation release gate has an invalid value; disabled.")
     return {"state": state, "effective_state": "ON" if state == "ON" else "OFF"}

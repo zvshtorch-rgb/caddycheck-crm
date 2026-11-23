@@ -195,6 +195,16 @@ class DiagnosticsTests(unittest.TestCase):
                 self.assertEqual(result["gates"][name], expected)
                 self.assertNotIn(SECRET, json.dumps(result))
 
+    def test_manual_gate_secret_fallback_is_sanitized_and_coverage_reader_is_unchanged(self):
+        name = "CADDYCHECK_MANUAL_ALLOCATION_ENABLED"
+        coverage = "CADDYCHECK_COVERAGE_WRITERS"
+        for value, expected in (("ON", "ON"), ("OFF", "OFF"), (SECRET, "OFF")):
+            with self.subTest(value=value), patch("streamlit.secrets", {name: value, coverage: "ON"}):
+                result = self.runtime()
+                self.assertEqual(result["gates"][name]["effective_state"], expected)
+                self.assertEqual(result["gates"][coverage], {"state": "UNSET", "effective_state": "OFF"})
+                self.assertNotIn(SECRET, json.dumps(result))
+
     def test_database_manual_release_diagnostics_are_select_only_and_sanitized(self):
         client = SelectOnlyClient({
             "manual_allocation_release_policy": [

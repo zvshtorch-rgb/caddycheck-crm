@@ -4,12 +4,57 @@ import os
 import unittest
 from unittest.mock import Mock, patch
 
+from streamlit.errors import StreamlitSecretNotFoundError
+
 from services.existing_payment_allocation import (
     AllocationBlocked, choose_invoice, invoice_number, preview_allocation, reconciliation,
     MANUAL_ALLOCATION_GATE, manual_allocation_gate_state,
 )
 from services.supabase_service import add_invoice_to_existing_payment, preview_existing_payment_allocation
 from services.supabase_service import preview_manual_allocation_reversal, reverse_manual_payment_allocation
+
+
+class TestManualAllocationGateSecretsFallback(unittest.TestCase):
+    def test_environment_values_take_precedence_without_reading_secrets(self):
+        for value, expected in ((" ON ", "ON"), ("off", "OFF"), ("", "INVALID"), ("bad", "INVALID")):
+            with self.subTest(value=value), patch.dict(os.environ, {MANUAL_ALLOCATION_GATE: value}), \
+                    patch("streamlit.secrets") as secrets:
+                secrets.get.return_value = "ON" if expected != "ON" else "OFF"
+                self.assertEqual(manual_allocation_gate_state(), {
+                    "state": expected, "effective_state": "ON" if expected == "ON" else "OFF",
+                })
+                secrets.get.assert_not_called()
+
+    def test_root_level_secrets_on_and_off_fallback(self):
+        for value, expected in ((" ON ", "ON"), ("off", "OFF")):
+            with self.subTest(value=value), patch.dict(os.environ, {}, clear=True), \
+                    patch("streamlit.secrets", {MANUAL_ALLOCATION_GATE: value}):
+                self.assertEqual(manual_allocation_gate_state(),
+                                 {"state": expected, "effective_state": expected})
+
+    def test_missing_and_nested_secrets_fail_closed(self):
+        for secrets in ({}, {"order_confirmation": {MANUAL_ALLOCATION_GATE: "ON"}}):
+            with self.subTest(secrets=secrets), patch.dict(os.environ, {}, clear=True), \
+                    patch("streamlit.secrets", secrets):
+                self.assertEqual(manual_allocation_gate_state(),
+                                 {"state": "UNSET", "effective_state": "OFF"})
+
+    def test_invalid_secret_values_fail_closed_without_exposing_values(self):
+        for value in ("", "NEVER_DISPLAY_THIS_SECRET", True, 1, [], {}):
+            with self.subTest(value=value), patch.dict(os.environ, {}, clear=True), \
+                    patch("streamlit.secrets", {MANUAL_ALLOCATION_GATE: value}), \
+                    self.assertLogs("services.existing_payment_allocation", level="WARNING") as logs:
+                self.assertEqual(manual_allocation_gate_state(),
+                                 {"state": "INVALID", "effective_state": "OFF"})
+                self.assertNotIn("NEVER_DISPLAY_THIS_SECRET", str(logs.output))
+
+    def test_unavailable_secrets_fail_closed_with_sanitized_warning(self):
+        with patch.dict(os.environ, {}, clear=True), patch("streamlit.secrets") as secrets, \
+                self.assertLogs("services.existing_payment_allocation", level="WARNING") as logs:
+            secrets.get.side_effect = StreamlitSecretNotFoundError("NEVER_DISPLAY_THIS_SECRET")
+            self.assertEqual(manual_allocation_gate_state(),
+                             {"state": "UNSET", "effective_state": "OFF"})
+            self.assertNotIn("NEVER_DISPLAY_THIS_SECRET", str(logs.output))
 
 
 def fixture(limit=46680):
