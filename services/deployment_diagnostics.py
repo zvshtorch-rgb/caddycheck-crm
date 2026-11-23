@@ -159,11 +159,16 @@ def _module_identity() -> dict:
 def _manual_allocation_gate_source() -> dict:
     from services import existing_payment_allocation as allocation
     import streamlit as st
+    from streamlit.errors import StreamlitSecretNotFoundError
 
     reader = allocation.manual_allocation_gate_state
     # Inspect the loaded code object, not source text that may have changed on disk.
     fallback = {"streamlit", "secrets", "StreamlitSecretNotFoundError"} <= set(reader.__code__.co_names)
-    root_present = allocation.MANUAL_ALLOCATION_GATE in st.secrets
+    try:
+        root_present = allocation.MANUAL_ALLOCATION_GATE in st.secrets
+    except StreamlitSecretNotFoundError:
+        logger.warning("Manual allocation gate diagnostic cannot inspect root Secrets.")
+        root_present = "UNAVAILABLE"
     # Streamlit may promote root Secrets to the environment during the preceding read.
     env_present = allocation.MANUAL_ALLOCATION_GATE in os.environ
     source = Path(allocation.__file__).resolve(strict=True)
@@ -174,7 +179,8 @@ def _manual_allocation_gate_source() -> dict:
         "env_key_present": env_present,
         "root_secret_key_present": root_present,
         "selected_source": "ENV" if env_present else
-                           "STREAMLIT_SECRET" if fallback and root_present else "NONE",
+                           "STREAMLIT_SECRET" if fallback and root_present is True else
+                           "UNAVAILABLE" if fallback and root_present == "UNAVAILABLE" else "NONE",
         "effective_state": reader()["effective_state"],
     }
 

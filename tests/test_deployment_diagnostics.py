@@ -51,6 +51,42 @@ class SelectOnlyClient:
 
 
 class DiagnosticsTests(unittest.TestCase):
+    def test_gate_source_preserves_identity_when_secrets_are_unavailable(self):
+        from services import existing_payment_allocation as allocation
+        from streamlit.errors import StreamlitSecretNotFoundError
+
+        class UnavailableSecrets:
+            def __contains__(self, key):
+                raise StreamlitSecretNotFoundError(SECRET)
+
+            def get(self, key, default=None):
+                raise StreamlitSecretNotFoundError(SECRET)
+
+        name = allocation.MANUAL_ALLOCATION_GATE
+        source = Path(allocation.__file__).resolve()
+        for env, selected, effective in (
+            ({}, "UNAVAILABLE", "OFF"),
+            ({name: "ON"}, "ENV", "ON"),
+            ({name: "OFF"}, "ENV", "OFF"),
+        ):
+            with self.subTest(env=env), patch.dict(os.environ, env, clear=True), \
+                    patch("streamlit.secrets", UnavailableSecrets()), \
+                    patch.object(diag, "_module_identity", return_value={}), \
+                    patch.object(diag, "_commit", return_value={}), \
+                    patch.object(diag, "runtime_snapshot", return_value={}), \
+                    patch.object(diag, "database_snapshot", return_value={}), \
+                    self.assertLogs(level="WARNING") as logs:
+                result = diag.collect_diagnostics("admin")["manual_allocation_gate_source"]
+            self.assertEqual(result, {
+                "resolved_file": str(source),
+                "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+                "loaded_reader_supports_secrets_fallback": True,
+                "env_key_present": name in env,
+                "root_secret_key_present": "UNAVAILABLE",
+                "selected_source": selected, "effective_state": effective,
+            })
+            self.assertNotIn(SECRET, json.dumps(result) + str(logs.output))
+
     def test_gate_source_identity_and_secrets_fallback_are_sanitized(self):
         from services import existing_payment_allocation as allocation
         name = allocation.MANUAL_ALLOCATION_GATE
