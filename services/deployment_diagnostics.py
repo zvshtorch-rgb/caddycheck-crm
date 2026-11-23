@@ -143,6 +143,8 @@ def _module_identity() -> dict:
         "runtime_snapshot_code_filename": runtime_snapshot.__code__.co_filename,
         "manual_gate_in_loaded_gates": "CADDYCHECK_MANUAL_ALLOCATION_ENABLED" in GATES,
         "release_policy_in_loaded_tables": "manual_allocation_release_policy" in TABLES,
+        "loaded_collector_contains_manual_gate_source_key":
+            "manual_allocation_gate_source" in collect_diagnostics.__code__.co_consts,
         "process_start": _process_start(),
     }
     try:

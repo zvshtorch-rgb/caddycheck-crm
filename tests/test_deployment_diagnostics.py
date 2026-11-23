@@ -198,6 +198,18 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertFalse(result["release_policy_in_loaded_tables"])
         self.assertEqual(result["runtime_snapshot_code_filename"], diag.runtime_snapshot.__code__.co_filename)
 
+    def test_module_identity_checks_live_collector_constants(self):
+        key = "loaded_collector_contains_manual_gate_source_key"
+        self.assertIs(diag._module_identity()[key], True)
+
+        def stale_collector(role):
+            return {"unrelated": SECRET}
+
+        with patch.object(diag, "collect_diagnostics", stale_collector):
+            result = diag._module_identity()
+        self.assertIs(result[key], False)
+        self.assertNotIn(SECRET, json.dumps(result))
+
     def test_module_identity_read_failure_is_explicit_and_sanitized(self):
         with patch.object(Path, "read_bytes", side_effect=OSError(SECRET)), \
                 self.assertLogs(diag.logger, level="WARNING") as logs:
