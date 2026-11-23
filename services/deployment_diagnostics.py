@@ -156,6 +156,29 @@ def _module_identity() -> dict:
     return result
 
 
+def _manual_allocation_gate_source() -> dict:
+    from services import existing_payment_allocation as allocation
+    import streamlit as st
+
+    reader = allocation.manual_allocation_gate_state
+    # Inspect the loaded code object, not source text that may have changed on disk.
+    fallback = {"streamlit", "secrets", "StreamlitSecretNotFoundError"} <= set(reader.__code__.co_names)
+    root_present = allocation.MANUAL_ALLOCATION_GATE in st.secrets
+    # Streamlit may promote root Secrets to the environment during the preceding read.
+    env_present = allocation.MANUAL_ALLOCATION_GATE in os.environ
+    source = Path(allocation.__file__).resolve(strict=True)
+    return {
+        "resolved_file": str(source),
+        "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+        "loaded_reader_supports_secrets_fallback": fallback,
+        "env_key_present": env_present,
+        "root_secret_key_present": root_present,
+        "selected_source": "ENV" if env_present else
+                           "STREAMLIT_SECRET" if fallback and root_present else "NONE",
+        "effective_state": reader()["effective_state"],
+    }
+
+
 def _commit() -> dict:
     try:
         result = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True,
@@ -348,6 +371,10 @@ def collect_diagnostics(role: str) -> dict:
         result["runtime"] = runtime_snapshot()
     except Exception as exc:
         result["runtime"] = _failure(exc)
+    try:
+        result["manual_allocation_gate_source"] = _manual_allocation_gate_source()
+    except Exception as exc:
+        result["manual_allocation_gate_source"] = _failure(exc)
     result["database"] = database_snapshot()
     return result
 

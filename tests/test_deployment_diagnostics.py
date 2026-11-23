@@ -51,6 +51,87 @@ class SelectOnlyClient:
 
 
 class DiagnosticsTests(unittest.TestCase):
+    def test_gate_source_identity_and_secrets_fallback_are_sanitized(self):
+        from services import existing_payment_allocation as allocation
+        name = allocation.MANUAL_ALLOCATION_GATE
+        source = Path(allocation.__file__).resolve()
+        for value, effective in (("ON", "ON"), ("OFF", "OFF"), (SECRET, "OFF")):
+            with self.subTest(value=value), patch.dict(os.environ, {}, clear=True), \
+                    patch("streamlit.secrets", {name: value}):
+                result = diag._manual_allocation_gate_source()
+                self.assertEqual(result, {
+                    "resolved_file": str(source),
+                    "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+                    "loaded_reader_supports_secrets_fallback": True,
+                    "env_key_present": False, "root_secret_key_present": True,
+                    "selected_source": "STREAMLIT_SECRET", "effective_state": effective,
+                })
+                self.assertNotIn(SECRET, json.dumps(result))
+
+    def test_gate_source_environment_precedence_and_no_source(self):
+        from services.existing_payment_allocation import MANUAL_ALLOCATION_GATE as name
+        for env, secrets, source, effective in (
+            ({name: "OFF"}, {name: "ON"}, "ENV", "OFF"),
+            ({name: "ON"}, {}, "ENV", "ON"),
+            ({name: SECRET}, {name: "ON"}, "ENV", "OFF"),
+            ({}, {}, "NONE", "OFF"),
+            ({}, {"order_confirmation": {name: "ON"}}, "NONE", "OFF"),
+        ):
+            with self.subTest(source=source, effective=effective), \
+                    patch.dict(os.environ, env, clear=True), patch("streamlit.secrets", secrets):
+                result = diag._manual_allocation_gate_source()
+                self.assertEqual(result["env_key_present"], name in env)
+                self.assertEqual(result["root_secret_key_present"], name in secrets)
+                self.assertEqual(result["selected_source"], source)
+                self.assertEqual(result["effective_state"], effective)
+                self.assertNotIn(SECRET, json.dumps(result))
+
+    def test_gate_source_detects_stale_loaded_reader_despite_current_disk_source(self):
+        from services import existing_payment_allocation as allocation
+
+        def legacy_reader():
+            value = os.environ.get(allocation.MANUAL_ALLOCATION_GATE)
+            return {"effective_state": "ON" if value == "ON" else "OFF"}
+
+        with patch.dict(os.environ, {}, clear=True), \
+                patch("streamlit.secrets", {allocation.MANUAL_ALLOCATION_GATE: "ON"}), \
+                patch.object(allocation, "manual_allocation_gate_state", legacy_reader):
+            result = diag._manual_allocation_gate_source()
+        self.assertFalse(result["loaded_reader_supports_secrets_fallback"])
+        self.assertTrue(result["root_secret_key_present"])
+        self.assertEqual(result["selected_source"], "NONE")
+        self.assertEqual(result["effective_state"], "OFF")
+
+    def test_gate_source_accounts_for_streamlit_environment_promotion(self):
+        from services.existing_payment_allocation import MANUAL_ALLOCATION_GATE as name
+
+        class PromotingSecrets(dict):
+            def __contains__(self, key):
+                os.environ[name] = "ON"
+                return super().__contains__(key)
+
+        with patch.dict(os.environ, {}, clear=True), \
+                patch("streamlit.secrets", PromotingSecrets({name: "ON"})):
+            result = diag._manual_allocation_gate_source()
+        self.assertTrue(result["env_key_present"])
+        self.assertTrue(result["root_secret_key_present"])
+        self.assertEqual(result["selected_source"], "ENV")
+        self.assertEqual(result["effective_state"], "ON")
+
+    def test_gate_source_collection_is_admin_only_and_errors_are_sanitized(self):
+        with patch.object(diag, "_manual_allocation_gate_source", side_effect=OSError(SECRET)) as source, \
+                patch.object(diag, "_module_identity", return_value={}), \
+                patch.object(diag, "_commit", return_value={}), \
+                patch.object(diag, "runtime_snapshot", return_value={}), \
+                patch.object(diag, "database_snapshot", return_value={}):
+            with self.assertRaises(PermissionError):
+                diag.collect_diagnostics("viewer")
+            source.assert_not_called()
+            with self.assertLogs(diag.logger, level="WARNING") as logs:
+                result = diag.collect_diagnostics("admin")
+        self.assertEqual(result["manual_allocation_gate_source"]["status"], "UNAVAILABLE")
+        self.assertNotIn(SECRET, json.dumps(result) + str(logs.output))
+
     def test_module_identity_matches_source_and_loaded_flags_without_configuration_reads(self):
         source = Path(diag.__file__).resolve()
         expected_hash = hashlib.sha256(source.read_bytes()).hexdigest()
