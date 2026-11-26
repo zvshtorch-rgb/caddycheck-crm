@@ -16,6 +16,7 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, Tabl
 
 from services.ask_data.executor import _annual_payment_month, _latest_annual_invoice_year
 from services.ask_data.helpers import _license_status, _project_license_date, _safe_int, _safe_str
+from services.license_reconciliation import _year_label_number
 
 
 REPORT_COLUMNS = (
@@ -31,19 +32,24 @@ def _report_payment_status(project, invoices, today: datetime.date) -> str:
         return "Not Yet Due"
 
     project_key = _safe_str(project.project_name).lower().strip()
-    states = [
-        _safe_str(getattr(inv, "paid", None)).strip().lower()
+    period_rows = [
+        (inv, _safe_str(getattr(inv, "paid", None)).strip().lower())
         for inv in invoices
         if _safe_str(inv.project_name).lower().strip() == project_key
         and inv.year == target_year
     ]
-    states = [state for state in states if state != "cancelled"]
-    if not states:
+    period_rows = [(inv, state) for inv, state in period_rows if state != "cancelled"]
+    if not period_rows:
         return "No Annual Invoice Found"
-    if any(state not in {"yes", "no"} for state in states):
+    if any(state not in {"yes", "no"} for _, state in period_rows):
         return "Unknown"
-    if "no" in states:
-        return "Unpaid"
+    unpaid_rows = [inv for inv, state in period_rows if state == "no"]
+    if unpaid_rows:
+        years = [_year_label_number(getattr(inv, "maintenance_year", None)) for inv in unpaid_rows]
+        if any(year is None or year < 1 for year in years):
+            return "Unpaid"
+        categories = {"Unpaid project" if year == 1 else "Unpaid maintenance" for year in years}
+        return categories.pop() if len(categories) == 1 else "Unpaid"
     return "Paid"
 
 

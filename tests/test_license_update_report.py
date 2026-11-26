@@ -22,9 +22,9 @@ def project(name, status="Active", eop=datetime.datetime(2026, 12, 1), **kwargs)
     )
 
 
-def invoice(name, paid, year=2025):
+def invoice(name, paid, year=2025, maintenance_year="Y2"):
     return Invoice(
-        invoice_number=123, project_name=name, maintenance_year="Y2",
+        invoice_number=123, project_name=name, maintenance_year=maintenance_year,
         payment_amount=100, cameras_number=6, payment_date=None,
         paid=paid, year=year,
     )
@@ -48,7 +48,7 @@ class LicenseUpdateReportTests(unittest.TestCase):
         self.assertEqual([row["Project"] for row in rows], ["Paid", "Unpaid", "Missing"])
         self.assertEqual(
             [row["Annual Payment Status"] for row in rows],
-            ["Paid", "Unpaid", "No Annual Invoice Found"],
+            ["Paid", "Unpaid maintenance", "No Annual Invoice Found"],
         )
         self.assertEqual(tuple(rows[0]), REPORT_COLUMNS)
         self.assertEqual(rows[0]["License EOP"], "2026-12-01")
@@ -79,7 +79,7 @@ class LicenseUpdateReportTests(unittest.TestCase):
         rows = build_license_update_rows(projects, invoices, datetime.date(2026, 11, 26))
         self.assertEqual(
             [row["Annual Payment Status"] for row in rows],
-            ["Paid", "Unpaid", "Unknown", "Unknown", "Unknown", "Unknown", "No Annual Invoice Found"],
+            ["Paid", "Unpaid maintenance", "Unknown", "Unknown", "Unknown", "Unknown", "No Annual Invoice Found"],
         )
 
     def test_mixed_invoice_states_never_imply_paid(self):
@@ -91,7 +91,40 @@ class LicenseUpdateReportTests(unittest.TestCase):
             invoice("Unknown and unpaid", "No"), invoice("Unknown and unpaid", None),
         ]
         rows = build_license_update_rows(projects, invoices, datetime.date(2026, 11, 26))
-        self.assertEqual([row["Annual Payment Status"] for row in rows], ["Unknown", "Unpaid", "Paid", "Unknown"])
+        self.assertEqual([row["Annual Payment Status"] for row in rows], ["Unknown", "Unpaid maintenance", "Paid", "Unknown"])
+
+    def test_unpaid_categories_use_invoice_year_labels(self):
+        projects = [project(name) for name in ("First", "Second", "Later", "Paid", "Unknown", "Missing")]
+        invoices = [
+            invoice("First", "No", maintenance_year=" y1 "),
+            invoice("Second", "No", maintenance_year="Y2"),
+            invoice("Later", "No", maintenance_year="Y9"),
+            invoice("Paid", "Yes", maintenance_year="Y1"),
+            invoice("Unknown", "", maintenance_year="Y1"),
+        ]
+        rows = build_license_update_rows(projects, invoices, datetime.date(2026, 11, 26))
+        self.assertEqual(
+            [row["Annual Payment Status"] for row in rows],
+            ["Unpaid project", "Unpaid maintenance", "Unpaid maintenance", "Paid", "Unknown", "No Annual Invoice Found"],
+        )
+
+    def test_unpaid_unknown_or_conflicting_invoice_years_remain_unpaid(self):
+        projects = [project(name) for name in ("Blank", "Invalid", "Conflict", "Same category", "Paid conflict")]
+        invoices = [
+            invoice("Blank", "No", maintenance_year=""),
+            invoice("Invalid", "No", maintenance_year="Y0"),
+            invoice("Conflict", "No", maintenance_year="Y1"),
+            invoice("Conflict", "No", maintenance_year="Y2"),
+            invoice("Same category", "No", maintenance_year="Y2"),
+            invoice("Same category", "No", maintenance_year="Y3"),
+            invoice("Paid conflict", "No", maintenance_year="Y1"),
+            invoice("Paid conflict", "Yes", maintenance_year="Y2"),
+        ]
+        rows = build_license_update_rows(projects, invoices, datetime.date(2026, 11, 26))
+        self.assertEqual(
+            [row["Annual Payment Status"] for row in rows],
+            ["Unpaid", "Unpaid", "Unpaid", "Unpaid maintenance", "Unpaid project"],
+        )
 
     def test_pdf_retains_unicode_project_name_and_row_status(self):
         name = "Store Łódź"
@@ -112,10 +145,13 @@ class LicenseUpdateReportTests(unittest.TestCase):
 
     def test_pdf_matches_filtered_rows_and_payment_statuses(self):
         projects = [
-            project("Alpha"), project("Bravo"), project("Charlie"),
+            project("Alpha"), project("Bravo"), project("Charlie"), project("Delta"),
             project("Excluded", status="Cancelled"),
         ]
-        invoices = [invoice("Alpha", "Yes"), invoice("Bravo", "No")]
+        invoices = [
+            invoice("Alpha", "Yes"), invoice("Bravo", "No", maintenance_year="Y1"),
+            invoice("Delta", "No", maintenance_year="Y2"),
+        ]
         rows = build_license_update_rows(projects, invoices, datetime.date(2026, 11, 26))
         with pdfplumber.open(io.BytesIO(build_license_update_pdf(rows, 2026, 12))) as document:
             text = "\n".join(page.extract_text() for page in document.pages)
