@@ -6349,7 +6349,11 @@ elif page == "🔐 Licenses":
 
     st.subheader(f"Projects Needing Update in {calendar.month_name[next_month]} {next_month_year} (cancelled excluded)")
     if next_month_rows:
-        st.caption("Annual payment status is based on the latest due annual invoice, not the all-time balance.")
+        st.caption(
+            "Annual payment status is based on the latest due annual invoice, not the all-time balance. "
+            "Paid requires all invoice rows in that period to be explicitly marked paid; "
+            "unrecognized or missing payment flags show Unknown."
+        )
         st.dataframe(
             pd.DataFrame(next_month_rows, columns=LICENSE_UPDATE_REPORT_COLUMNS),
             use_container_width=True,

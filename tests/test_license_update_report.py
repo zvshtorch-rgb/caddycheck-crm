@@ -66,6 +66,50 @@ class LicenseUpdateReportTests(unittest.TestCase):
         self.assertEqual(rows[0]["Project"], "New")
         self.assertEqual(rows[0]["Annual Payment Status"], "Not Yet Due")
 
+    def test_explicit_and_unknown_payment_states(self):
+        projects = [project(name) for name in (
+            "Paid", "Unpaid", "Blank", "Null", "Missing", "Ambiguous", "No invoice",
+        )]
+        invoices = [
+            invoice("Paid", " Yes "), invoice("Unpaid", "No"),
+            invoice("Blank", ""), invoice("Null", None), invoice("Missing", "Yes"),
+            invoice("Ambiguous", "pending"),
+        ]
+        del invoices[4].paid
+        rows = build_license_update_rows(projects, invoices, datetime.date(2026, 11, 26))
+        self.assertEqual(
+            [row["Annual Payment Status"] for row in rows],
+            ["Paid", "Unpaid", "Unknown", "Unknown", "Unknown", "Unknown", "No Annual Invoice Found"],
+        )
+
+    def test_mixed_invoice_states_never_imply_paid(self):
+        projects = [project("Mixed"), project("Unpaid"), project("Cancelled"), project("Unknown and unpaid")]
+        invoices = [
+            invoice("Mixed", "Yes"), invoice("Mixed", ""),
+            invoice("Unpaid", "Yes"), invoice("Unpaid", "No"),
+            invoice("Cancelled", "cancelled"), invoice("Cancelled", "Yes"),
+            invoice("Unknown and unpaid", "No"), invoice("Unknown and unpaid", None),
+        ]
+        rows = build_license_update_rows(projects, invoices, datetime.date(2026, 11, 26))
+        self.assertEqual([row["Annual Payment Status"] for row in rows], ["Unknown", "Unpaid", "Paid", "Unknown"])
+
+    def test_pdf_retains_unicode_project_name_and_row_status(self):
+        name = "Store Łódź"
+        rows = build_license_update_rows(
+            [project(name)], [invoice(name, "No")], datetime.date(2026, 11, 26),
+        )
+        with pdfplumber.open(io.BytesIO(build_license_update_pdf(rows, 2026, 12))) as document:
+            text = "\n".join(page.extract_text() for page in document.pages)
+        row_line = next(line for line in text.splitlines() if name in line)
+        self.assertIn(rows[0]["Annual Payment Status"], row_line)
+
+    def test_pdf_rejects_unsupported_characters_instead_of_substituting(self):
+        rows = build_license_update_rows(
+            [project("Store \U0001f600")], [], datetime.date(2026, 11, 26),
+        )
+        with self.assertRaisesRegex(ValueError, "U\\+1F600"):
+            build_license_update_pdf(rows, 2026, 12)
+
     def test_pdf_matches_filtered_rows_and_payment_statuses(self):
         projects = [
             project("Alpha"), project("Bravo"), project("Charlie"),
@@ -76,8 +120,8 @@ class LicenseUpdateReportTests(unittest.TestCase):
         with pdfplumber.open(io.BytesIO(build_license_update_pdf(rows, 2026, 12))) as document:
             text = "\n".join(page.extract_text() for page in document.pages)
         for row in rows:
-            self.assertIn(row["Project"], text)
-            self.assertIn(row["Annual Payment Status"], text)
+            row_line = next(line for line in text.splitlines() if row["Project"] in line)
+            self.assertIn(row["Annual Payment Status"], row_line)
         self.assertNotIn("Excluded", text)
 
     def test_ui_table_and_pdf_use_same_rows(self):
