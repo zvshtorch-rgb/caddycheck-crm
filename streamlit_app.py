@@ -38,6 +38,11 @@ def _is_streamlit_cloud() -> bool:
 from services.ask_data import data_clock  # noqa: E402 - records when the cached CRM data was loaded
 from services.ask_data.money import fmt_eur, sum_money, to_money  # noqa: E402 - exact (Decimal) money for answers
 from services.ask_data.resolver import ProjectIndex  # noqa: E402 - canonical ledger-name -> project matching
+from services.license_update_report import (  # noqa: E402
+    REPORT_COLUMNS as LICENSE_UPDATE_REPORT_COLUMNS,
+    build_license_update_pdf,
+    build_license_update_rows,
+)
 from services.ask_data.helpers import (  # noqa: E402 - shared pure helpers, moved to services/ask_data (Phase 1)
     DETECTION_CAMERA_FIELDS,
     ORDER_STATUS_OPTIONS,
@@ -6291,10 +6296,7 @@ elif page == "🔐 Licenses":
 
     license_rows = _build_license_rows()
 
-    next_month_rows = [
-        row for row in license_rows
-        if row["License Status"] == "Update Next Month"
-    ]
+    next_month_rows = build_license_update_rows(projects, invoices, today)
     active_license_count = sum(1 for row in license_rows if row["License Status"] == "Active")
     missing_license_count = sum(1 for row in license_rows if row["License Status"] == "Missing")
     expired_license_count = sum(1 for row in license_rows if row["License Status"] == "Expired")
@@ -6347,12 +6349,26 @@ elif page == "🔐 Licenses":
 
     st.subheader(f"Projects Needing Update in {calendar.month_name[next_month]} {next_month_year} (cancelled excluded)")
     if next_month_rows:
+        st.caption("Annual payment status is based on the latest due annual invoice, not the all-time balance.")
         st.dataframe(
-            pd.DataFrame(next_month_rows)[["Project", "Country", "Cameras", "License EOP", "Status"]],
+            pd.DataFrame(next_month_rows, columns=LICENSE_UPDATE_REPORT_COLUMNS),
             use_container_width=True,
             hide_index=True,
             height=220,
         )
+        try:
+            next_month_pdf = build_license_update_pdf(next_month_rows, next_month_year, next_month)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Failed to generate license update PDF")
+            st.error(f"Failed to generate license update PDF: {exc}")
+        else:
+            st.download_button(
+                "Download projects needing update (PDF)",
+                data=next_month_pdf,
+                file_name=f"license_updates_{next_month_year}_{next_month:02d}.pdf",
+                mime="application/pdf",
+                key="download_license_updates_pdf",
+            )
     else:
         st.info(f"No non-cancelled projects currently expire in {calendar.month_name[next_month]} {next_month_year}.")
 
